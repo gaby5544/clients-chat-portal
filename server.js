@@ -61,7 +61,8 @@ let groups = {
     name: "General Transaction Group #1",
     messages: [],
     customNames: { A: "Buyer (Party A)", B: "Seller (Party B)" },
-    fileLocked: false
+    fileLocked: false,
+    highlighted: false
   }
 };
 
@@ -77,7 +78,8 @@ io.on('connection', (socket) => {
         name: `Transaction Group #${Object.keys(groups).length + 1}`,
         messages: [],
         customNames: { A: "Buyer (Party A)", B: "Seller (Party B)" },
-        fileLocked: false
+        fileLocked: false,
+        highlighted: false
       };
     }
 
@@ -117,7 +119,7 @@ io.on('connection', (socket) => {
   });
 
   // 2. Send Message
-  socket.on('send-message', ({ groupId, text }) => {
+  socket.on('send-message', ({ groupId, text, targetLang }) => {
     const user = activeSockets[socket.id];
     if (!user) return;
 
@@ -125,7 +127,9 @@ io.on('connection', (socket) => {
       id: 'msg-' + Date.now(),
       sender: user.displayName,
       senderRole: user.role,
+      senderSocketId: socket.id,
       text: text,
+      targetLang: targetLang || 'en-US',
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
 
@@ -143,7 +147,8 @@ io.on('connection', (socket) => {
       name: name,
       messages: [],
       customNames: { A: "Buyer (Party A)", B: "Seller (Party B)" },
-      fileLocked: false
+      fileLocked: false,
+      highlighted: false
     };
 
     io.emit('all-groups-list', Object.values(groups));
@@ -162,6 +167,29 @@ io.on('connection', (socket) => {
 
     const remainingGroup = Object.keys(groups)[0];
     io.to(groupId).emit('force-room-switch', { newGroupId: remainingGroup });
+  });
+
+  // Bulk Delete Groups (Admin Feature)
+  socket.on('bulk-delete-groups', ({ groupIds }) => {
+    if (!groupIds || !Array.isArray(groupIds)) return;
+    
+    groupIds.forEach(gid => {
+      if (Object.keys(groups).length > 1 && groups[gid]) {
+        delete groups[gid];
+        const remaining = Object.keys(groups)[0];
+        io.to(gid).emit('force-room-switch', { newGroupId: remaining });
+      }
+    });
+
+    io.emit('all-groups-list', Object.values(groups));
+  });
+
+  // Highlight Group Toggle (Admin Feature)
+  socket.on('toggle-highlight-group', ({ groupId }) => {
+    if (groups[groupId]) {
+      groups[groupId].highlighted = !groups[groupId].highlighted;
+      io.emit('all-groups-list', Object.values(groups));
+    }
   });
 
   // 5. ADMIN: Rename Parties
@@ -211,12 +239,13 @@ io.on('connection', (socket) => {
   socket.on('admin-initiate-dm', ({ targetSocketId, initialMessage, userEmail }) => {
     const dmRoomId = `dm-${socket.id}-${targetSocketId}`;
     
-    socket.emit('dm-channel-opened', { dmRoomId });
-    io.to(targetSocketId).emit('dm-channel-opened', { dmRoomId });
+    socket.emit('dm-channel-opened', { dmRoomId, targetSocketId });
+    io.to(targetSocketId).emit('dm-channel-opened', { dmRoomId, targetSocketId: socket.id });
 
     const msgPayload = {
       dmRoomId,
       sender: "Desk Officer (Admin)",
+      senderSocketId: socket.id,
       text: initialMessage,
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
@@ -234,6 +263,7 @@ io.on('connection', (socket) => {
     const msgPayload = {
       dmRoomId,
       sender: user ? user.displayName : "User",
+      senderSocketId: socket.id,
       text,
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
