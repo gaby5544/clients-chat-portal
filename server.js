@@ -2,7 +2,14 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
-const nodemailer = require('nodemailer');
+
+// Safely attempt to load nodemailer without crashing Render if missing
+let nodemailer = null;
+try {
+  nodemailer = require('nodemailer');
+} catch (e) {
+  console.log('Nodemailer module not found. Email features will run in fallback mock mode.');
+}
 
 const app = express();
 const server = http.createServer(app);
@@ -16,29 +23,32 @@ app.use(express.json());
 // Admin Passkey
 const ADMIN_PASSKEY = "ADMIN123";
 
-// Email Transporter Config (Update with your SMTP credentials)
-const transporter = nodemailer.createTransport({
-  service: 'gmail', // or your SMTP provider
-  auth: {
-    user: process.env.EMAIL_USER || 'your-email@gmail.com',
-    pass: process.env.EMAIL_PASS || 'your-email-password'
-  }
-});
+// Optional Email Transporter Config
+let transporter = null;
+if (nodemailer && process.env.EMAIL_USER && process.env.EMAIL_PASS) {
+  transporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+      user: process.env.EMAIL_USER,
+      pass: process.env.EMAIL_PASS
+    }
+  });
+}
 
-// Helper Function for Sending Email Notifications
+// Safe Email Dispatcher
 async function sendEmailNotification(to, subject, text) {
   try {
-    if (!process.env.EMAIL_USER) {
-      console.log(`[Email Mock Sent to ${to}]: ${subject} - ${text}`);
-      return;
+    if (transporter) {
+      await transporter.sendMail({
+        from: '"Quantum Desk Alert" <no-reply@quantumdesk.com>',
+        to,
+        subject,
+        text
+      });
+      console.log(`Email notification sent to ${to}`);
+    } else {
+      console.log(`[Mock Email Sent to ${to}]: ${subject} - ${text}`);
     }
-    await transporter.sendMail({
-      from: '"Quantum Desk Alert" <no-reply@quantumdesk.com>',
-      to,
-      subject,
-      text
-    });
-    console.log(`Email notification sent to ${to}`);
   } catch (err) {
     console.error('Email Notification Failed:', err.message);
   }
@@ -89,7 +99,7 @@ io.on('connection', (socket) => {
       isOnline: true
     };
 
-    // Send state
+    // Send initial room state
     socket.emit('init-state', {
       group: groups[groupId],
       isAdminConfirmed: isAdmin,
@@ -123,7 +133,7 @@ io.on('connection', (socket) => {
     io.to(groupId).emit('message', msgData);
   });
 
-  // 3. ADMIN: Create New Group & Instantly Redirect Creator
+  // 3. ADMIN: Create New Group
   socket.on('create-group', ({ groupName }) => {
     const newId = 'group-' + Date.now();
     const name = groupName || `General Transaction Group #${Object.keys(groups).length + 1}`;
@@ -136,10 +146,7 @@ io.on('connection', (socket) => {
       fileLocked: false
     };
 
-    // Broadcast updated group list
     io.emit('all-groups-list', Object.values(groups));
-
-    // Redirect the creator to the new group
     socket.emit('group-created-and-switch', { newGroupId: newId });
   });
 
@@ -217,7 +224,6 @@ io.on('connection', (socket) => {
     socket.emit('dm-message', msgPayload);
     io.to(targetSocketId).emit('dm-message', msgPayload);
 
-    // Optional Email Notification if email is provided
     if (userEmail) {
       sendEmailNotification(userEmail, "New Direct Message from Officer", initialMessage);
     }
