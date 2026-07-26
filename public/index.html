@@ -51,7 +51,7 @@
       position: relative;
     }
 
-    /* Left Admin Panel */
+    /* Left Admin Command Panel */
     .admin-side-panel {
       width: 320px;
       background: var(--side-panel-bg);
@@ -136,7 +136,7 @@
       min-height: 45px;
     }
 
-    /* Main Chat Container */
+    /* Main Chat Desk Area */
     .room-container {
       flex: 1;
       display: flex;
@@ -428,11 +428,20 @@
           <option value="PARTY B">Role: Seller (Party B)</option>
         </select>
 
+        <!-- TOP 12 MOST SPOKEN COUNTRIES / LANGUAGES DROPDOWN -->
         <select class="lang-dropdown" id="targetLangSelect">
-          <option value="en">🇬🇧 English</option>
-          <option value="es">🇲🇽 Spanish</option>
-          <option value="zh">🇨🇳 Chinese</option>
-          <option value="fr">🇫🇷 French</option>
+          <option value="en-US">🇬🇧 English</option>
+          <option value="zh-CN">🇨🇳 Chinese (Mandarin)</option>
+          <option value="hi-IN">🇮🇳 Hindi</option>
+          <option value="es-ES">🇪🇸 Spanish</option>
+          <option value="ar-SA">🇸🇦 Arabic</option>
+          <option value="fr-FR">🇫🇷 French</option>
+          <option value="bn-BD">🇧🇩 Bengali</option>
+          <option value="pt-PT">🇵🇹 Portuguese</option>
+          <option value="ru-RU">🇷🇺 Russian</option>
+          <option value="id-ID">🇮🇩 Indonesian</option>
+          <option value="it-IT">🇮🇹 Italian</option>
+          <option value="de-DE">🇩🇪 German</option>
         </select>
 
         <!-- SPEECH RECOGNITION (VOICE-TO-TEXT) BUTTON -->
@@ -479,48 +488,55 @@
     let recognition = null;
     let isRecording = false;
 
-    // --- 1. SPEECH RECOGNITION (VOICE TO TEXT) ---
-    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
-      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-      recognition = new SpeechRecognition();
-      recognition.continuous = false;
-      recognition.interimResults = false;
+    // --- SPEECH RECOGNITION (VOICE TO TEXT) ---
+    function initSpeechRecognition() {
+      if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        recognition = new SpeechRecognition();
+        recognition.continuous = false;
+        recognition.interimResults = false;
 
-      recognition.onresult = (event) => {
-        const transcript = event.results[0][0].transcript;
-        const msgInput = document.getElementById('messageInput');
-        msgInput.value += (msgInput.value ? ' ' : '') + transcript;
-        handleTyping();
-      };
+        recognition.onresult = (event) => {
+          const transcript = event.results[0][0].transcript;
+          const msgInput = document.getElementById('messageInput');
+          msgInput.value += (msgInput.value ? ' ' : '') + transcript;
+          handleTyping();
+        };
 
-      recognition.onend = () => {
-        isRecording = false;
-        document.getElementById('micBtn').classList.remove('recording');
-      };
+        recognition.onend = () => {
+          isRecording = false;
+          document.getElementById('micBtn').classList.remove('recording');
+        };
+      }
     }
 
     function toggleSpeechRecognition() {
+      if (!recognition) initSpeechRecognition();
       if (!recognition) {
-        alert("Speech Recognition is not supported in this browser. Try Chrome or Edge.");
+        alert("Speech Recognition is not supported in this browser. Please use Chrome or Edge.");
         return;
       }
+
       if (isRecording) {
         recognition.stop();
       } else {
+        const lang = document.getElementById('targetLangSelect').value;
+        recognition.lang = lang; // Dynamically switch speech recognition language
         recognition.start();
         isRecording = true;
         document.getElementById('micBtn').classList.add('recording');
       }
     }
 
-    // --- 2. ADMIN LOGIN AND ROOM ACTIONS ---
+    // --- ADMIN LOGIN AND ROOM ACTIONS ---
     document.addEventListener('keydown', (e) => {
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'A') loginAsAdmin();
     });
 
     window.addEventListener('load', () => {
       if (window.location.hash === '#admin') loginAsAdmin();
-      loadOfflineMessages(); // Load persistent cache
+      loadOfflineMessages();
+      initSpeechRecognition();
     });
 
     function loginAsAdmin() {
@@ -546,7 +562,6 @@
       }
     }
 
-    // Server informs client to instantly open the new group
     socket.on('group-created-and-switch', ({ newGroupId }) => {
       activeGroupId = newGroupId;
       joinSession(isAdminConfirmed ? "ADMIN123" : null);
@@ -580,7 +595,7 @@
       alert(`Clean Invite Link Copied:\n${cleanLink}`);
     }
 
-    // --- 3. PERSISTENCE (LOCAL STORAGE) ---
+    // --- PERSISTENCE (LOCAL STORAGE) ---
     function saveOfflineMessages(msgData) {
       const key = `offline_msgs_${activeGroupId}`;
       let history = JSON.parse(localStorage.getItem(key) || '[]');
@@ -730,7 +745,7 @@
     }
 
     function renderMessage(data) {
-      saveOfflineMessages(data); // Save each incoming/outgoing msg to local cache
+      saveOfflineMessages(data);
       const container = document.getElementById('messageContainer');
       const msgDiv = document.createElement('div');
       msgDiv.className = `message ${data.sender === 'SYSTEM' ? 'msg-system' : (data.senderRole === 'ADMINISTRATOR' ? 'msg-admin' : 'msg-party')}`;
