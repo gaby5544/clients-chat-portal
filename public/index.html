@@ -115,7 +115,7 @@
 
     .admin-notes-area {
       width: 100%;
-      height: 100px;
+      height: 90px;
       background: #020617;
       border: 1px solid var(--border);
       color: #fff;
@@ -170,9 +170,7 @@
       transition: all 0.2s ease;
     }
 
-    .vault-icon:hover {
-      box-shadow: 0 0 15px rgba(56, 189, 248, 0.4);
-    }
+    .vault-icon:hover { box-shadow: 0 0 15px rgba(56, 189, 248, 0.4); }
 
     .brand-title {
       font-size: 1.1rem;
@@ -256,9 +254,6 @@
       font-weight: 800;
       margin-bottom: 6px;
       text-transform: uppercase;
-      display: flex;
-      align-items: center;
-      gap: 6px;
     }
 
     .typing-indicator-box {
@@ -278,7 +273,7 @@
       align-items: center;
     }
 
-    .role-dropdown, .lang-dropdown, .group-dropdown, .file-btn-label {
+    .role-dropdown, .lang-dropdown, .group-dropdown, .icon-btn {
       background: rgba(15, 23, 42, 0.8);
       border: 1px solid var(--border);
       color: var(--accent-cyan);
@@ -289,6 +284,14 @@
       outline: none;
       cursor: pointer;
     }
+
+    .icon-btn.recording {
+      background: var(--accent-rose);
+      color: #fff;
+      animation: pulse 1s infinite alternate;
+    }
+
+    @keyframes pulse { from { opacity: 0.6; } to { opacity: 1; } }
 
     .message-input {
       flex: 1;
@@ -349,7 +352,7 @@
 <body>
 
   <div class="app-wrapper">
-    <!-- Left Panel: Dedicated Admin Workspace -->
+    <!-- Left Admin Command Panel -->
     <div class="admin-side-panel" id="adminSidePanel">
       <div class="admin-panel-title">
         <i class="fa-solid fa-user-gear"></i> Admin Command Panel
@@ -370,32 +373,31 @@
         <button class="admin-btn" onclick="toggleFileLock()" id="lockFileBtn"><i class="fa-solid fa-lock"></i> Lock File Transfer</button>
       </div>
 
-      <!-- Live User Draft Spectator Box -->
+      <!-- Live Spectator Box -->
       <div class="admin-section">
         <span style="font-size: 0.75rem; font-weight: 700; color: var(--accent-amber);"><i class="fa-solid fa-eye"></i> LIVE SPECTATOR DRAFT</span>
         <div class="live-spectator-box" id="spectatorBox">No active typing detected...</div>
       </div>
 
-      <!-- Initiated Direct Messages -->
+      <!-- Direct Message & Email Notification -->
       <div class="admin-section">
-        <span style="font-size: 0.75rem; font-weight: 700; color: var(--accent-cyan);"><i class="fa-solid fa-comments"></i> DIRECT MESSAGE PARTICIPANT</span>
+        <span style="font-size: 0.75rem; font-weight: 700; color: var(--accent-cyan);"><i class="fa-solid fa-comments"></i> DIRECT MESSAGE / EMAIL</span>
         <select class="group-dropdown" id="activeUsersSelect"></select>
         <button class="admin-btn" onclick="initiateAdminDM()"><i class="fa-solid fa-paper-plane"></i> Send Direct Message</button>
       </div>
 
-      <!-- Private Admin Notes -->
+      <!-- Private Officer Notes -->
       <div class="admin-section">
         <span style="font-size: 0.75rem; font-weight: 700; color: var(--text-muted);"><i class="fa-solid fa-note-sticky"></i> PRIVATE OFFICER NOTES</span>
         <textarea class="admin-notes-area" id="adminPrivateNotes" placeholder="Write persistent internal notes here..." oninput="saveAdminNotes()"></textarea>
       </div>
     </div>
 
-    <!-- Main Chat Desk Area -->
+    <!-- Main Chat Workspace -->
     <div class="room-container">
       <div class="header">
         <div class="brand-group">
-          <!-- SECRET ADMIN TRIGGER: Click Logo to trigger login -->
-          <div class="vault-icon" onclick="loginAsAdmin()" title="Transaction Vault">
+          <div class="vault-icon" onclick="loginAsAdmin()" title="Admin Login">
             <i class="fa-solid fa-layer-group"></i>
           </div>
           <div>
@@ -404,7 +406,6 @@
           </div>
         </div>
 
-        <!-- Presence Indicators -->
         <div class="presence-bar">
           <div class="presence-badge">
             <div class="status-dot online" id="selfStatusDot"></div>
@@ -419,7 +420,6 @@
 
       <div class="chat-messages" id="messageContainer"></div>
 
-      <!-- Typing Indicator Area -->
       <div class="typing-indicator-box" id="typingIndicator"></div>
 
       <div class="footer-controls">
@@ -433,13 +433,15 @@
           <option value="es">🇲🇽 Spanish</option>
           <option value="zh">🇨🇳 Chinese</option>
           <option value="fr">🇫🇷 French</option>
-          <option value="de">🇩🇪 German</option>
         </select>
 
-        <label class="file-btn-label" for="fileInput"><i class="fa-solid fa-paperclip"></i> File</label>
+        <!-- SPEECH RECOGNITION (VOICE-TO-TEXT) BUTTON -->
+        <button class="icon-btn" id="micBtn" onclick="toggleSpeechRecognition()" title="Voice to Text"><i class="fa-solid fa-microphone"></i></button>
+
+        <label class="icon-btn" for="fileInput"><i class="fa-solid fa-paperclip"></i></label>
         <input type="file" id="fileInput" class="file-input" />
 
-        <input type="text" class="message-input" id="messageInput" placeholder="Write message in English..." onkeydown="if(event.key==='Enter') sendMsg()" oninput="handleTyping()" />
+        <input type="text" class="message-input" id="messageInput" placeholder="Write or speak message..." onkeydown="if(event.key==='Enter') sendMsg()" oninput="handleTyping()" />
         <button class="send-btn" onclick="sendMsg()"><i class="fa-solid fa-paper-plane"></i> SEND</button>
       </div>
     </div>
@@ -448,12 +450,12 @@
   <!-- DM Modal -->
   <div class="dm-modal" id="dmModal">
     <div class="dm-header">
-      <span><i class="fa-solid fa-user-shield"></i> Officer Direct Message</span>
+      <span><i class="fa-solid fa-user-shield"></i> Direct Message</span>
       <i class="fa-solid fa-xmark" style="cursor:pointer;" onclick="closeDMModal()"></i>
     </div>
     <div class="dm-body" id="dmBody"></div>
     <div class="dm-footer">
-      <input type="text" class="message-input" id="dmInput" placeholder="Reply to Officer..." />
+      <input type="text" class="message-input" id="dmInput" placeholder="Reply..." />
       <button class="send-btn" onclick="sendDMReply()"><i class="fa-solid fa-paper-plane"></i></button>
     </div>
   </div>
@@ -461,7 +463,6 @@
   <script>
     const socket = io();
 
-    // Session Token
     let sessionToken = sessionStorage.getItem('q_session_token');
     if (!sessionToken) {
       sessionToken = 'token-' + Math.random().toString(36).substring(2, 15);
@@ -475,18 +476,51 @@
     let currentSocketId = null;
     let activeDMRoomId = null;
     let typingTimeout = null;
+    let recognition = null;
+    let isRecording = false;
 
-    // Hotkey & Hash Login Listeners
-    document.addEventListener('keydown', (e) => {
-      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'A') {
-        loginAsAdmin();
+    // --- 1. SPEECH RECOGNITION (VOICE TO TEXT) ---
+    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      recognition = new SpeechRecognition();
+      recognition.continuous = false;
+      recognition.interimResults = false;
+
+      recognition.onresult = (event) => {
+        const transcript = event.results[0][0].transcript;
+        const msgInput = document.getElementById('messageInput');
+        msgInput.value += (msgInput.value ? ' ' : '') + transcript;
+        handleTyping();
+      };
+
+      recognition.onend = () => {
+        isRecording = false;
+        document.getElementById('micBtn').classList.remove('recording');
+      };
+    }
+
+    function toggleSpeechRecognition() {
+      if (!recognition) {
+        alert("Speech Recognition is not supported in this browser. Try Chrome or Edge.");
+        return;
       }
+      if (isRecording) {
+        recognition.stop();
+      } else {
+        recognition.start();
+        isRecording = true;
+        document.getElementById('micBtn').classList.add('recording');
+      }
+    }
+
+    // --- 2. ADMIN LOGIN AND ROOM ACTIONS ---
+    document.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'A') loginAsAdmin();
     });
 
     window.addEventListener('load', () => {
-      if (window.location.hash === '#admin') {
-        loginAsAdmin();
-      }
+      if (window.location.hash === '#admin') loginAsAdmin();
+      loadOfflineMessages(); // Load persistent cache
     });
 
     function loginAsAdmin() {
@@ -505,10 +539,18 @@
       if (adminKey) socket.emit('get-all-groups');
     }
 
-    // Admin Panel Actions
     function createNewGroup() {
-      socket.emit('create-group');
+      const name = prompt("Enter new Group Name:");
+      if (name && name.trim()) {
+        socket.emit('create-group', { groupName: name.trim() });
+      }
     }
+
+    // Server informs client to instantly open the new group
+    socket.on('group-created-and-switch', ({ newGroupId }) => {
+      activeGroupId = newGroupId;
+      joinSession(isAdminConfirmed ? "ADMIN123" : null);
+    });
 
     function deleteCurrentGroup() {
       if (confirm(`Are you sure you want to delete ${document.getElementById('currentGroupName').textContent}?`)) {
@@ -517,8 +559,7 @@
     }
 
     function renameParty(party) {
-      const currentName = party === 'A' ? "Buyer" : "Seller";
-      const newName = prompt(`Enter new name for Party ${party} (${currentName}):`);
+      const newName = prompt(`Enter new name for Party ${party}:`);
       if (newName && newName.trim()) {
         socket.emit('rename-party', { groupId: activeGroupId, party, newName: newName.trim() });
       }
@@ -529,25 +570,36 @@
     }
 
     function switchAdminGroup() {
-      const selectedGroupId = document.getElementById('adminGroupSelect').value;
-      activeGroupId = selectedGroupId;
+      activeGroupId = document.getElementById('adminGroupSelect').value;
       joinSession("ADMIN123");
     }
 
     function copyInviteLink() {
       const cleanLink = `${window.location.origin}/?groupId=${activeGroupId}`;
       navigator.clipboard.writeText(cleanLink);
-      alert(`Clean Group Invite Link Copied:\n${cleanLink}`);
+      alert(`Clean Invite Link Copied:\n${cleanLink}`);
+    }
+
+    // --- 3. PERSISTENCE (LOCAL STORAGE) ---
+    function saveOfflineMessages(msgData) {
+      const key = `offline_msgs_${activeGroupId}`;
+      let history = JSON.parse(localStorage.getItem(key) || '[]');
+      history.push(msgData);
+      localStorage.setItem(key, JSON.stringify(history));
+    }
+
+    function loadOfflineMessages() {
+      const key = `offline_msgs_${activeGroupId}`;
+      const history = JSON.parse(localStorage.getItem(key) || '[]');
+      history.forEach(renderMessage);
     }
 
     function saveAdminNotes() {
-      const notes = document.getElementById('adminPrivateNotes').value;
-      localStorage.setItem(`admin_notes_${activeGroupId}`, notes);
+      localStorage.setItem(`admin_notes_${activeGroupId}`, document.getElementById('adminPrivateNotes').value);
     }
 
     function loadAdminNotes() {
-      const saved = localStorage.getItem(`admin_notes_${activeGroupId}`) || '';
-      document.getElementById('adminPrivateNotes').value = saved;
+      document.getElementById('adminPrivateNotes').value = localStorage.getItem(`admin_notes_${activeGroupId}`) || '';
     }
 
     function handleTyping() {
@@ -561,23 +613,23 @@
     }
 
     socket.on('user-typing', ({ sender, isTyping }) => {
-      const indicator = document.getElementById('typingIndicator');
-      indicator.textContent = isTyping ? `${sender} is typing...` : '';
+      document.getElementById('typingIndicator').textContent = isTyping ? `${sender} is typing...` : '';
     });
 
     socket.on('admin-live-draft', ({ sender, draftText }) => {
       if (!isAdminConfirmed) return;
-      const box = document.getElementById('spectatorBox');
-      box.textContent = draftText ? `${sender}: "${draftText}"` : 'No active typing detected...';
+      document.getElementById('spectatorBox').textContent = draftText ? `${sender}: "${draftText}"` : 'No active typing detected...';
     });
 
     function initiateAdminDM() {
       const targetSocketId = document.getElementById('activeUsersSelect').value;
       if (!targetSocketId) return;
 
-      const initialMessage = prompt("Enter Direct Message to user:");
+      const initialMessage = prompt("Enter Direct Message:");
+      const userEmail = prompt("Optional Email notification to participant (leave blank to skip):");
+      
       if (initialMessage && initialMessage.trim()) {
-        socket.emit('admin-initiate-dm', { targetSocketId, initialMessage: initialMessage.trim() });
+        socket.emit('admin-initiate-dm', { targetSocketId, initialMessage: initialMessage.trim(), userEmail });
       }
     }
 
@@ -591,7 +643,6 @@
       document.getElementById('dmModal').style.display = 'flex';
       const body = document.getElementById('dmBody');
       const div = document.createElement('div');
-      div.style.marginBottom = '6px';
       div.innerHTML = `<strong>${msg.sender}:</strong> ${msg.text} <span style="font-size:0.65rem; color:#64748b;">${msg.time}</span>`;
       body.appendChild(div);
       body.scrollTop = body.scrollHeight;
@@ -633,7 +684,6 @@
       document.getElementById('roleSelect').style.display = isAdminConfirmed ? 'none' : 'inline-block';
 
       if (isAdminConfirmed) loadAdminNotes();
-
       group.messages.forEach(renderMessage);
     });
 
@@ -663,7 +713,7 @@
     });
 
     socket.on('force-room-switch', ({ newGroupId }) => {
-      alert("The active group was deleted by the Admin. Switch to available room.");
+      alert("The active group was deleted by the Admin. Redirecting...");
       activeGroupId = newGroupId;
       joinSession(isAdminConfirmed ? "ADMIN123" : null);
     });
@@ -680,6 +730,7 @@
     }
 
     function renderMessage(data) {
+      saveOfflineMessages(data); // Save each incoming/outgoing msg to local cache
       const container = document.getElementById('messageContainer');
       const msgDiv = document.createElement('div');
       msgDiv.className = `message ${data.sender === 'SYSTEM' ? 'msg-system' : (data.senderRole === 'ADMINISTRATOR' ? 'msg-admin' : 'msg-party')}`;
