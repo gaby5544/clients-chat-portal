@@ -9,46 +9,82 @@
   <style>
     :root {
       --bg-dark: #020617;
-      --panel-bg: rgba(15, 23, 42, 0.85);
+      --panel-bg: rgba(15, 23, 42, 0.92);
+      --sidebar-bg: #0b1329;
       --accent-cyan: #38bdf8;
       --accent-emerald: #10b981;
-      --accent-amber: #f59e0b;
       --accent-rose: #f43f5e;
-      --accent-indigo: #6366f1;
+      --accent-amber: #f59e0b;
       --border: rgba(56, 189, 248, 0.2);
       --text-main: #f8fafc;
       --text-muted: #94a3b8;
     }
 
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', system-ui, -apple-system, sans-serif; }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', system-ui, sans-serif; }
 
     body {
       background: var(--bg-dark);
-      background-image: 
-        radial-gradient(at 10% 10%, rgba(99, 102, 241, 0.15) 0px, transparent 50%),
-        radial-gradient(at 90% 90%, rgba(56, 189, 248, 0.12) 0px, transparent 50%),
-        radial-gradient(at 50% 50%, #020617 0px, #000 100%);
       color: var(--text-main);
       display: flex;
-      justify-content: center;
-      align-items: center;
-      min-height: 100vh;
-      padding: 16px;
-      user-select: none;
+      height: 100vh;
+      overflow: hidden;
     }
 
-    .room-container {
+    /* Admin Left Sidebar */
+    .admin-sidebar {
+      width: 320px;
+      background: var(--sidebar-bg);
+      border-right: 1px solid var(--border);
+      display: none; /* Hidden for regular users */
+      flex-direction: column;
+      z-index: 100;
+    }
+
+    .sidebar-header {
+      padding: 20px;
+      background: rgba(2, 6, 23, 0.8);
+      border-bottom: 1px solid var(--border);
+      font-weight: 800;
+      color: var(--accent-amber);
+      font-size: 0.85rem;
+      letter-spacing: 1px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .sidebar-section {
+      padding: 16px;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+      flex: 1;
+      overflow-y: auto;
+    }
+
+    .sidebar-title {
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-bottom: 10px;
+      font-weight: 700;
+    }
+
+    .saved-notes-textarea {
       width: 100%;
-      max-width: 1050px;
-      height: 860px;
-      background: var(--panel-bg);
+      height: 140px;
+      background: rgba(15, 23, 42, 0.6);
       border: 1px solid var(--border);
-      border-radius: 24px;
-      box-shadow: 0 30px 60px -12px rgba(0, 0, 0, 0.9), 0 0 40px rgba(56, 189, 248, 0.08);
-      backdrop-filter: blur(20px);
+      color: #fff;
+      padding: 10px;
+      border-radius: 8px;
+      resize: none;
+      font-size: 0.82rem;
+    }
+
+    /* Main Chat Portal */
+    .main-portal {
+      flex: 1;
       display: flex;
       flex-direction: column;
-      overflow: hidden;
       position: relative;
     }
 
@@ -61,101 +97,15 @@
       align-items: center;
     }
 
-    .brand-group {
-      display: flex;
-      align-items: center;
-      gap: 14px;
+    .status-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      display: inline-block;
+      margin-right: 6px;
     }
-
-    .vault-icon {
-      width: 42px;
-      height: 42px;
-      background: rgba(56, 189, 248, 0.1);
-      border: 1px solid rgba(56, 189, 248, 0.3);
-      border-radius: 12px;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      color: var(--accent-cyan);
-      font-size: 1.2rem;
-      box-shadow: 0 0 15px rgba(56, 189, 248, 0.2);
-    }
-
-    .brand-title {
-      font-size: 1.1rem;
-      font-weight: 800;
-      letter-spacing: 1.5px;
-      text-transform: uppercase;
-      background: linear-gradient(135deg, #fff 30%, var(--accent-cyan) 100%);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-    }
-
-    .brand-subtitle {
-      font-size: 0.75rem;
-      color: var(--accent-amber);
-      font-weight: 700;
-    }
-
-    .status-badge {
-      font-size: 0.75rem;
-      font-weight: 700;
-      color: var(--accent-emerald);
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      background: rgba(16, 185, 129, 0.08);
-      border: 1px solid rgba(16, 185, 129, 0.25);
-      padding: 6px 14px;
-      border-radius: 30px;
-    }
-
-    .pinned-bar {
-      background: rgba(245, 158, 11, 0.08);
-      border-bottom: 1px solid rgba(245, 158, 11, 0.2);
-      padding: 10px 28px;
-      font-size: 0.85rem;
-      color: var(--accent-amber);
-      display: none;
-      align-items: center;
-      gap: 10px;
-    }
-
-    /* Admin Control Panel */
-    .admin-tools {
-      background: rgba(15, 23, 42, 0.95);
-      padding: 12px 28px;
-      border-bottom: 1px solid var(--border);
-      display: none;
-      gap: 10px;
-      align-items: center;
-      flex-wrap: wrap;
-    }
-
-    .admin-label {
-      font-size: 0.72rem;
-      font-weight: 800;
-      letter-spacing: 1px;
-      color: var(--accent-amber);
-      margin-right: 8px;
-    }
-
-    .admin-btn {
-      background: rgba(244, 63, 94, 0.1);
-      border: 1px solid rgba(244, 63, 94, 0.3);
-      color: #fda4af;
-      padding: 6px 12px;
-      border-radius: 8px;
-      cursor: pointer;
-      font-weight: 600;
-      font-size: 0.78rem;
-    }
-
-    .admin-btn-accent {
-      background: rgba(56, 189, 248, 0.1);
-      border: 1px solid rgba(56, 189, 248, 0.3);
-      color: var(--accent-cyan);
-    }
+    .status-online { background: var(--accent-emerald); box-shadow: 0 0 8px var(--accent-emerald); }
+    .status-offline { background: var(--accent-rose); }
 
     .chat-messages {
       flex: 1;
@@ -171,115 +121,20 @@
       padding: 14px 18px;
       border-radius: 16px;
       font-size: 0.92rem;
-      line-height: 1.5;
       position: relative;
-      user-select: text;
     }
 
-    .msg-system {
-      align-self: center;
-      background: rgba(56, 189, 248, 0.05);
-      border: 1px solid rgba(56, 189, 248, 0.15);
-      color: var(--text-muted);
-      font-size: 0.78rem;
-      text-align: center;
-      border-radius: 30px;
-      padding: 8px 20px;
-    }
+    .msg-admin { align-self: flex-start; background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.3); }
+    .msg-party { align-self: flex-end; background: rgba(30, 41, 59, 0.8); border: 1px solid rgba(255, 255, 255, 0.1); }
 
-    .msg-admin {
-      align-self: flex-start;
-      background: rgba(56, 189, 248, 0.08);
-      border: 1px solid rgba(56, 189, 248, 0.3);
-      border-top-left-radius: 4px;
-    }
-
-    .msg-party {
-      align-self: flex-end;
-      background: rgba(30, 41, 59, 0.7);
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      border-top-right-radius: 4px;
-    }
-
-    .sender-tag {
-      font-size: 0.72rem;
-      font-weight: 800;
-      margin-bottom: 6px;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-    }
-
-    .translate-btn {
-      margin-top: 8px;
-      background: rgba(56, 189, 248, 0.12);
-      border: 1px solid rgba(56, 189, 248, 0.25);
+    .typing-bar {
+      padding: 6px 28px;
+      font-size: 0.75rem;
       color: var(--accent-cyan);
-      padding: 4px 10px;
-      border-radius: 6px;
-      font-size: 0.72rem;
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      font-weight: 600;
+      font-style: italic;
+      min-height: 24px;
     }
 
-    .time-tag {
-      font-size: 0.65rem;
-      color: var(--text-muted);
-      margin-top: 6px;
-      text-align: right;
-    }
-
-    /* Bulk Delete Selection Checkbox */
-    .msg-checkbox {
-      position: absolute;
-      left: -32px;
-      top: 50%;
-      transform: translateY(-50%);
-      width: 18px;
-      height: 18px;
-      cursor: pointer;
-      display: none;
-    }
-
-    /* Admin Long-Press Context Menu */
-    .context-menu {
-      position: absolute;
-      display: none;
-      background: #0f172a;
-      border: 1px solid var(--accent-cyan);
-      border-radius: 12px;
-      box-shadow: 0 10px 25px rgba(0,0,0,0.8);
-      z-index: 1000;
-      flex-direction: column;
-      overflow: hidden;
-      width: 160px;
-    }
-
-    .context-menu-btn {
-      background: none;
-      border: none;
-      color: var(--text-main);
-      padding: 10px 16px;
-      text-align: left;
-      font-size: 0.82rem;
-      font-weight: 600;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-
-    .context-menu-btn:hover {
-      background: rgba(56, 189, 248, 0.15);
-      color: var(--accent-cyan);
-    }
-
-    /* Footer Controls */
     .footer-controls {
       padding: 18px 28px;
       background: rgba(2, 6, 23, 0.95);
@@ -287,41 +142,20 @@
       display: flex;
       gap: 10px;
       align-items: center;
-      flex-wrap: wrap;
-    }
-
-    .role-dropdown, .lang-dropdown, .group-dropdown, .file-btn-label, .admin-login-btn {
-      background: rgba(15, 23, 42, 0.8);
-      border: 1px solid var(--border);
-      color: var(--accent-cyan);
-      padding: 10px 14px;
-      border-radius: 12px;
-      font-weight: 700;
-      font-size: 0.82rem;
-      outline: none;
-      cursor: pointer;
-    }
-
-    .admin-login-btn {
-      background: rgba(245, 158, 11, 0.08);
-      border-color: rgba(245, 158, 11, 0.25);
-      color: var(--accent-amber);
     }
 
     .message-input {
       flex: 1;
-      min-width: 180px;
       background: rgba(15, 23, 42, 0.8);
       border: 1px solid var(--border);
       color: #fff;
       padding: 12px 18px;
       border-radius: 12px;
       outline: none;
-      font-size: 0.92rem;
     }
 
     .send-btn {
-      background: linear-gradient(135deg, var(--accent-cyan) 0%, var(--accent-indigo) 100%);
+      background: linear-gradient(135deg, var(--accent-cyan), #6366f1);
       color: #020617;
       border: none;
       padding: 12px 22px;
@@ -330,432 +164,194 @@
       cursor: pointer;
     }
 
-    .file-input { display: none; }
-
-    .file-card {
-      margin-top: 10px;
-      padding: 10px 14px;
-      background: rgba(0, 0, 0, 0.25);
-      border: 1px solid rgba(255, 255, 255, 0.1);
+    .admin-btn {
+      background: rgba(56, 189, 248, 0.1);
+      border: 1px solid var(--border);
+      color: var(--accent-cyan);
+      padding: 8px 12px;
       border-radius: 8px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
+      cursor: pointer;
+      font-size: 0.78rem;
+      margin-top: 6px;
+      width: 100%;
+      text-align: left;
     }
-
-    .file-card a { color: var(--accent-cyan); text-decoration: none; font-weight: 700; }
   </style>
 </head>
 <body>
 
-  <div class="room-container">
+  <!-- LEFT ADMIN SIDEBAR (Visible ONLY to Admin) -->
+  <div class="admin-sidebar" id="adminSidebar">
+    <div class="sidebar-header">
+      <i class="fa-solid fa-user-shield"></i> ADMIN COMMAND CENTER
+    </div>
+    
+    <div class="sidebar-section">
+      <div class="sidebar-title">Group Invite Link Generator</div>
+      <button class="admin-btn" onclick="generateCleanInviteLink()"><i class="fa-solid fa-link"></i> Copy Group Link</button>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-title">Admin Saved Messages / Notes</div>
+      <textarea class="saved-notes-textarea" id="adminNotes" placeholder="Type private administrative notes here..." oninput="saveAdminNotes()"></textarea>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-title">Out-of-Group Direct Messaging</div>
+      <div id="userListDM"></div>
+    </div>
+  </div>
+
+  <!-- MAIN CHAT INTERFACE -->
+  <div class="main-portal">
     <div class="header">
-      <div class="brand-group">
-        <div class="vault-icon"><i class="fa-solid fa-layer-group"></i></div>
-        <div>
-          <div class="brand-title">QUANTUM SECURE TRANSACTION DESK</div>
-          <div class="brand-subtitle" id="currentGroupName">General Transaction Group #1</div>
-        </div>
+      <div>
+        <div style="font-weight: 800; font-size: 1.1rem;" id="groupTitle">General Transaction Desk</div>
+        <div style="font-size: 0.75rem; color: var(--accent-amber);" id="groupSub">ID: grp-default</div>
       </div>
-      <div class="status-badge"><span id="groupIdDisplay">ID: default-group</span></div>
-    </div>
-
-    <div class="pinned-bar" id="pinnedBar">
-      <i class="fa-solid fa-thumbtack"></i> <strong>PINNED:</strong> <span id="pinnedContent">None</span>
-    </div>
-
-    <!-- Admin Panel -->
-    <div class="admin-tools" id="adminTools">
-      <span class="admin-label"><i class="fa-solid fa-user-gear"></i> ADMIN CONTROLS:</span>
-      <select class="group-dropdown" id="adminGroupSelect" onchange="switchAdminGroup()"></select>
-      <button class="admin-btn admin-btn-accent" onclick="createNewGroup()"><i class="fa-solid fa-plus"></i> New Group</button>
-      <button class="admin-btn admin-btn-accent" onclick="copyInviteLink()"><i class="fa-solid fa-link"></i> Invite Link</button>
-      <button class="admin-btn admin-btn-accent" onclick="renameParty('A')"><i class="fa-solid fa-pen"></i> Rename Buyer</button>
-      <button class="admin-btn admin-btn-accent" onclick="renameParty('B')"><i class="fa-solid fa-pen"></i> Rename Seller</button>
-      <button class="admin-btn admin-btn-accent" onclick="toggleFileLock()" id="lockFileBtn"><i class="fa-solid fa-lock"></i> Lock Files</button>
-      <button class="admin-btn" onclick="toggleBulkDeleteMode()" id="bulkDeleteBtn"><i class="fa-solid fa-check-square"></i> Bulk Delete</button>
-      <button class="admin-btn" onclick="executeBulkDelete()" id="confirmDeleteBtn" style="display:none; background: var(--accent-rose); color:#fff;"><i class="fa-solid fa-trash"></i> Delete Selected</button>
-      <button class="admin-btn" onclick="selectAllMessages()" id="selectAllBtn" style="display:none;"><i class="fa-solid fa-list-check"></i> Select All</button>
+      <div>
+        <span class="status-dot status-online" id="myStatusDot"></span>
+        <span id="myStatusText" style="font-size: 0.8rem; font-weight: 700;">Online</span>
+      </div>
     </div>
 
     <div class="chat-messages" id="messageContainer"></div>
 
+    <div class="typing-bar" id="typingIndicator"></div>
+
     <div class="footer-controls">
-      <select class="role-dropdown" id="roleSelect" onchange="joinSession()">
-        <option value="PARTY A">Role: Buyer (Party A)</option>
-        <option value="PARTY B">Role: Seller (Party B)</option>
-      </select>
-
-      <select class="lang-dropdown" id="targetLangSelect">
-        <option value="en">🇬🇧 English</option>
-        <option value="es">🇲🇽 Spanish</option>
-        <option value="zh">🇨🇳 Chinese</option>
-        <option value="hi">🇮🇳 Hindi</option>
-        <option value="fr">🇫🇷 French</option>
-        <option value="ar">🇸🇦 Arabic</option>
-        <option value="pt">🇧🇷 Portuguese</option>
-        <option value="ru">🇷🇺 Russian</option>
-        <option value="de">🇩🇪 German</option>
-        <option value="ja">🇯🇵 Japanese</option>
-        <option value="ko">🇰🇷 Korean</option>
-        <option value="it">🇮🇹 Italian</option>
-      </select>
-      
-      <button class="admin-login-btn" id="adminAuthBtn" onclick="loginAsAdmin()">
-        <i class="fa-solid fa-key"></i> Admin Login
-      </button>
-
-      <label class="file-btn-label" for="fileInput"><i class="fa-solid fa-paperclip"></i> File</label>
-      <input type="file" id="fileInput" class="file-input" onchange="sendFile(this)" />
-
-      <input type="text" class="message-input" id="messageInput" placeholder="Write message in English..." onkeydown="if(event.key==='Enter') sendMsg()" oninput="pingActivity()" />
+      <input type="text" class="message-input" id="messageInput" placeholder="Write message..." oninput="handleTyping()" onkeydown="if(event.key==='Enter') sendMsg()" />
       <button class="send-btn" onclick="sendMsg()"><i class="fa-solid fa-paper-plane"></i> SEND</button>
     </div>
   </div>
 
-  <!-- Admin Context Menu -->
-  <div class="context-menu" id="adminContextMenu">
-    <button class="context-menu-btn" onclick="ctxEdit()"><i class="fa-solid fa-pen"></i> Edit</button>
-    <button class="context-menu-btn" onclick="ctxPin()"><i class="fa-solid fa-thumbtack"></i> Pin</button>
-    <button class="context-menu-btn" onclick="ctxDelete()" style="color: var(--accent-rose);"><i class="fa-solid fa-trash"></i> Delete</button>
-  </div>
-
   <script>
     const socket = io();
-    
-    // Parse Group ID from URL Query Params (e.g. ?groupId=grp-12345)
+
+    // Session Persistence
+    let userId = localStorage.getItem('tx_user_id') || 'usr_' + Math.random().toString(36).substring(2, 8);
+    localStorage.setItem('tx_user_id', userId);
+
     const urlParams = new URLSearchParams(window.location.search);
-    let activeGroupId = urlParams.get('groupId') || "default-group";
-    
-    let currentCustomNames = {};
-    let isAdminConfirmed = false;
-    let bulkDeleteActive = false;
-    let selectedContextMsgId = null;
-    const messageStore = {};
+    const groupId = urlParams.get('groupId') || 'grp-default';
+    const assignedRole = urlParams.get('role') || 'PARTY_A';
+    const isAdmin = urlParams.get('admin') === 'true';
+    const adminKey = urlParams.get('key') || (isAdmin ? 'ADMIN123' : null);
 
-    function pingActivity() {
-      if (isAdminConfirmed) socket.emit('ping-activity');
-    }
+    let isTypingTimeout = null;
 
-    document.addEventListener('click', (e) => {
-      pingActivity();
-      document.getElementById('adminContextMenu').style.display = 'none';
+    // Join Session automatically without Login Prompt
+    socket.emit('join-room', {
+      groupId,
+      role: isAdmin ? 'ADMINISTRATOR' : assignedRole,
+      adminKey,
+      userId
     });
 
-    function joinSession(adminKey = null) {
-      const selectedRole = adminKey ? 'ADMINISTRATOR' : document.getElementById('roleSelect').value;
-      socket.emit('join-room', { 
-        groupId: activeGroupId, 
-        role: selectedRole, 
-        adminKey 
-      });
-      if (adminKey) socket.emit('get-all-groups');
-    }
-
-    function loginAsAdmin() {
-      const password = prompt("Enter Admin Passkey:");
-      if (password) joinSession(password);
-    }
-
-    function createNewGroup() {
-      const name = prompt("Enter New Group Name:", "New Transaction Group");
-      if (name && name.trim()) {
-        socket.emit('create-group', { groupName: name.trim() });
-      }
-    }
-
-    function copyInviteLink() {
-      const link = `${window.location.origin}${window.location.pathname}?groupId=${activeGroupId}`;
-      navigator.clipboard.writeText(link);
-      alert(`Invite link copied to clipboard:\n${link}`);
-    }
-
-    function switchAdminGroup() {
-      activeGroupId = document.getElementById('adminGroupSelect').value;
-      joinSession(ADMIN_SECRET_KEY_TEMP);
-    }
-
-    let ADMIN_SECRET_KEY_TEMP = null;
-
-    // Translation Engine
-    async function translateText(text, sourceLang, targetLang) {
-      if (!text || sourceLang === targetLang) return text;
-      try {
-        const res = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${sourceLang}|${targetLang}`);
-        const data = await res.json();
-        if (data && data.responseData && data.responseData.translatedText) {
-          return data.responseData.translatedText;
+    // Keyboard Shortcut to Trigger Admin Access Secretly (Ctrl + Shift + A)
+    document.addEventListener('keydown', (e) => {
+      if (e.ctrlKey && e.shiftKey && e.key === 'A') {
+        const pass = prompt("Enter Master Admin Key:");
+        if (pass) {
+          window.location.href = `?groupId=${groupId}&admin=true&key=${encodeURIComponent(pass)}`;
         }
-      } catch (err) {
-        console.error("Translation Error:", err);
       }
-      return text;
+    });
+
+    socket.on('init-state', ({ group, isAdminConfirmed, userId: serverUserId, onlineUsers }) => {
+      document.getElementById('groupTitle').textContent = group.name;
+      document.getElementById('groupSub').textContent = `ID: ${group.id}`;
+
+      if (isAdminConfirmed) {
+        document.getElementById('adminSidebar').style.display = 'flex';
+        loadAdminNotes();
+        renderUserDMList(onlineUsers);
+      }
+
+      document.getElementById('messageContainer').innerHTML = '';
+      group.messages.forEach(renderMessage);
+    });
+
+    // Real-Time Typing Preview & Indicator
+    function handleTyping() {
+      const text = document.getElementById('messageInput').value;
+      socket.emit('typing-draft', { text });
     }
 
-    async function sendMsg() {
+    socket.on('user-typing', ({ role, isTyping }) => {
+      const indicator = document.getElementById('typingIndicator');
+      indicator.textContent = isTyping ? `${role} is typing...` : '';
+    });
+
+    // Admin Exclusive Real-time Spy Preview
+    socket.on('admin-live-type-preview', ({ role, draftText }) => {
+      const indicator = document.getElementById('typingIndicator');
+      if (draftText.length > 0) {
+        indicator.innerHTML = `<span style="color:var(--accent-amber)">[ADMIN LIVE PREVIEW] ${role}:</span> ${draftText}`;
+      } else {
+        indicator.textContent = '';
+      }
+    });
+
+    function sendMsg() {
       const input = document.getElementById('messageInput');
       const text = input.value.trim();
       if (!text) return;
 
-      const targetLang = document.getElementById('targetLangSelect').value;
-      let translatedText = text;
-      if (targetLang !== 'en') {
-        translatedText = await translateText(text, 'en', targetLang);
-      }
-
-      socket.emit('send-message', {
-        groupId: activeGroupId,
-        text: translatedText,
-        englishOriginal: text,
-        language: targetLang
-      });
-
+      socket.emit('send-message', { groupId, text });
       input.value = '';
+      socket.emit('typing-draft', { text: '' });
     }
 
-    function sendFile(input) {
-      const file = input.files[0];
-      if (!file || file.size > 10 * 1024 * 1024) return;
-
-      const reader = new FileReader();
-      reader.onload = function(e) {
-        socket.emit('send-message', {
-          groupId: activeGroupId,
-          text: `Shared Document: ${file.name}`,
-          englishOriginal: `Shared Document: ${file.name}`,
-          language: 'en',
-          fileData: e.target.result,
-          fileName: file.name
-        });
-        input.value = '';
-      };
-      reader.readAsDataURL(file);
-    }
-
-    // Context Menu Logic
-    function openContextMenu(e, msgId) {
-      if (!isAdminConfirmed) return;
-      e.preventDefault();
-      selectedContextMsgId = msgId;
-
-      const menu = document.getElementById('adminContextMenu');
-      menu.style.display = 'flex';
-      menu.style.left = `${e.pageX}px`;
-      menu.style.top = `${e.pageY}px`;
-    }
-
-    function ctxEdit() {
-      if (!selectedContextMsgId) return;
-      const current = messageStore[selectedContextMsgId]?.text || '';
-      const newText = prompt("Edit Message:", current);
-      if (newText !== null && newText.trim()) {
-        socket.emit('edit-message', { groupId: activeGroupId, msgId: selectedContextMsgId, newText: newText.trim() });
-      }
-    }
-
-    function ctxPin() {
-      if (!selectedContextMsgId) return;
-      socket.emit('pin-message', { groupId: activeGroupId, msgId: selectedContextMsgId });
-    }
-
-    function ctxDelete() {
-      if (!selectedContextMsgId) return;
-      socket.emit('delete-message', { groupId: activeGroupId, msgIds: [selectedContextMsgId] });
-    }
-
-    // Bulk Delete Logic
-    function toggleBulkDeleteMode() {
-      bulkDeleteActive = !bulkDeleteActive;
-      const checkboxes = document.querySelectorAll('.msg-checkbox');
-      checkboxes.forEach(cb => cb.style.display = bulkDeleteActive ? 'block' : 'none');
-
-      document.getElementById('confirmDeleteBtn').style.display = bulkDeleteActive ? 'inline-block' : 'none';
-      document.getElementById('selectAllBtn').style.display = bulkDeleteActive ? 'inline-block' : 'none';
-    }
-
-    function selectAllMessages() {
-      const checkboxes = document.querySelectorAll('.msg-checkbox');
-      checkboxes.forEach(cb => cb.checked = true);
-    }
-
-    function executeBulkDelete() {
-      const selected = [];
-      document.querySelectorAll('.msg-checkbox:checked').forEach(cb => selected.push(cb.dataset.id));
-
-      if (selected.length === 0) {
-        alert("No messages selected.");
-        return;
-      }
-
-      if (confirm(`Delete ${selected.length} selected message(s)?`)) {
-        socket.emit('delete-message', { groupId: activeGroupId, msgIds: selected });
-        toggleBulkDeleteMode();
-      }
-    }
-
-    function renameParty(party) {
-      const current = party === 'A' ? currentCustomNames['PARTY A'] : currentCustomNames['PARTY B'];
-      const newName = prompt(`Enter custom display name for Party ${party}:`, current);
-      if (newName && newName.trim()) {
-        socket.emit('rename-party', { groupId: activeGroupId, targetParty: party, newName: newName.trim() });
-      }
-    }
-
-    function toggleFileLock() {
-      socket.emit('toggle-file-lock', { groupId: activeGroupId });
-    }
-
-    function sanitizeText(text) {
-      const div = document.createElement('div');
-      div.textContent = text;
-      return div.innerHTML;
-    }
-
-    async function toggleTranslateToEnglish(msgId) {
-      const msgData = messageStore[msgId];
-      if (!msgData) return;
-
-      const textContainer = document.getElementById(`msg-text-${msgId}`);
-      const btn = document.getElementById(`trans-btn-${msgId}`);
-
-      if (btn.dataset.showing === 'original') {
-        let engText = msgData.englishOriginal;
-        if (!engText || engText === msgData.text) {
-          engText = await translateText(msgData.text, msgData.language || 'auto', 'en');
-        }
-        textContainer.textContent = engText;
-        btn.dataset.showing = 'english';
-        btn.innerHTML = `<i class="fa-solid fa-rotate-left"></i> Show Original`;
-      } else {
-        textContainer.textContent = msgData.text;
-        btn.dataset.showing = 'original';
-        btn.innerHTML = `<i class="fa-solid fa-language"></i> Translate to English`;
-      }
-    }
-
-    // Socket Callbacks
-    socket.on('init-state', ({ group, isAdminConfirmed: adminState }) => {
-      document.getElementById('messageContainer').innerHTML = '';
-      currentCustomNames = group.customNames;
-      isAdminConfirmed = adminState;
-      activeGroupId = group.id;
-
-      document.getElementById('currentGroupName').textContent = group.name;
-      document.getElementById('groupIdDisplay').textContent = `ID: ${group.id}`;
-
-      document.getElementById('adminTools').style.display = isAdminConfirmed ? 'flex' : 'none';
-      document.getElementById('roleSelect').style.display = isAdminConfirmed ? 'none' : 'flex';
-      document.getElementById('adminAuthBtn').style.display = isAdminConfirmed ? 'none' : 'flex';
-
-      group.messages.forEach(renderMessage);
-      if (group.pinnedMessage) updatePinnedBar(group.pinnedMessage);
-      updateFileLockUI(group.fileUploadsLocked);
-    });
-
-    socket.on('all-groups-list', (groupList) => {
-      const select = document.getElementById('adminGroupSelect');
-      select.innerHTML = '';
-      groupList.forEach(g => {
-        const opt = document.createElement('option');
-        opt.value = g.id;
-        opt.textContent = g.name;
-        if (g.id === activeGroupId) opt.selected = true;
-        select.appendChild(opt);
-      });
-    });
-
-    socket.on('group-created', ({ id, name }) => {
-      activeGroupId = id;
-      joinSession(ADMIN_SECRET_KEY_TEMP);
-    });
-
-    socket.on('message', (msg) => renderMessage(msg));
-
-    socket.on('names-updated', ({ customNames, history }) => {
-      currentCustomNames = customNames;
-      document.getElementById('messageContainer').innerHTML = '';
-      history.forEach(renderMessage);
-    });
-
-    socket.on('message-edited', ({ msgId, newText }) => {
-      if (messageStore[msgId]) messageStore[msgId].text = newText;
-      const textElem = document.getElementById(`msg-text-${msgId}`);
-      if (textElem) textElem.innerHTML = sanitizeText(newText);
-    });
-
-    socket.on('messages-deleted', ({ msgIds }) => {
-      msgIds.forEach(id => {
-        const msgElem = document.getElementById(`msg-box-${id}`);
-        if (msgElem) msgElem.remove();
-      });
-    });
-
-    socket.on('update-pinned', (pinnedMsg) => updatePinnedBar(pinnedMsg));
-    socket.on('file-lock-updated', (isLocked) => updateFileLockUI(isLocked));
-
-    function updatePinnedBar(msg) {
-      const bar = document.getElementById('pinnedBar');
-      const content = document.getElementById('pinnedContent');
-      bar.style.display = 'flex';
-      content.textContent = `${msg.sender}: ${msg.text}`;
-    }
-
-    function updateFileLockUI(isLocked) {
-      const btn = document.getElementById('lockFileBtn');
-      if (btn) btn.innerHTML = isLocked ? '<i class="fa-solid fa-lock-open"></i> Unlock Files' : '<i class="fa-solid fa-lock"></i> Lock Files';
-    }
-
-    function renderMessage(data) {
-      messageStore[data.id] = data;
+    function renderMessage(msg) {
       const container = document.getElementById('messageContainer');
-      const msgDiv = document.createElement('div');
-      msgDiv.id = `msg-box-${data.id}`;
-      const safeText = sanitizeText(data.text);
-
-      if (data.sender === 'SYSTEM') {
-        msgDiv.className = 'message msg-system';
-        msgDiv.innerHTML = `<i class="fa-solid fa-shield"></i> <strong>SYSTEM:</strong> ${safeText}`;
-      } else {
-        const isMsgFromAdmin = data.senderRole === 'ADMINISTRATOR' || data.sender === 'TRANSACTION OFFICER';
-        msgDiv.className = `message ${isMsgFromAdmin ? 'msg-admin' : 'msg-party'}`;
-        
-        let fileHTML = '';
-        if (data.fileData) {
-          fileHTML = `
-            <div class="file-card">
-              <span><i class="fa-solid fa-file-arrow-down"></i> ${sanitizeText(data.fileName)}</span>
-              <a href="${data.fileData}" download="${data.fileName}">Download</a>
-            </div>`;
-        }
-
-        const translateBtnHTML = `<button class="translate-btn" id="trans-btn-${data.id}" data-showing="original" onclick="toggleTranslateToEnglish('${data.id}')"><i class="fa-solid fa-language"></i> Translate to English</button>`;
-
-        msgDiv.innerHTML = `
-          <input type="checkbox" class="msg-checkbox" data-id="${data.id}" style="display:${bulkDeleteActive ? 'block' : 'none'}" />
-          <div class="sender-tag" style="color: ${isMsgFromAdmin ? 'var(--accent-cyan)' : 'var(--accent-amber)'};">
-            <i class="fa-solid ${isMsgFromAdmin ? 'fa-user-shield' : 'fa-user'}"></i> ${sanitizeText(data.sender)}
-          </div>
-          <span id="msg-text-${data.id}">${safeText}</span>
-          ${fileHTML}
-          <div>${translateBtnHTML}</div>
-          <div class="time-tag">${data.time}</div>
-        `;
-
-        // Context Menu Trigger (Right Click or Long Press)
-        msgDiv.addEventListener('contextmenu', (e) => openContextMenu(e, data.id));
-        
-        let timer = null;
-        msgDiv.addEventListener('touchstart', (e) => {
-          timer = setTimeout(() => openContextMenu(e.touches[0], data.id), 600);
-        });
-        msgDiv.addEventListener('touchend', () => clearTimeout(timer));
-      }
-
-      container.appendChild(msgDiv);
+      const div = document.createElement('div');
+      div.className = `message ${msg.senderRole === 'ADMINISTRATOR' ? 'msg-admin' : 'msg-party'}`;
+      div.innerHTML = `
+        <div style="font-size:0.7rem; font-weight:800; color:var(--accent-cyan); margin-bottom:4px;">${msg.sender}</div>
+        <div>${msg.text}</div>
+        <div style="font-size:0.65rem; color:var(--text-muted); text-align:right; margin-top:4px;">${msg.time}</div>
+      `;
+      container.appendChild(div);
       container.scrollTop = container.scrollHeight;
     }
 
-    joinSession();
+    // Admin Tools
+    function generateCleanInviteLink() {
+      const cleanLink = `${window.location.origin}${window.location.pathname}?groupId=${groupId}&role=PARTY_B`;
+      navigator.clipboard.writeText(cleanLink);
+      alert(`Clean Participant Link Copied:\n${cleanLink}`);
+    }
+
+    function saveAdminNotes() {
+      localStorage.setItem('admin_saved_notes', document.getElementById('adminNotes').value);
+    }
+
+    function loadAdminNotes() {
+      document.getElementById('adminNotes').value = localStorage.getItem('admin_saved_notes') || '';
+    }
+
+    function renderUserDMList(users) {
+      const list = document.getElementById('userListDM');
+      list.innerHTML = '';
+      users.forEach(u => {
+        if (u.role !== 'ADMINISTRATOR') {
+          const btn = document.createElement('button');
+          btn.className = 'admin-btn';
+          btn.innerHTML = `<span class="status-dot ${u.isOnline ? 'status-online' : 'status-offline'}"></span> Message ${u.role}`;
+          btn.onclick = () => {
+            const msg = prompt(`Direct Message ${u.role} (Outside Group):`);
+            if (msg) socket.emit('admin-send-dm', { targetUserId: u.userId, text: msg });
+          };
+          list.appendChild(btn);
+        }
+      });
+    }
+
+    // Direct Message Receiver
+    socket.on('dm-received', ({ msg }) => {
+      alert(`[DIRECT MESSAGE FROM ${msg.sender}]:\n${msg.text}`);
+    });
   </script>
 </body>
 </html>
