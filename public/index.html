@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Quantum Secure Escrow Desk</title>
+  <title>Quantum Secure Transaction Desk</title>
   <script src="/socket.io/socket.io.js"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <style>
@@ -39,7 +39,7 @@
     .room-container {
       width: 100%;
       max-width: 1000px;
-      height: 820px;
+      height: 850px;
       background: var(--panel-bg);
       border: 1px solid var(--border);
       border-radius: 24px;
@@ -50,7 +50,6 @@
       overflow: hidden;
     }
 
-    /* Redesigned Header */
     .header {
       padding: 20px 28px;
       background: rgba(2, 6, 23, 0.95);
@@ -118,7 +117,6 @@
       box-shadow: 0 0 10px var(--accent-emerald);
     }
 
-    /* Pinned Bar */
     .pinned-bar {
       background: rgba(245, 158, 11, 0.08);
       border-bottom: 1px solid rgba(245, 158, 11, 0.2);
@@ -130,7 +128,6 @@
       gap: 10px;
     }
 
-    /* Admin Panel */
     .admin-tools {
       background: rgba(15, 23, 42, 0.95);
       padding: 12px 28px;
@@ -170,7 +167,6 @@
     }
     .admin-btn-accent:hover { background: rgba(56, 189, 248, 0.25); }
 
-    /* Chat Body */
     .chat-messages {
       flex: 1;
       padding: 28px;
@@ -181,7 +177,7 @@
     }
 
     .message {
-      max-width: 75%;
+      max-width: 78%;
       padding: 14px 18px;
       border-radius: 16px;
       font-size: 0.92rem;
@@ -225,6 +221,24 @@
       gap: 6px;
     }
 
+    .translate-btn {
+      margin-top: 8px;
+      background: rgba(56, 189, 248, 0.12);
+      border: 1px solid rgba(56, 189, 248, 0.25);
+      color: var(--accent-cyan);
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-size: 0.72rem;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-weight: 600;
+      transition: all 0.2s;
+    }
+
+    .translate-btn:hover { background: rgba(56, 189, 248, 0.25); }
+
     .time-tag {
       font-size: 0.65rem;
       color: var(--text-muted);
@@ -251,35 +265,30 @@
 
     .action-icon-btn:hover { color: #fff; }
 
-    /* Footer */
     .footer-controls {
       padding: 20px 28px;
       background: rgba(2, 6, 23, 0.95);
       border-top: 1px solid var(--border);
       display: flex;
-      gap: 12px;
+      gap: 10px;
       align-items: center;
+      flex-wrap: wrap;
     }
 
-    .role-dropdown, .file-btn-label, .admin-login-btn {
+    .role-dropdown, .lang-dropdown, .file-btn-label, .admin-login-btn {
       background: rgba(15, 23, 42, 0.8);
       border: 1px solid var(--border);
       color: var(--accent-cyan);
-      padding: 12px 16px;
+      padding: 10px 14px;
       border-radius: 12px;
       font-weight: 700;
-      font-size: 0.85rem;
+      font-size: 0.82rem;
       outline: none;
       cursor: pointer;
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 6px;
       transition: all 0.2s;
-    }
-
-    .role-dropdown:hover, .file-btn-label:hover {
-      border-color: var(--accent-cyan);
-      box-shadow: 0 0 10px rgba(56, 189, 248, 0.15);
     }
 
     .admin-login-btn {
@@ -287,29 +296,24 @@
       border-color: rgba(245, 158, 11, 0.25);
       color: var(--accent-amber);
     }
-    .admin-login-btn:hover { background: rgba(245, 158, 11, 0.2); }
 
     .message-input {
       flex: 1;
+      min-width: 200px;
       background: rgba(15, 23, 42, 0.8);
       border: 1px solid var(--border);
       color: #fff;
       padding: 12px 18px;
       border-radius: 12px;
       outline: none;
-      font-size: 0.95rem;
-      transition: border-color 0.2s;
-    }
-
-    .message-input:focus {
-      border-color: var(--accent-cyan);
+      font-size: 0.92rem;
     }
 
     .send-btn {
       background: linear-gradient(135deg, var(--accent-cyan) 0%, var(--accent-indigo) 100%);
       color: #020617;
       border: none;
-      padding: 12px 24px;
+      padding: 12px 22px;
       border-radius: 12px;
       font-weight: 800;
       cursor: pointer;
@@ -317,10 +321,7 @@
       display: flex;
       align-items: center;
       gap: 8px;
-      transition: opacity 0.2s;
     }
-
-    .send-btn:hover { opacity: 0.9; }
 
     .file-input { display: none; }
 
@@ -347,26 +348,23 @@
 <body>
 
   <div class="room-container">
-    <!-- Redesigned Header -->
     <div class="header">
       <div class="brand-group">
-        <div class="vault-icon"><i class="fa-solid fa-shield-halved"></i></div>
+        <div class="vault-icon"><i class="fa-solid fa-handshake-simple"></i></div>
         <div>
-          <div class="brand-title">QUANTUM SECURE ESCROW DESK</div>
-          <div class="brand-subtitle">Encrypted Multi-Party Session Portal</div>
+          <div class="brand-title">QUANTUM SECURE TRANSACTION DESK</div>
+          <div class="brand-subtitle">Multilingual Encrypted Transaction Portal</div>
         </div>
       </div>
       <div class="status-badge"><span class="pulse"></span> LIVE SESSION #88204</div>
     </div>
 
-    <!-- Pinned Bar -->
     <div class="pinned-bar" id="pinnedBar">
       <i class="fa-solid fa-thumbtack"></i> <strong>PINNED:</strong> <span id="pinnedContent">None</span>
     </div>
 
-    <!-- Escrow Officer Control Panel -->
     <div class="admin-tools" id="adminTools">
-      <span class="admin-label"><i class="fa-solid fa-user-gear"></i> ESCROW CONTROLS:</span>
+      <span class="admin-label"><i class="fa-solid fa-user-gear"></i> TRANSACTION CONTROLS:</span>
       <button class="admin-btn admin-btn-accent" onclick="renameParty('A')"><i class="fa-solid fa-pen"></i> Rename Buyer (A)</button>
       <button class="admin-btn admin-btn-accent" onclick="renameParty('B')"><i class="fa-solid fa-pen"></i> Rename Seller (B)</button>
       <button class="admin-btn admin-btn-accent" onclick="toggleFileLock()" id="lockFileBtn"><i class="fa-solid fa-lock"></i> Lock Files</button>
@@ -374,24 +372,38 @@
       <button class="admin-btn" onclick="kickUser('B')"><i class="fa-solid fa-user-xmark"></i> Kick Party B</button>
     </div>
 
-    <!-- Messages Window -->
     <div class="chat-messages" id="messageContainer"></div>
 
-    <!-- Control Bar -->
     <div class="footer-controls">
       <select class="role-dropdown" id="roleSelect" onchange="joinSession()">
         <option value="PARTY A">Role: Party A (Buyer)</option>
         <option value="PARTY B">Role: Party B (Seller)</option>
       </select>
+
+      <!-- 12 Major Country Languages Selector -->
+      <select class="lang-dropdown" id="targetLangSelect" title="Target Language for Output">
+        <option value="en">🇬🇧 English</option>
+        <option value="es">🇲🇽 Spanish</option>
+        <option value="zh">🇨🇳 Chinese</option>
+        <option value="hi">🇮🇳 Hindi</option>
+        <option value="fr">🇫🇷 French</option>
+        <option value="ar">🇸🇦 Arabic</option>
+        <option value="pt">🇧🇷 Portuguese</option>
+        <option value="ru">🇷🇺 Russian</option>
+        <option value="de">🇩🇪 German</option>
+        <option value="ja">🇯🇵 Japanese</option>
+        <option value="ko">🇰🇷 Korean</option>
+        <option value="it">🇮🇹 Italian</option>
+      </select>
       
       <button class="admin-login-btn" id="adminAuthBtn" onclick="loginAsAdmin()">
-        <i class="fa-solid fa-key"></i> Escrow Login
+        <i class="fa-solid fa-key"></i> Admin Login
       </button>
 
       <label class="file-btn-label" for="fileInput"><i class="fa-solid fa-paperclip"></i> File</label>
       <input type="file" id="fileInput" class="file-input" onchange="sendFile(this)" />
 
-      <input type="text" class="message-input" id="messageInput" placeholder="Write a secure message..." onkeydown="if(event.key==='Enter') sendMsg()" oninput="pingActivity()" />
+      <input type="text" class="message-input" id="messageInput" placeholder="Write message in English..." onkeydown="if(event.key==='Enter') sendMsg()" oninput="pingActivity()" />
       <button class="send-btn" onclick="sendMsg()"><i class="fa-solid fa-paper-plane"></i> SEND</button>
     </div>
   </div>
@@ -401,6 +413,7 @@
     const roomId = "88204-SESSION";
     let currentCustomNames = {};
     let isAdminConfirmed = false;
+    const messageStore = {};
 
     function pingActivity() {
       if (isAdminConfirmed) socket.emit('ping-activity');
@@ -414,16 +427,45 @@
     }
 
     function loginAsAdmin() {
-      const password = prompt("Enter Escrow Officer Passkey:");
+      const password = prompt("Enter Transaction Officer Passkey:");
       if (password) joinSession(password);
     }
 
-    function sendMsg() {
+    // Free Client-Side Translation Engine (MyMemory API)
+    async function translateText(text, sourceLang, targetLang) {
+      if (!text || sourceLang === targetLang) return text;
+      try {
+        const res = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${sourceLang}|${targetLang}`);
+        const data = await res.json();
+        if (data && data.responseData && data.responseData.translatedText) {
+          return data.responseData.translatedText;
+        }
+      } catch (err) {
+        console.error("Translation Error:", err);
+      }
+      return text;
+    }
+
+    async function sendMsg() {
       const input = document.getElementById('messageInput');
       const text = input.value.trim();
       if (!text) return;
 
-      socket.emit('send-message', { roomId, text });
+      const targetLang = document.getElementById('targetLangSelect').value;
+      
+      // Auto translate from English to selected target language if non-English
+      let translatedText = text;
+      if (targetLang !== 'en') {
+        translatedText = await translateText(text, 'en', targetLang);
+      }
+
+      socket.emit('send-message', {
+        roomId,
+        text: translatedText,
+        englishOriginal: text,
+        language: targetLang
+      });
+
       input.value = '';
     }
 
@@ -441,12 +483,36 @@
         socket.emit('send-message', {
           roomId,
           text: `Shared Document: ${file.name}`,
+          englishOriginal: `Shared Document: ${file.name}`,
+          language: 'en',
           fileData: e.target.result,
           fileName: file.name
         });
         input.value = '';
       };
       reader.readAsDataURL(file);
+    }
+
+    async function toggleTranslateToEnglish(msgId) {
+      const msgData = messageStore[msgId];
+      if (!msgData) return;
+
+      const textContainer = document.getElementById(`msg-text-${msgId}`);
+      const btn = document.getElementById(`trans-btn-${msgId}`);
+
+      if (btn.dataset.showing === 'original') {
+        let engText = msgData.englishOriginal;
+        if (!engText || engText === msgData.text) {
+          engText = await translateText(msgData.text, msgData.language || 'auto', 'en');
+        }
+        textContainer.textContent = engText;
+        btn.dataset.showing = 'english';
+        btn.innerHTML = `<i class="fa-solid fa-rotate-left"></i> Show Original`;
+      } else {
+        textContainer.textContent = msgData.text;
+        btn.dataset.showing = 'original';
+        btn.innerHTML = `<i class="fa-solid fa-language"></i> Translate to English`;
+      }
     }
 
     function renameParty(party) {
@@ -491,7 +557,6 @@
       return div.innerHTML;
     }
 
-    // Server Callbacks
     socket.on('init-state', (state) => {
       document.getElementById('messageContainer').innerHTML = '';
       currentCustomNames = state.customNames;
@@ -517,6 +582,7 @@
     });
 
     socket.on('message-edited', ({ msgId, newText }) => {
+      if (messageStore[msgId]) messageStore[msgId].text = newText;
       const textElem = document.getElementById(`msg-text-${msgId}`);
       if (textElem) textElem.innerHTML = sanitizeText(newText);
     });
@@ -564,6 +630,7 @@
     }
 
     function renderMessage(data) {
+      messageStore[data.id] = data;
       const container = document.getElementById('messageContainer');
       const msgDiv = document.createElement('div');
       msgDiv.id = `msg-box-${data.id}`;
@@ -573,7 +640,7 @@
         msgDiv.className = 'message msg-system';
         msgDiv.innerHTML = `<i class="fa-solid fa-shield"></i> <strong>SYSTEM:</strong> ${safeText}`;
       } else {
-        const isMsgFromAdmin = data.senderRole === 'ADMINISTRATOR' || data.sender === 'ESCROW OFFICER';
+        const isMsgFromAdmin = data.senderRole === 'ADMINISTRATOR' || data.sender === 'TRANSACTION OFFICER';
         msgDiv.className = `message ${isMsgFromAdmin ? 'msg-admin' : 'msg-party'}`;
         
         let fileHTML = '';
@@ -596,6 +663,8 @@
           `;
         }
 
+        const translateBtnHTML = `<button class="translate-btn" id="trans-btn-${data.id}" data-showing="original" onclick="toggleTranslateToEnglish('${data.id}')"><i class="fa-solid fa-language"></i> Translate to English</button>`;
+
         msgDiv.innerHTML = `
           ${adminActionsHTML}
           <div class="sender-tag" style="color: ${isMsgFromAdmin ? 'var(--accent-cyan)' : 'var(--accent-amber)'};">
@@ -603,6 +672,7 @@
           </div>
           <span id="msg-text-${data.id}">${safeText}</span>
           ${fileHTML}
+          <div>${translateBtnHTML}</div>
           <div class="time-tag">${data.time}</div>
         `;
       }
