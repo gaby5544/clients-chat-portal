@@ -84,9 +84,38 @@
       gap: 10px;
     }
 
+    .admin-btn {
+      background: rgba(15, 23, 42, 0.8);
+      border: 1px solid var(--border);
+      color: var(--accent-cyan);
+      padding: 10px 14px;
+      border-radius: 12px;
+      font-weight: 700;
+      font-size: 0.82rem;
+      outline: none;
+      cursor: pointer;
+      text-align: left;
+      transition: all 0.2s ease;
+    }
+
+    .admin-btn:hover {
+      background: rgba(56, 189, 248, 0.15);
+      border-color: var(--accent-cyan);
+    }
+
+    .admin-btn-danger {
+      color: var(--accent-rose);
+      border-color: rgba(244, 63, 94, 0.3);
+    }
+
+    .admin-btn-danger:hover {
+      background: rgba(244, 63, 94, 0.15);
+      border-color: var(--accent-rose);
+    }
+
     .admin-notes-area {
       width: 100%;
-      height: 120px;
+      height: 100px;
       background: #020617;
       border: 1px solid var(--border);
       color: #fff;
@@ -137,7 +166,7 @@
       align-items: center;
       color: var(--accent-cyan);
       font-size: 1.2rem;
-      cursor: pointer; /* Secret admin trigger */
+      cursor: pointer;
       transition: all 0.2s ease;
     }
 
@@ -157,7 +186,6 @@
 
     .brand-subtitle { font-size: 0.75rem; color: var(--accent-amber); font-weight: 700; }
 
-    /* Presence Badges */
     .presence-bar {
       display: flex;
       align-items: center;
@@ -176,25 +204,9 @@
       font-weight: 600;
     }
 
-    .status-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: var(--text-muted);
-    }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); }
     .status-dot.online { background: var(--accent-emerald); box-shadow: 0 0 8px var(--accent-emerald); }
     .status-dot.offline { background: var(--accent-rose); }
-
-    .pinned-bar {
-      background: rgba(245, 158, 11, 0.08);
-      border-bottom: 1px solid rgba(245, 158, 11, 0.2);
-      padding: 10px 28px;
-      font-size: 0.85rem;
-      color: var(--accent-amber);
-      display: none;
-      align-items: center;
-      gap: 10px;
-    }
 
     .chat-messages {
       flex: 1;
@@ -257,7 +269,6 @@
       font-style: italic;
     }
 
-    /* Footer Controls */
     .footer-controls {
       padding: 18px 28px;
       background: rgba(2, 6, 23, 0.95);
@@ -267,7 +278,7 @@
       align-items: center;
     }
 
-    .role-dropdown, .lang-dropdown, .group-dropdown, .file-btn-label, .admin-btn {
+    .role-dropdown, .lang-dropdown, .group-dropdown, .file-btn-label {
       background: rgba(15, 23, 42, 0.8);
       border: 1px solid var(--border);
       color: var(--accent-cyan);
@@ -348,6 +359,7 @@
         <span style="font-size: 0.75rem; font-weight: 700; color: var(--text-muted);">ACTIVE ROOM MANAGEMENT</span>
         <select class="group-dropdown" id="adminGroupSelect" onchange="switchAdminGroup()"></select>
         <button class="admin-btn" onclick="createNewGroup()"><i class="fa-solid fa-plus"></i> New Group</button>
+        <button class="admin-btn admin-btn-danger" onclick="deleteCurrentGroup()"><i class="fa-solid fa-trash"></i> Delete Active Group</button>
         <button class="admin-btn" onclick="copyInviteLink()"><i class="fa-solid fa-link"></i> Clean Invite Link</button>
       </div>
 
@@ -405,10 +417,6 @@
         </div>
       </div>
 
-      <div class="pinned-bar" id="pinnedBar">
-        <i class="fa-solid fa-thumbtack"></i> <strong>PINNED:</strong> <span id="pinnedContent">None</span>
-      </div>
-
       <div class="chat-messages" id="messageContainer"></div>
 
       <!-- Typing Indicator Area -->
@@ -429,7 +437,7 @@
         </select>
 
         <label class="file-btn-label" for="fileInput"><i class="fa-solid fa-paperclip"></i> File</label>
-        <input type="file" id="fileInput" class="file-input" onchange="sendFile(this)" />
+        <input type="file" id="fileInput" class="file-input" />
 
         <input type="text" class="message-input" id="messageInput" placeholder="Write message in English..." onkeydown="if(event.key==='Enter') sendMsg()" oninput="handleTyping()" />
         <button class="send-btn" onclick="sendMsg()"><i class="fa-solid fa-paper-plane"></i> SEND</button>
@@ -453,7 +461,7 @@
   <script>
     const socket = io();
 
-    // Session Reconnection Token
+    // Session Token
     let sessionToken = sessionStorage.getItem('q_session_token');
     if (!sessionToken) {
       sessionToken = 'token-' + Math.random().toString(36).substring(2, 15);
@@ -463,13 +471,12 @@
     const urlParams = new URLSearchParams(window.location.search);
     let activeGroupId = urlParams.get('groupId') || "default-group";
     
-    let currentCustomNames = {};
     let isAdminConfirmed = false;
     let currentSocketId = null;
     let activeDMRoomId = null;
     let typingTimeout = null;
 
-    // Login Triggers (Hotkey + #admin URL Detection)
+    // Hotkey & Hash Login Listeners
     document.addEventListener('keydown', (e) => {
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'A') {
         loginAsAdmin();
@@ -496,6 +503,35 @@
         sessionToken
       });
       if (adminKey) socket.emit('get-all-groups');
+    }
+
+    // Admin Panel Actions
+    function createNewGroup() {
+      socket.emit('create-group');
+    }
+
+    function deleteCurrentGroup() {
+      if (confirm(`Are you sure you want to delete ${document.getElementById('currentGroupName').textContent}?`)) {
+        socket.emit('delete-group', { groupId: activeGroupId });
+      }
+    }
+
+    function renameParty(party) {
+      const currentName = party === 'A' ? "Buyer" : "Seller";
+      const newName = prompt(`Enter new name for Party ${party} (${currentName}):`);
+      if (newName && newName.trim()) {
+        socket.emit('rename-party', { groupId: activeGroupId, party, newName: newName.trim() });
+      }
+    }
+
+    function toggleFileLock() {
+      socket.emit('toggle-file-lock', { groupId: activeGroupId });
+    }
+
+    function switchAdminGroup() {
+      const selectedGroupId = document.getElementById('adminGroupSelect').value;
+      activeGroupId = selectedGroupId;
+      joinSession("ADMIN123");
     }
 
     function copyInviteLink() {
@@ -588,7 +624,6 @@
 
     socket.on('init-state', ({ group, isAdminConfirmed: adminState, socketId }) => {
       document.getElementById('messageContainer').innerHTML = '';
-      currentCustomNames = group.customNames;
       isAdminConfirmed = adminState;
       currentSocketId = socketId;
       activeGroupId = group.id;
@@ -600,7 +635,6 @@
       if (isAdminConfirmed) loadAdminNotes();
 
       group.messages.forEach(renderMessage);
-      if (group.pinnedMessage) updatePinnedBar(group.pinnedMessage);
     });
 
     socket.on('active-users-list', (users) => {
@@ -628,18 +662,20 @@
       });
     });
 
-    async function sendMsg() {
+    socket.on('force-room-switch', ({ newGroupId }) => {
+      alert("The active group was deleted by the Admin. Switch to available room.");
+      activeGroupId = newGroupId;
+      joinSession(isAdminConfirmed ? "ADMIN123" : null);
+    });
+
+    socket.on('error-msg', (msg) => { alert(msg); });
+
+    function sendMsg() {
       const input = document.getElementById('messageInput');
       const text = input.value.trim();
       if (!text) return;
 
-      socket.emit('send-message', {
-        groupId: activeGroupId,
-        text,
-        englishOriginal: text,
-        language: 'en'
-      });
-
+      socket.emit('send-message', { groupId: activeGroupId, text });
       input.value = '';
     }
 
