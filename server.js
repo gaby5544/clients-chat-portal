@@ -2,6 +2,7 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
+const nodemailer = require('nodemailer');
 
 const app = express();
 const server = http.createServer(app);
@@ -10,9 +11,38 @@ const io = new Server(server, {
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.json());
 
 // Admin Passkey
 const ADMIN_PASSKEY = "ADMIN123";
+
+// Email Transporter Config (Update with your SMTP credentials)
+const transporter = nodemailer.createTransport({
+  service: 'gmail', // or your SMTP provider
+  auth: {
+    user: process.env.EMAIL_USER || 'your-email@gmail.com',
+    pass: process.env.EMAIL_PASS || 'your-email-password'
+  }
+});
+
+// Helper Function for Sending Email Notifications
+async function sendEmailNotification(to, subject, text) {
+  try {
+    if (!process.env.EMAIL_USER) {
+      console.log(`[Email Mock Sent to ${to}]: ${subject} - ${text}`);
+      return;
+    }
+    await transporter.sendMail({
+      from: '"Quantum Desk Alert" <no-reply@quantumdesk.com>',
+      to,
+      subject,
+      text
+    });
+    console.log(`Email notification sent to ${to}`);
+  } catch (err) {
+    console.error('Email Notification Failed:', err.message);
+  }
+}
 
 // In-Memory Data Store
 let groups = {
@@ -21,25 +51,22 @@ let groups = {
     name: "General Transaction Group #1",
     messages: [],
     customNames: { A: "Buyer (Party A)", B: "Seller (Party B)" },
-    pinnedMessage: null,
     fileLocked: false
   }
 };
 
-let activeSockets = {}; // Tracks socketId -> user details
+let activeSockets = {}; 
 
 io.on('connection', (socket) => {
 
-  // 1. Join Room & Authenticate
+  // 1. Join Room
   socket.on('join-room', ({ groupId, role, adminKey, sessionToken }) => {
-    // Ensure group exists
     if (!groups[groupId]) {
       groups[groupId] = {
         id: groupId,
         name: `Transaction Group #${Object.keys(groups).length + 1}`,
         messages: [],
         customNames: { A: "Buyer (Party A)", B: "Seller (Party B)" },
-        pinnedMessage: null,
         fileLocked: false
       };
     }
@@ -49,9 +76,7 @@ io.on('connection', (socket) => {
       ? "Desk Officer (Admin)" 
       : (role === "PARTY A" ? groups[groupId].customNames.A : groups[groupId].customNames.B);
 
-    // Leave previous rooms
     socket.rooms.forEach(r => { if(r !== socket.id) socket.leave(r); });
-
     socket.join(groupId);
 
     activeSockets[socket.id] = {
@@ -64,14 +89,13 @@ io.on('connection', (socket) => {
       isOnline: true
     };
 
-    // Send Init State to Joining Client
+    // Send state
     socket.emit('init-state', {
       group: groups[groupId],
       isAdminConfirmed: isAdmin,
       socketId: socket.id
     });
 
-    // Notify Group of Connection
     io.to(groupId).emit('message', {
       sender: 'SYSTEM',
       text: `${displayName} connected.`,
@@ -82,7 +106,7 @@ io.on('connection', (socket) => {
     broadcastActiveUsers();
   });
 
-  // 2. Message Handling
+  // 2. Send Message
   socket.on('send-message', ({ groupId, text }) => {
     const user = activeSockets[socket.id];
     if (!user) return;
@@ -99,20 +123,24 @@ io.on('connection', (socket) => {
     io.to(groupId).emit('message', msgData);
   });
 
-  // 3. ADMIN: Create New Group
-  socket.on('create-group', () => {
+  // 3. ADMIN: Create New Group & Instantly Redirect Creator
+  socket.on('create-group', ({ groupName }) => {
     const newId = 'group-' + Date.now();
-    const groupNum = Object.keys(groups).length + 1;
+    const name = groupName || `General Transaction Group #${Object.keys(groups).length + 1}`;
+    
     groups[newId] = {
       id: newId,
-      name: `General Transaction Group #${groupNum}`,
+      name: name,
       messages: [],
       customNames: { A: "Buyer (Party A)", B: "Seller (Party B)" },
-      pinnedMessage: null,
       fileLocked: false
     };
 
+    // Broadcast updated group list
     io.emit('all-groups-list', Object.values(groups));
+
+    // Redirect the creator to the new group
+    socket.emit('group-created-and-switch', { newGroupId: newId });
   });
 
   // 4. ADMIN: Delete Group
@@ -123,11 +151,8 @@ io.on('connection', (socket) => {
     }
 
     delete groups[groupId];
-    
-    // Broadcast updated groups list to admins
     io.emit('all-groups-list', Object.values(groups));
 
-    // Redirect active users in the deleted room to remaining default group
     const remainingGroup = Object.keys(groups)[0];
     io.to(groupId).emit('force-room-switch', { newGroupId: remainingGroup });
   });
@@ -137,7 +162,6 @@ io.on('connection', (socket) => {
     if (groups[groupId]) {
       groups[groupId].customNames[party] = newName;
 
-      // Update names across active sockets in this room
       Object.values(activeSockets).forEach(u => {
         if (u.groupId === groupId) {
           if (party === 'A' && u.role === 'PARTY A') u.displayName = newName;
@@ -169,7 +193,6 @@ io.on('connection', (socket) => {
 
     socket.to(user.groupId).emit('user-typing', { sender: user.displayName, isTyping });
 
-    // Send unsent draft directly to Admin
     Object.values(activeSockets).forEach(u => {
       if (u.isAdmin && u.groupId === user.groupId) {
         io.to(u.socketId).emit('admin-live-draft', { sender: user.displayName, draftText: currentDraft });
@@ -177,8 +200,8 @@ io.on('connection', (socket) => {
     });
   });
 
-  // 8. ADMIN: Direct Messaging
-  socket.on('admin-initiate-dm', ({ targetSocketId, initialMessage }) => {
+  // 8. ADMIN: Direct Messaging & Email Trigger
+  socket.on('admin-initiate-dm', ({ targetSocketId, initialMessage, userEmail }) => {
     const dmRoomId = `dm-${socket.id}-${targetSocketId}`;
     
     socket.emit('dm-channel-opened', { dmRoomId });
@@ -193,6 +216,11 @@ io.on('connection', (socket) => {
 
     socket.emit('dm-message', msgPayload);
     io.to(targetSocketId).emit('dm-message', msgPayload);
+
+    // Optional Email Notification if email is provided
+    if (userEmail) {
+      sendEmailNotification(userEmail, "New Direct Message from Officer", initialMessage);
+    }
   });
 
   socket.on('send-dm-reply', ({ dmRoomId, text }) => {
@@ -207,7 +235,7 @@ io.on('connection', (socket) => {
     io.emit('dm-message', msgPayload);
   });
 
-  // 9. Fetch All Groups List
+  // 9. Fetch Groups List
   socket.on('get-all-groups', () => {
     socket.emit('all-groups-list', Object.values(groups));
   });
