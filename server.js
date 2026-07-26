@@ -6,13 +6,14 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { 
   cors: { origin: "*" },
-  maxHttpBufferSize: 1e7 // 10MB limit
+  maxHttpBufferSize: 1e7 // 10MB Limit
 });
 
 app.use(express.static('public'));
 
-// Secret password for Admin access
+// Secure Admin Passkey (Can be overridden by environment variable)
 const ADMIN_SECRET = process.env.ADMIN_SECRET || 'ADMIN123';
+const ADMIN_SESSION_TIMEOUT_MS = 2 * 60 * 60 * 1000; // 2 Hours
 
 const roomStates = {};
 
@@ -23,8 +24,8 @@ function getRoomState(roomId) {
       pinnedMessage: null,
       fileUploadsLocked: false,
       customNames: {
-        'PARTY A': 'Party A',
-        'PARTY B': 'Party B'
+        'PARTY A': 'Party A (Buyer)',
+        'PARTY B': 'Party B (Seller)'
       }
     };
   }
@@ -32,38 +33,56 @@ function getRoomState(roomId) {
 }
 
 io.on('connection', (socket) => {
-  console.log('User connected:', socket.id);
+  console.log('Client connected:', socket.id);
 
-  // Verification helper
-  function checkAdminAuth() {
-    return socket.isAdmin === true;
+  // Auto-logout timer helper
+  function resetAdminTimeout() {
+    if (socket.adminTimer) clearTimeout(socket.adminTimer);
+    if (socket.isAdmin) {
+      socket.adminTimer = setTimeout(() => {
+        socket.isAdmin = false;
+        socket.role = 'PARTY A'; // Fallback
+        socket.emit('admin-session-expired', 'Your Admin session expired after 2 hours of inactivity.');
+        
+        const state = getRoomState(socket.roomId);
+        socket.emit('init-state', {
+          history: state.messages,
+          pinnedMessage: state.pinnedMessage,
+          fileUploadsLocked: state.fileUploadsLocked,
+          customNames: state.customNames,
+          isAdminConfirmed: false
+        });
+      }, ADMIN_SESSION_TIMEOUT_MS);
+    }
   }
 
-  // Join Room with authentication
+  // Join Room Event
   socket.on('join-room', ({ roomId, role, adminKey }) => {
     const state = getRoomState(roomId);
     
+    // Strict Admin Password Check
     if (role === 'ADMINISTRATOR') {
-      if (adminKey === ADMIN_SECRET) {
+      if (adminKey && adminKey === ADMIN_SECRET) {
         socket.isAdmin = true;
         socket.role = 'ADMINISTRATOR';
+        resetAdminTimeout();
       } else {
-        socket.emit('auth-failed', 'Incorrect Admin Password.');
+        socket.emit('auth-failed', 'Access Denied: Invalid Administrator Credentials.');
         return;
       }
     } else {
       socket.isAdmin = false;
-      socket.role = role; // "PARTY A" or "PARTY B"
+      socket.role = role || 'PARTY A';
     }
 
     socket.join(roomId);
     socket.roomId = roomId;
 
     const displayName = socket.isAdmin 
-      ? 'Administrator' 
+      ? 'Escrow Administrator' 
       : (state.customNames[socket.role] || socket.role);
 
-    // Initial state sent to joining client
+    // Send state to joining user ONLY (never broadcast admin keys)
     socket.emit('init-state', {
       history: state.messages,
       pinnedMessage: state.pinnedMessage,
@@ -72,28 +91,36 @@ io.on('connection', (socket) => {
       isAdminConfirmed: socket.isAdmin
     });
 
-    // Notify room of arrival
+    // Notify room of connection
     io.to(roomId).emit('message', {
       id: Date.now().toString(),
       sender: 'SYSTEM',
-      text: `${displayName} has joined the workspace.`,
+      text: `${displayName} connected to the session.`,
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     });
   });
 
-  // Handle incoming messages
+  // Track Admin activity to keep session alive
+  socket.on('ping-activity', () => {
+    if (socket.isAdmin) {
+      resetAdminTimeout();
+    }
+  });
+
+  // Send Message
   socket.on('send-message', ({ roomId, text, fileData, fileName }) => {
     const state = getRoomState(roomId);
 
+    if (socket.isAdmin) resetAdminTimeout();
+
     if (fileData && state.fileUploadsLocked && !socket.isAdmin) {
-      socket.emit('error-msg', 'File uploads are currently locked by the Administrator.');
+      socket.emit('error-msg', 'File transfers are currently locked by the Administrator.');
       return;
     }
 
-    // Resolve sender's active display name
     const senderName = socket.isAdmin 
-      ? 'ADMINISTRATOR' 
-      : (state.customNames[socket.role] || socket.role || 'Participant');
+      ? 'ESCROW OFFICER' 
+      : (state.customNames[socket.role] || socket.role);
 
     const msg = {
       id: Date.now().toString(),
@@ -109,15 +136,16 @@ io.on('connection', (socket) => {
     io.to(roomId).emit('message', msg);
   });
 
-  // Admin: Custom Rename (e.g. Party A -> "John (Buyer)")
+  // Admin Actions
   socket.on('rename-party', ({ roomId, targetParty, newName }) => {
-    if (!checkAdminAuth()) return;
+    if (!socket.isAdmin) return;
+    resetAdminTimeout();
+
     const state = getRoomState(roomId);
-    
     const partyKey = targetParty === 'A' ? 'PARTY A' : 'PARTY B';
     state.customNames[partyKey] = newName;
 
-    // Update existing message history labels for this party
+    // Update prior history dynamically
     state.messages.forEach(m => {
       if (m.senderRole === partyKey) {
         m.sender = newName;
@@ -130,9 +158,10 @@ io.on('connection', (socket) => {
     });
   });
 
-  // Admin: Edit Message
   socket.on('edit-message', ({ roomId, msgId, newText }) => {
-    if (!checkAdminAuth()) return;
+    if (!socket.isAdmin) return;
+    resetAdminTimeout();
+
     const state = getRoomState(roomId);
     const targetMsg = state.messages.find(m => m.id === msgId);
     if (targetMsg) {
@@ -141,17 +170,19 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Admin: Delete Message
   socket.on('delete-message', ({ roomId, msgId }) => {
-    if (!checkAdminAuth()) return;
+    if (!socket.isAdmin) return;
+    resetAdminTimeout();
+
     const state = getRoomState(roomId);
     state.messages = state.messages.filter(m => m.id !== msgId);
     io.to(roomId).emit('message-deleted', { msgId });
   });
 
-  // Admin: Pin Message
   socket.on('pin-message', ({ roomId, msgId }) => {
-    if (!checkAdminAuth()) return;
+    if (!socket.isAdmin) return;
+    resetAdminTimeout();
+
     const state = getRoomState(roomId);
     const targetMsg = state.messages.find(m => m.id === msgId);
     if (targetMsg) {
@@ -160,17 +191,18 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Admin: Toggle Lock File Uploads
   socket.on('toggle-file-lock', ({ roomId }) => {
-    if (!checkAdminAuth()) return;
+    if (!socket.isAdmin) return;
+    resetAdminTimeout();
+
     const state = getRoomState(roomId);
     state.fileUploadsLocked = !state.fileUploadsLocked;
     io.to(roomId).emit('file-lock-updated', state.fileUploadsLocked);
   });
 
-  // Admin: Kick Participant
   socket.on('kick-participant', ({ roomId, targetParty }) => {
-    if (!checkAdminAuth()) return;
+    if (!socket.isAdmin) return;
+    resetAdminTimeout();
 
     const targetRole = targetParty === 'A' ? 'PARTY A' : 'PARTY B';
     const state = getRoomState(roomId);
@@ -181,7 +213,7 @@ io.on('connection', (socket) => {
       for (const socketId of socketsInRoom) {
         const clientSocket = io.sockets.sockets.get(socketId);
         if (clientSocket && clientSocket.role === targetRole) {
-          clientSocket.emit('kicked', 'You have been disconnected by the Workspace Administrator.');
+          clientSocket.emit('kicked', 'Session terminated by Escrow Officer.');
           clientSocket.leave(roomId);
           clientSocket.disconnect(true);
         }
@@ -191,22 +223,23 @@ io.on('connection', (socket) => {
     io.to(roomId).emit('message', {
       id: Date.now().toString(),
       sender: 'SYSTEM',
-      text: `${displayName} was removed from the session by the Administrator.`,
+      text: `${displayName} was disconnected by the Escrow Officer.`,
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     });
   });
 
   socket.on('disconnect', () => {
+    if (socket.adminTimer) clearTimeout(socket.adminTimer);
     if (socket.roomId && socket.role) {
       const state = getRoomState(socket.roomId);
       const displayName = socket.isAdmin 
-        ? 'Administrator' 
+        ? 'Escrow Administrator' 
         : (state.customNames[socket.role] || socket.role);
 
       io.to(socket.roomId).emit('message', {
         id: Date.now().toString(),
         sender: 'SYSTEM',
-        text: `${displayName} left the session.`,
+        text: `${displayName} left the workspace.`,
         time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       });
     }
@@ -214,4 +247,4 @@ io.on('connection', (socket) => {
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+server.listen(PORT, () => console.log(`[Secure Gateway Active] Listening on port ${PORT}`));
