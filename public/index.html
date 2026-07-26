@@ -34,12 +34,13 @@
       align-items: center;
       min-height: 100vh;
       padding: 16px;
+      user-select: none;
     }
 
     .room-container {
       width: 100%;
-      max-width: 1000px;
-      height: 850px;
+      max-width: 1050px;
+      height: 860px;
       background: var(--panel-bg);
       border: 1px solid var(--border);
       border-radius: 24px;
@@ -48,10 +49,11 @@
       display: flex;
       flex-direction: column;
       overflow: hidden;
+      position: relative;
     }
 
     .header {
-      padding: 20px 28px;
+      padding: 18px 28px;
       background: rgba(2, 6, 23, 0.95);
       border-bottom: 1px solid var(--border);
       display: flex;
@@ -80,7 +82,7 @@
     }
 
     .brand-title {
-      font-size: 1.15rem;
+      font-size: 1.1rem;
       font-weight: 800;
       letter-spacing: 1.5px;
       text-transform: uppercase;
@@ -90,10 +92,9 @@
     }
 
     .brand-subtitle {
-      font-size: 0.72rem;
-      color: var(--text-muted);
-      letter-spacing: 0.5px;
-      font-weight: 600;
+      font-size: 0.75rem;
+      color: var(--accent-amber);
+      font-weight: 700;
     }
 
     .status-badge {
@@ -109,14 +110,6 @@
       border-radius: 30px;
     }
 
-    .pulse {
-      width: 8px;
-      height: 8px;
-      background-color: var(--accent-emerald);
-      border-radius: 50%;
-      box-shadow: 0 0 10px var(--accent-emerald);
-    }
-
     .pinned-bar {
       background: rgba(245, 158, 11, 0.08);
       border-bottom: 1px solid rgba(245, 158, 11, 0.2);
@@ -128,6 +121,7 @@
       gap: 10px;
     }
 
+    /* Admin Control Panel */
     .admin-tools {
       background: rgba(15, 23, 42, 0.95);
       padding: 12px 28px;
@@ -150,22 +144,18 @@
       background: rgba(244, 63, 94, 0.1);
       border: 1px solid rgba(244, 63, 94, 0.3);
       color: #fda4af;
-      padding: 6px 14px;
+      padding: 6px 12px;
       border-radius: 8px;
       cursor: pointer;
       font-weight: 600;
       font-size: 0.78rem;
-      transition: all 0.2s;
     }
-
-    .admin-btn:hover { background: rgba(244, 63, 94, 0.25); }
 
     .admin-btn-accent {
       background: rgba(56, 189, 248, 0.1);
       border: 1px solid rgba(56, 189, 248, 0.3);
       color: var(--accent-cyan);
     }
-    .admin-btn-accent:hover { background: rgba(56, 189, 248, 0.25); }
 
     .chat-messages {
       flex: 1;
@@ -173,7 +163,7 @@
       overflow-y: auto;
       display: flex;
       flex-direction: column;
-      gap: 18px;
+      gap: 16px;
     }
 
     .message {
@@ -183,6 +173,7 @@
       font-size: 0.92rem;
       line-height: 1.5;
       position: relative;
+      user-select: text;
     }
 
     .msg-system {
@@ -234,10 +225,7 @@
       align-items: center;
       gap: 6px;
       font-weight: 600;
-      transition: all 0.2s;
     }
-
-    .translate-btn:hover { background: rgba(56, 189, 248, 0.25); }
 
     .time-tag {
       font-size: 0.65rem;
@@ -246,27 +234,54 @@
       text-align: right;
     }
 
-    .msg-action-bar {
+    /* Bulk Delete Selection Checkbox */
+    .msg-checkbox {
       position: absolute;
-      top: 8px;
-      right: 12px;
-      display: flex;
-      gap: 8px;
+      left: -32px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 18px;
+      height: 18px;
+      cursor: pointer;
+      display: none;
     }
 
-    .action-icon-btn {
+    /* Admin Long-Press Context Menu */
+    .context-menu {
+      position: absolute;
+      display: none;
+      background: #0f172a;
+      border: 1px solid var(--accent-cyan);
+      border-radius: 12px;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.8);
+      z-index: 1000;
+      flex-direction: column;
+      overflow: hidden;
+      width: 160px;
+    }
+
+    .context-menu-btn {
       background: none;
       border: none;
-      color: var(--text-muted);
+      color: var(--text-main);
+      padding: 10px 16px;
+      text-align: left;
+      font-size: 0.82rem;
+      font-weight: 600;
       cursor: pointer;
-      font-size: 0.75rem;
-      transition: color 0.2s;
+      display: flex;
+      align-items: center;
+      gap: 10px;
     }
 
-    .action-icon-btn:hover { color: #fff; }
+    .context-menu-btn:hover {
+      background: rgba(56, 189, 248, 0.15);
+      color: var(--accent-cyan);
+    }
 
+    /* Footer Controls */
     .footer-controls {
-      padding: 20px 28px;
+      padding: 18px 28px;
       background: rgba(2, 6, 23, 0.95);
       border-top: 1px solid var(--border);
       display: flex;
@@ -275,7 +290,7 @@
       flex-wrap: wrap;
     }
 
-    .role-dropdown, .lang-dropdown, .file-btn-label, .admin-login-btn {
+    .role-dropdown, .lang-dropdown, .group-dropdown, .file-btn-label, .admin-login-btn {
       background: rgba(15, 23, 42, 0.8);
       border: 1px solid var(--border);
       color: var(--accent-cyan);
@@ -285,10 +300,6 @@
       font-size: 0.82rem;
       outline: none;
       cursor: pointer;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      transition: all 0.2s;
     }
 
     .admin-login-btn {
@@ -299,7 +310,7 @@
 
     .message-input {
       flex: 1;
-      min-width: 200px;
+      min-width: 180px;
       background: rgba(15, 23, 42, 0.8);
       border: 1px solid var(--border);
       color: #fff;
@@ -317,10 +328,6 @@
       border-radius: 12px;
       font-weight: 800;
       cursor: pointer;
-      letter-spacing: 0.5px;
-      display: flex;
-      align-items: center;
-      gap: 8px;
     }
 
     .file-input { display: none; }
@@ -334,15 +341,9 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 12px;
     }
 
-    .file-card a {
-      color: var(--accent-cyan);
-      text-decoration: none;
-      font-weight: 700;
-      font-size: 0.85rem;
-    }
+    .file-card a { color: var(--accent-cyan); text-decoration: none; font-weight: 700; }
   </style>
 </head>
 <body>
@@ -350,38 +351,42 @@
   <div class="room-container">
     <div class="header">
       <div class="brand-group">
-        <div class="vault-icon"><i class="fa-solid fa-handshake-simple"></i></div>
+        <div class="vault-icon"><i class="fa-solid fa-layer-group"></i></div>
         <div>
           <div class="brand-title">QUANTUM SECURE TRANSACTION DESK</div>
-          <div class="brand-subtitle">Multilingual Encrypted Transaction Portal</div>
+          <div class="brand-subtitle" id="currentGroupName">General Transaction Group #1</div>
         </div>
       </div>
-      <div class="status-badge"><span class="pulse"></span> LIVE SESSION #88204</div>
+      <div class="status-badge"><span id="groupIdDisplay">ID: default-group</span></div>
     </div>
 
     <div class="pinned-bar" id="pinnedBar">
       <i class="fa-solid fa-thumbtack"></i> <strong>PINNED:</strong> <span id="pinnedContent">None</span>
     </div>
 
+    <!-- Admin Panel -->
     <div class="admin-tools" id="adminTools">
-      <span class="admin-label"><i class="fa-solid fa-user-gear"></i> TRANSACTION CONTROLS:</span>
-      <button class="admin-btn admin-btn-accent" onclick="renameParty('A')"><i class="fa-solid fa-pen"></i> Rename Buyer (A)</button>
-      <button class="admin-btn admin-btn-accent" onclick="renameParty('B')"><i class="fa-solid fa-pen"></i> Rename Seller (B)</button>
+      <span class="admin-label"><i class="fa-solid fa-user-gear"></i> ADMIN CONTROLS:</span>
+      <select class="group-dropdown" id="adminGroupSelect" onchange="switchAdminGroup()"></select>
+      <button class="admin-btn admin-btn-accent" onclick="createNewGroup()"><i class="fa-solid fa-plus"></i> New Group</button>
+      <button class="admin-btn admin-btn-accent" onclick="copyInviteLink()"><i class="fa-solid fa-link"></i> Invite Link</button>
+      <button class="admin-btn admin-btn-accent" onclick="renameParty('A')"><i class="fa-solid fa-pen"></i> Rename Buyer</button>
+      <button class="admin-btn admin-btn-accent" onclick="renameParty('B')"><i class="fa-solid fa-pen"></i> Rename Seller</button>
       <button class="admin-btn admin-btn-accent" onclick="toggleFileLock()" id="lockFileBtn"><i class="fa-solid fa-lock"></i> Lock Files</button>
-      <button class="admin-btn" onclick="kickUser('A')"><i class="fa-solid fa-user-xmark"></i> Kick Party A</button>
-      <button class="admin-btn" onclick="kickUser('B')"><i class="fa-solid fa-user-xmark"></i> Kick Party B</button>
+      <button class="admin-btn" onclick="toggleBulkDeleteMode()" id="bulkDeleteBtn"><i class="fa-solid fa-check-square"></i> Bulk Delete</button>
+      <button class="admin-btn" onclick="executeBulkDelete()" id="confirmDeleteBtn" style="display:none; background: var(--accent-rose); color:#fff;"><i class="fa-solid fa-trash"></i> Delete Selected</button>
+      <button class="admin-btn" onclick="selectAllMessages()" id="selectAllBtn" style="display:none;"><i class="fa-solid fa-list-check"></i> Select All</button>
     </div>
 
     <div class="chat-messages" id="messageContainer"></div>
 
     <div class="footer-controls">
       <select class="role-dropdown" id="roleSelect" onchange="joinSession()">
-        <option value="PARTY A">Role: Party A (Buyer)</option>
-        <option value="PARTY B">Role: Party B (Seller)</option>
+        <option value="PARTY A">Role: Buyer (Party A)</option>
+        <option value="PARTY B">Role: Seller (Party B)</option>
       </select>
 
-      <!-- 12 Major Country Languages Selector -->
-      <select class="lang-dropdown" id="targetLangSelect" title="Target Language for Output">
+      <select class="lang-dropdown" id="targetLangSelect">
         <option value="en">🇬🇧 English</option>
         <option value="es">🇲🇽 Spanish</option>
         <option value="zh">🇨🇳 Chinese</option>
@@ -408,30 +413,71 @@
     </div>
   </div>
 
+  <!-- Admin Context Menu -->
+  <div class="context-menu" id="adminContextMenu">
+    <button class="context-menu-btn" onclick="ctxEdit()"><i class="fa-solid fa-pen"></i> Edit</button>
+    <button class="context-menu-btn" onclick="ctxPin()"><i class="fa-solid fa-thumbtack"></i> Pin</button>
+    <button class="context-menu-btn" onclick="ctxDelete()" style="color: var(--accent-rose);"><i class="fa-solid fa-trash"></i> Delete</button>
+  </div>
+
   <script>
     const socket = io();
-    const roomId = "88204-SESSION";
+    
+    // Parse Group ID from URL Query Params (e.g. ?groupId=grp-12345)
+    const urlParams = new URLSearchParams(window.location.search);
+    let activeGroupId = urlParams.get('groupId') || "default-group";
+    
     let currentCustomNames = {};
     let isAdminConfirmed = false;
+    let bulkDeleteActive = false;
+    let selectedContextMsgId = null;
     const messageStore = {};
 
     function pingActivity() {
       if (isAdminConfirmed) socket.emit('ping-activity');
     }
 
-    document.addEventListener('click', pingActivity);
+    document.addEventListener('click', (e) => {
+      pingActivity();
+      document.getElementById('adminContextMenu').style.display = 'none';
+    });
 
     function joinSession(adminKey = null) {
       const selectedRole = adminKey ? 'ADMINISTRATOR' : document.getElementById('roleSelect').value;
-      socket.emit('join-room', { roomId, role: selectedRole, adminKey });
+      socket.emit('join-room', { 
+        groupId: activeGroupId, 
+        role: selectedRole, 
+        adminKey 
+      });
+      if (adminKey) socket.emit('get-all-groups');
     }
 
     function loginAsAdmin() {
-      const password = prompt("Enter Transaction Officer Passkey:");
+      const password = prompt("Enter Admin Passkey:");
       if (password) joinSession(password);
     }
 
-    // Free Client-Side Translation Engine (MyMemory API)
+    function createNewGroup() {
+      const name = prompt("Enter New Group Name:", "New Transaction Group");
+      if (name && name.trim()) {
+        socket.emit('create-group', { groupName: name.trim() });
+      }
+    }
+
+    function copyInviteLink() {
+      const link = `${window.location.origin}${window.location.pathname}?groupId=${activeGroupId}`;
+      navigator.clipboard.writeText(link);
+      alert(`Invite link copied to clipboard:\n${link}`);
+    }
+
+    function switchAdminGroup() {
+      activeGroupId = document.getElementById('adminGroupSelect').value;
+      joinSession(ADMIN_SECRET_KEY_TEMP);
+    }
+
+    let ADMIN_SECRET_KEY_TEMP = null;
+
+    // Translation Engine
     async function translateText(text, sourceLang, targetLang) {
       if (!text || sourceLang === targetLang) return text;
       try {
@@ -452,15 +498,13 @@
       if (!text) return;
 
       const targetLang = document.getElementById('targetLangSelect').value;
-      
-      // Auto translate from English to selected target language if non-English
       let translatedText = text;
       if (targetLang !== 'en') {
         translatedText = await translateText(text, 'en', targetLang);
       }
 
       socket.emit('send-message', {
-        roomId,
+        groupId: activeGroupId,
         text: translatedText,
         englishOriginal: text,
         language: targetLang
@@ -471,17 +515,12 @@
 
     function sendFile(input) {
       const file = input.files[0];
-      if (!file) return;
-
-      if (file.size > 10 * 1024 * 1024) {
-        alert("File size exceeds 10MB limit.");
-        return;
-      }
+      if (!file || file.size > 10 * 1024 * 1024) return;
 
       const reader = new FileReader();
       reader.onload = function(e) {
         socket.emit('send-message', {
-          roomId,
+          groupId: activeGroupId,
           text: `Shared Document: ${file.name}`,
           englishOriginal: `Shared Document: ${file.name}`,
           language: 'en',
@@ -491,6 +530,85 @@
         input.value = '';
       };
       reader.readAsDataURL(file);
+    }
+
+    // Context Menu Logic
+    function openContextMenu(e, msgId) {
+      if (!isAdminConfirmed) return;
+      e.preventDefault();
+      selectedContextMsgId = msgId;
+
+      const menu = document.getElementById('adminContextMenu');
+      menu.style.display = 'flex';
+      menu.style.left = `${e.pageX}px`;
+      menu.style.top = `${e.pageY}px`;
+    }
+
+    function ctxEdit() {
+      if (!selectedContextMsgId) return;
+      const current = messageStore[selectedContextMsgId]?.text || '';
+      const newText = prompt("Edit Message:", current);
+      if (newText !== null && newText.trim()) {
+        socket.emit('edit-message', { groupId: activeGroupId, msgId: selectedContextMsgId, newText: newText.trim() });
+      }
+    }
+
+    function ctxPin() {
+      if (!selectedContextMsgId) return;
+      socket.emit('pin-message', { groupId: activeGroupId, msgId: selectedContextMsgId });
+    }
+
+    function ctxDelete() {
+      if (!selectedContextMsgId) return;
+      socket.emit('delete-message', { groupId: activeGroupId, msgIds: [selectedContextMsgId] });
+    }
+
+    // Bulk Delete Logic
+    function toggleBulkDeleteMode() {
+      bulkDeleteActive = !bulkDeleteActive;
+      const checkboxes = document.querySelectorAll('.msg-checkbox');
+      checkboxes.forEach(cb => cb.style.display = bulkDeleteActive ? 'block' : 'none');
+
+      document.getElementById('confirmDeleteBtn').style.display = bulkDeleteActive ? 'inline-block' : 'none';
+      document.getElementById('selectAllBtn').style.display = bulkDeleteActive ? 'inline-block' : 'none';
+    }
+
+    function selectAllMessages() {
+      const checkboxes = document.querySelectorAll('.msg-checkbox');
+      checkboxes.forEach(cb => cb.checked = true);
+    }
+
+    function executeBulkDelete() {
+      const selected = [];
+      document.querySelectorAll('.msg-checkbox:checked').forEach(cb => selected.push(cb.dataset.id));
+
+      if (selected.length === 0) {
+        alert("No messages selected.");
+        return;
+      }
+
+      if (confirm(`Delete ${selected.length} selected message(s)?`)) {
+        socket.emit('delete-message', { groupId: activeGroupId, msgIds: selected });
+        toggleBulkDeleteMode();
+      }
+    }
+
+    function renameParty(party) {
+      const current = party === 'A' ? currentCustomNames['PARTY A'] : currentCustomNames['PARTY B'];
+      const newName = prompt(`Enter custom display name for Party ${party}:`, current);
+      if (newName && newName.trim()) {
+        socket.emit('rename-party', { groupId: activeGroupId, targetParty: party, newName: newName.trim() });
+      }
+    }
+
+    function toggleFileLock() {
+      socket.emit('toggle-file-lock', { groupId: activeGroupId });
+    }
+
+    function sanitizeText(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
     }
 
     async function toggleTranslateToEnglish(msgId) {
@@ -515,65 +633,43 @@
       }
     }
 
-    function renameParty(party) {
-      const current = party === 'A' ? currentCustomNames['PARTY A'] : currentCustomNames['PARTY B'];
-      const newName = prompt(`Enter custom display name for Party ${party}:`, current);
-      if (newName && newName.trim()) {
-        socket.emit('rename-party', { roomId, targetParty: party, newName: newName.trim() });
-      }
-    }
-
-    function editMessage(msgId, currentText) {
-      const newText = prompt("Edit message content:", currentText);
-      if (newText !== null && newText.trim()) {
-        socket.emit('edit-message', { roomId, msgId, newText: newText.trim() });
-      }
-    }
-
-    function deleteMessage(msgId) {
-      if (confirm("Permanently delete message for all participants?")) {
-        socket.emit('delete-message', { roomId, msgId });
-      }
-    }
-
-    function pinMessage(msgId) {
-      socket.emit('pin-message', { roomId, msgId });
-    }
-
-    function kickUser(party) {
-      const name = party === 'A' ? currentCustomNames['PARTY A'] : currentCustomNames['PARTY B'];
-      if (confirm(`Remove ${name} from session?`)) {
-        socket.emit('kick-participant', { roomId, targetParty: party });
-      }
-    }
-
-    function toggleFileLock() {
-      socket.emit('toggle-file-lock', { roomId });
-    }
-
-    function sanitizeText(text) {
-      const div = document.createElement('div');
-      div.textContent = text;
-      return div.innerHTML;
-    }
-
-    socket.on('init-state', (state) => {
+    // Socket Callbacks
+    socket.on('init-state', ({ group, isAdminConfirmed: adminState }) => {
       document.getElementById('messageContainer').innerHTML = '';
-      currentCustomNames = state.customNames;
-      isAdminConfirmed = state.isAdminConfirmed;
+      currentCustomNames = group.customNames;
+      isAdminConfirmed = adminState;
+      activeGroupId = group.id;
+
+      document.getElementById('currentGroupName').textContent = group.name;
+      document.getElementById('groupIdDisplay').textContent = `ID: ${group.id}`;
 
       document.getElementById('adminTools').style.display = isAdminConfirmed ? 'flex' : 'none';
       document.getElementById('roleSelect').style.display = isAdminConfirmed ? 'none' : 'flex';
       document.getElementById('adminAuthBtn').style.display = isAdminConfirmed ? 'none' : 'flex';
 
-      state.history.forEach(renderMessage);
-      if (state.pinnedMessage) updatePinnedBar(state.pinnedMessage);
-      updateFileLockUI(state.fileUploadsLocked);
+      group.messages.forEach(renderMessage);
+      if (group.pinnedMessage) updatePinnedBar(group.pinnedMessage);
+      updateFileLockUI(group.fileUploadsLocked);
     });
 
-    socket.on('message', (msg) => {
-      renderMessage(msg);
+    socket.on('all-groups-list', (groupList) => {
+      const select = document.getElementById('adminGroupSelect');
+      select.innerHTML = '';
+      groupList.forEach(g => {
+        const opt = document.createElement('option');
+        opt.value = g.id;
+        opt.textContent = g.name;
+        if (g.id === activeGroupId) opt.selected = true;
+        select.appendChild(opt);
+      });
     });
+
+    socket.on('group-created', ({ id, name }) => {
+      activeGroupId = id;
+      joinSession(ADMIN_SECRET_KEY_TEMP);
+    });
+
+    socket.on('message', (msg) => renderMessage(msg));
 
     socket.on('names-updated', ({ customNames, history }) => {
       currentCustomNames = customNames;
@@ -587,35 +683,15 @@
       if (textElem) textElem.innerHTML = sanitizeText(newText);
     });
 
-    socket.on('message-deleted', ({ msgId }) => {
-      const msgElem = document.getElementById(`msg-box-${msgId}`);
-      if (msgElem) msgElem.remove();
+    socket.on('messages-deleted', ({ msgIds }) => {
+      msgIds.forEach(id => {
+        const msgElem = document.getElementById(`msg-box-${id}`);
+        if (msgElem) msgElem.remove();
+      });
     });
 
-    socket.on('update-pinned', (pinnedMsg) => {
-      updatePinnedBar(pinnedMsg);
-    });
-
-    socket.on('file-lock-updated', (isLocked) => {
-      updateFileLockUI(isLocked);
-    });
-
-    socket.on('admin-session-expired', (msg) => {
-      alert(msg);
-    });
-
-    socket.on('auth-failed', (msg) => {
-      alert(msg);
-    });
-
-    socket.on('kicked', (reason) => {
-      alert(reason);
-      window.location.reload();
-    });
-
-    socket.on('error-msg', (msg) => {
-      alert(msg);
-    });
+    socket.on('update-pinned', (pinnedMsg) => updatePinnedBar(pinnedMsg));
+    socket.on('file-lock-updated', (isLocked) => updateFileLockUI(isLocked));
 
     function updatePinnedBar(msg) {
       const bar = document.getElementById('pinnedBar');
@@ -652,21 +728,10 @@
             </div>`;
         }
 
-        let adminActionsHTML = '';
-        if (isAdminConfirmed) {
-          adminActionsHTML = `
-            <div class="msg-action-bar">
-              <button class="action-icon-btn" onclick="editMessage('${data.id}', \`${safeText}\`)"><i class="fa-solid fa-pen"></i></button>
-              <button class="action-icon-btn" onclick="pinMessage('${data.id}')"><i class="fa-solid fa-thumbtack"></i></button>
-              <button class="action-icon-btn" onclick="deleteMessage('${data.id}')" style="color: var(--accent-rose);"><i class="fa-solid fa-trash"></i></button>
-            </div>
-          `;
-        }
-
         const translateBtnHTML = `<button class="translate-btn" id="trans-btn-${data.id}" data-showing="original" onclick="toggleTranslateToEnglish('${data.id}')"><i class="fa-solid fa-language"></i> Translate to English</button>`;
 
         msgDiv.innerHTML = `
-          ${adminActionsHTML}
+          <input type="checkbox" class="msg-checkbox" data-id="${data.id}" style="display:${bulkDeleteActive ? 'block' : 'none'}" />
           <div class="sender-tag" style="color: ${isMsgFromAdmin ? 'var(--accent-cyan)' : 'var(--accent-amber)'};">
             <i class="fa-solid ${isMsgFromAdmin ? 'fa-user-shield' : 'fa-user'}"></i> ${sanitizeText(data.sender)}
           </div>
@@ -675,6 +740,15 @@
           <div>${translateBtnHTML}</div>
           <div class="time-tag">${data.time}</div>
         `;
+
+        // Context Menu Trigger (Right Click or Long Press)
+        msgDiv.addEventListener('contextmenu', (e) => openContextMenu(e, data.id));
+        
+        let timer = null;
+        msgDiv.addEventListener('touchstart', (e) => {
+          timer = setTimeout(() => openContextMenu(e.touches[0], data.id), 600);
+        });
+        msgDiv.addEventListener('touchend', () => clearTimeout(timer));
       }
 
       container.appendChild(msgDiv);
