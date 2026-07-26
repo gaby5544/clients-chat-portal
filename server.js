@@ -54,8 +54,9 @@ let groups = {
     name: "General Transaction Group #1",
     messages: [],
     customNames: { A: "Buyer (Party A)", B: "Seller (Party B)" },
-    fileLocked: false,
-    highlighted: false
+    fileUploadsEnabled: true, // Default: Enabled for all users unless Admin turns it off
+    highlighted: false,
+    pinnedMessages: []
   }
 };
 
@@ -71,8 +72,9 @@ io.on('connection', (socket) => {
         name: `Transaction Group #${Object.keys(groups).length + 1}`,
         messages: [],
         customNames: { A: "Buyer (Party A)", B: "Seller (Party B)" },
-        fileLocked: false,
-        highlighted: false
+        fileUploadsEnabled: true,
+        highlighted: false,
+        pinnedMessages: []
       };
     }
 
@@ -114,7 +116,7 @@ io.on('connection', (socket) => {
   // 2. Send Message
   socket.on('send-message', ({ groupId, text, targetLang }) => {
     const user = activeSockets[socket.id];
-    if (!user) return;
+    if (!user || !groups[groupId]) return;
 
     const msgData = {
       id: 'msg-' + Date.now() + '-' + Math.random().toString(36).substr(2, 4),
@@ -128,9 +130,10 @@ io.on('connection', (socket) => {
 
     groups[groupId].messages.push(msgData);
     io.to(groupId).emit('message', msgData);
+    io.emit('all-groups-list', Object.values(groups));
   });
 
-  // 3. ADMIN: Edit Any Message
+  // 3. ADMIN: Edit Any Message (No Edited Indicator Broadcasted)
   socket.on('admin-edit-message', ({ groupId, messageId, newText }) => {
     const user = activeSockets[socket.id];
     if (!user || !user.isAdmin) return;
@@ -139,8 +142,6 @@ io.on('connection', (socket) => {
       const msgIndex = groups[groupId].messages.findIndex(m => m.id === messageId);
       if (msgIndex !== -1) {
         groups[groupId].messages[msgIndex].text = newText;
-        groups[groupId].messages[msgIndex].edited = true;
-
         io.to(groupId).emit('message-edited', {
           groupId,
           messageId,
@@ -150,22 +151,54 @@ io.on('connection', (socket) => {
     }
   });
 
-  // 4. ADMIN: Bulk Delete Messages
+  // 4. ADMIN: Pin / Unpin Message
+  socket.on('admin-toggle-pin-message', ({ groupId, messageId }) => {
+    const user = activeSockets[socket.id];
+    if (!user || !user.isAdmin) return;
+
+    if (groups[groupId]) {
+      const msg = groups[groupId].messages.find(m => m.id === messageId);
+      if (msg) {
+        const pinIndex = groups[groupId].pinnedMessages.findIndex(p => p.id === messageId);
+        if (pinIndex === -1) {
+          groups[groupId].pinnedMessages.push(msg);
+        } else {
+          groups[groupId].pinnedMessages.splice(pinIndex, 1);
+        }
+        io.to(groupId).emit('pinned-messages-updated', groups[groupId].pinnedMessages);
+      }
+    }
+  });
+
+  // 5. ADMIN: Bulk Delete Messages
   socket.on('admin-bulk-delete-messages', ({ groupId, messageIds }) => {
     const user = activeSockets[socket.id];
     if (!user || !user.isAdmin) return;
 
     if (groups[groupId] && Array.isArray(messageIds)) {
       groups[groupId].messages = groups[groupId].messages.filter(m => !messageIds.includes(m.id));
+      groups[groupId].pinnedMessages = groups[groupId].pinnedMessages.filter(m => !messageIds.includes(m.id));
       
-      io.to(groupId).emit('messages-bulk-deleted', {
-        groupId,
-        messageIds
+      io.to(groupId).emit('messages-bulk-deleted', { groupId, messageIds });
+      io.to(groupId).emit('pinned-messages-updated', groups[groupId].pinnedMessages);
+      io.emit('all-groups-list', Object.values(groups));
+    }
+  });
+
+  // 6. ADMIN: Toggle Upload Rights
+  socket.on('admin-toggle-upload-permission', ({ groupId }) => {
+    const user = activeSockets[socket.id];
+    if (!user || !user.isAdmin) return;
+
+    if (groups[groupId]) {
+      groups[groupId].fileUploadsEnabled = !groups[groupId].fileUploadsEnabled;
+      io.to(groupId).emit('upload-permission-changed', {
+        fileUploadsEnabled: groups[groupId].fileUploadsEnabled
       });
     }
   });
 
-  // 5. ADMIN: Create New Group
+  // 7. ADMIN: Group Management
   socket.on('create-group', ({ groupName }) => {
     const newId = 'group-' + Date.now();
     const name = groupName || `General Transaction Group #${Object.keys(groups).length + 1}`;
@@ -175,15 +208,15 @@ io.on('connection', (socket) => {
       name: name,
       messages: [],
       customNames: { A: "Buyer (Party A)", B: "Seller (Party B)" },
-      fileLocked: false,
-      highlighted: false
+      fileUploadsEnabled: true,
+      highlighted: false,
+      pinnedMessages: []
     };
 
     io.emit('all-groups-list', Object.values(groups));
     socket.emit('group-created-and-switch', { newGroupId: newId });
   });
 
-  // 6. ADMIN: Delete Group
   socket.on('delete-group', ({ groupId }) => {
     if (Object.keys(groups).length <= 1) {
       socket.emit('error-msg', "Cannot delete the last remaining group!");
@@ -235,13 +268,6 @@ io.on('connection', (socket) => {
         socketId: socket.id
       });
       broadcastPresence(groupId);
-    }
-  });
-
-  socket.on('toggle-file-lock', ({ groupId }) => {
-    if (groups[groupId]) {
-      groups[groupId].fileLocked = !groups[groupId].fileLocked;
-      io.to(groupId).emit('file-lock-status', { fileLocked: groups[groupId].fileLocked });
     }
   });
 
