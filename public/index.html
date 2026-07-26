@@ -53,7 +53,7 @@
 
     /* Left Admin Command Panel */
     .admin-side-panel {
-      width: 320px;
+      width: 340px;
       background: var(--side-panel-bg);
       border-right: 1px solid var(--border);
       display: none;
@@ -96,6 +96,9 @@
       cursor: pointer;
       text-align: left;
       transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      gap: 8px;
     }
 
     .admin-btn:hover {
@@ -134,6 +137,32 @@
       padding: 8px 12px;
       border-radius: 8px;
       min-height: 45px;
+    }
+
+    .group-checklist {
+      max-height: 120px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      background: rgba(2, 6, 23, 0.6);
+      padding: 8px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+    }
+
+    .group-check-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 0.78rem;
+      color: var(--text-main);
+    }
+
+    .group-check-item.highlighted {
+      background: rgba(245, 158, 11, 0.15);
+      border-left: 3px solid var(--accent-amber);
+      padding-left: 4px;
     }
 
     /* Main Chat Desk Area */
@@ -256,6 +285,15 @@
       text-transform: uppercase;
     }
 
+    .trans-note {
+      font-size: 0.72rem;
+      color: var(--accent-cyan);
+      margin-top: 6px;
+      border-top: 1px dashed rgba(56, 189, 248, 0.3);
+      padding-top: 4px;
+      font-style: italic;
+    }
+
     .typing-indicator-box {
       height: 20px;
       padding: 0 28px;
@@ -304,6 +342,7 @@
       font-size: 0.92rem;
     }
 
+    /* Custom Unique Quantum Send Button */
     .send-btn {
       background: linear-gradient(135deg, var(--accent-cyan) 0%, var(--accent-indigo) 100%);
       color: #020617;
@@ -312,21 +351,30 @@
       border-radius: 12px;
       font-weight: 800;
       cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+
+    .send-btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 15px rgba(56, 189, 248, 0.4);
     }
 
     .file-input { display: none; }
 
-    /* Direct Message Modal */
+    /* Direct Message Modal (Professional Left/Right Chat) */
     .dm-modal {
       position: absolute;
       bottom: 80px;
       right: 28px;
-      width: 360px;
-      height: 420px;
-      background: #0f172a;
+      width: 400px;
+      height: 480px;
+      background: #090d16;
       border: 1px solid var(--accent-cyan);
-      border-radius: 16px;
-      box-shadow: 0 20px 40px rgba(0,0,0,0.8);
+      border-radius: 18px;
+      box-shadow: 0 25px 50px rgba(0,0,0,0.9);
       display: none;
       flex-direction: column;
       z-index: 1000;
@@ -334,19 +382,61 @@
     }
 
     .dm-header {
-      padding: 12px 16px;
+      padding: 14px 18px;
       background: rgba(56, 189, 248, 0.1);
       border-bottom: 1px solid var(--border);
       display: flex;
       justify-content: space-between;
       align-items: center;
       font-weight: 700;
-      font-size: 0.85rem;
+      font-size: 0.88rem;
       color: var(--accent-cyan);
     }
 
-    .dm-body { flex: 1; padding: 12px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; font-size: 0.82rem; }
-    .dm-footer { padding: 10px; display: flex; gap: 6px; border-top: 1px solid var(--border); }
+    .dm-body { 
+      flex: 1; 
+      padding: 14px; 
+      overflow-y: auto; 
+      display: flex; 
+      flex-direction: column; 
+      gap: 12px; 
+      font-size: 0.85rem; 
+    }
+
+    /* Left and Right Bubble Rules for Professional DM */
+    .dm-bubble {
+      max-width: 80%;
+      padding: 10px 14px;
+      border-radius: 14px;
+      line-height: 1.4;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .dm-bubble.sent {
+      align-self: flex-end;
+      background: linear-gradient(135deg, rgba(99, 102, 241, 0.8) 0%, rgba(56, 189, 248, 0.8) 100%);
+      color: #fff;
+      border-bottom-right-radius: 2px;
+    }
+
+    .dm-bubble.received {
+      align-self: flex-start;
+      background: rgba(30, 41, 59, 0.9);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: var(--text-main);
+      border-bottom-left-radius: 2px;
+    }
+
+    .dm-sender-label {
+      font-size: 0.68rem;
+      font-weight: 800;
+      opacity: 0.8;
+      margin-bottom: 3px;
+      text-transform: uppercase;
+    }
+
+    .dm-footer { padding: 12px; display: flex; gap: 8px; border-top: 1px solid var(--border); background: #020617; }
   </style>
 </head>
 <body>
@@ -366,6 +456,13 @@
         <button class="admin-btn" onclick="copyInviteLink()"><i class="fa-solid fa-link"></i> Clean Invite Link</button>
       </div>
 
+      <!-- Batch Selection & Highlight Dashboard -->
+      <div class="admin-section">
+        <span style="font-size: 0.75rem; font-weight: 700; color: var(--accent-amber);"><i class="fa-solid fa-list-check"></i> MULTI-GROUP MANAGER</span>
+        <div class="group-checklist" id="groupChecklist"></div>
+        <button class="admin-btn admin-btn-danger" onclick="deleteSelectedGroups()"><i class="fa-solid fa-dumpster"></i> Delete Selected Groups</button>
+      </div>
+
       <div class="admin-section">
         <span style="font-size: 0.75rem; font-weight: 700; color: var(--text-muted);">PARTY RENAMING</span>
         <button class="admin-btn" onclick="renameParty('A')"><i class="fa-solid fa-pen"></i> Rename Buyer (A)</button>
@@ -383,7 +480,7 @@
       <div class="admin-section">
         <span style="font-size: 0.75rem; font-weight: 700; color: var(--accent-cyan);"><i class="fa-solid fa-comments"></i> DIRECT MESSAGE / EMAIL</span>
         <select class="group-dropdown" id="activeUsersSelect"></select>
-        <button class="admin-btn" onclick="initiateAdminDM()"><i class="fa-solid fa-paper-plane"></i> Send Direct Message</button>
+        <button class="admin-btn" onclick="initiateAdminDM()"><i class="fa-solid fa-bolt-lightning"></i> Send Direct Message</button>
       </div>
 
       <!-- Private Officer Notes -->
@@ -428,44 +525,50 @@
           <option value="PARTY B">Role: Seller (Party B)</option>
         </select>
 
-        <!-- TOP 12 MOST SPOKEN COUNTRIES / LANGUAGES DROPDOWN -->
+        <!-- TOP SPOKEN COUNTRIES / LANGUAGES DROPDOWN -->
         <select class="lang-dropdown" id="targetLangSelect">
-          <option value="en-US">🇬🇧 English</option>
-          <option value="zh-CN">🇨🇳 Chinese (Mandarin)</option>
-          <option value="hi-IN">🇮🇳 Hindi</option>
-          <option value="es-ES">🇪🇸 Spanish</option>
-          <option value="ar-SA">🇸🇦 Arabic</option>
-          <option value="fr-FR">🇫🇷 French</option>
-          <option value="bn-BD">🇧🇩 Bengali</option>
-          <option value="pt-PT">🇵🇹 Portuguese</option>
-          <option value="ru-RU">🇷🇺 Russian</option>
-          <option value="id-ID">🇮🇩 Indonesian</option>
-          <option value="it-IT">🇮🇹 Italian</option>
-          <option value="de-DE">🇩🇪 German</option>
+          <option value="en">🇬🇧 English</option>
+          <option value="zh">🇨🇳 Chinese (Mandarin)</option>
+          <option value="hi">🇮🇳 Hindi</option>
+          <option value="es">🇪🇸 Spanish</option>
+          <option value="ar">🇸🇦 Arabic</option>
+          <option value="fr">🇫🇷 French</option>
+          <option value="bn">🇧🇩 Bengali</option>
+          <option value="pt">🇵🇹 Portuguese</option>
+          <option value="ru">🇷🇺 Russian</option>
+          <option value="id">🇮🇩 Indonesian</option>
+          <option value="it">🇮🇹 Italian</option>
+          <option value="de">🇩🇪 German</option>
         </select>
 
-        <!-- SPEECH RECOGNITION (VOICE-TO-TEXT) BUTTON -->
+        <!-- SPEECH RECOGNITION BUTTON -->
         <button class="icon-btn" id="micBtn" onclick="toggleSpeechRecognition()" title="Voice to Text"><i class="fa-solid fa-microphone"></i></button>
 
         <label class="icon-btn" for="fileInput"><i class="fa-solid fa-paperclip"></i></label>
         <input type="file" id="fileInput" class="file-input" />
 
         <input type="text" class="message-input" id="messageInput" placeholder="Write or speak message..." onkeydown="if(event.key==='Enter') sendMsg()" oninput="handleTyping()" />
-        <button class="send-btn" onclick="sendMsg()"><i class="fa-solid fa-paper-plane"></i> SEND</button>
+        
+        <!-- UNIQUE ATTRACTIVE SEND BUTTON (NO TELEGRAM ICON) -->
+        <button class="send-btn" onclick="sendMsg()">
+          <i class="fa-solid fa-bolt-lightning"></i> SEND
+        </button>
       </div>
     </div>
   </div>
 
-  <!-- DM Modal -->
+  <!-- DM Modal with Professional Chat Layout -->
   <div class="dm-modal" id="dmModal">
     <div class="dm-header">
-      <span><i class="fa-solid fa-user-shield"></i> Direct Message</span>
+      <span><i class="fa-solid fa-user-shield"></i> Direct Message Channel</span>
       <i class="fa-solid fa-xmark" style="cursor:pointer;" onclick="closeDMModal()"></i>
     </div>
     <div class="dm-body" id="dmBody"></div>
     <div class="dm-footer">
-      <input type="text" class="message-input" id="dmInput" placeholder="Reply..." />
-      <button class="send-btn" onclick="sendDMReply()"><i class="fa-solid fa-paper-plane"></i></button>
+      <input type="text" class="message-input" id="dmInput" placeholder="Type direct reply..." onkeydown="if(event.key==='Enter') sendDMReply()" />
+      <button class="send-btn" onclick="sendDMReply()">
+        <i class="fa-solid fa-arrow-up-right-from-square"></i>
+      </button>
     </div>
   </div>
 
@@ -487,6 +590,19 @@
     let typingTimeout = null;
     let recognition = null;
     let isRecording = false;
+
+    // --- REALTIME TRANSLATION ENGINE ---
+    async function translateText(text, targetLang) {
+      if (!text || targetLang === 'en' || !targetLang) return text;
+      try {
+        const res = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=autodetect|${targetLang}`);
+        const data = await res.json();
+        return data?.responseData?.translatedText || text;
+      } catch (err) {
+        console.error("Translation Error:", err);
+        return text;
+      }
+    }
 
     // --- SPEECH RECOGNITION (VOICE TO TEXT) ---
     function initSpeechRecognition() {
@@ -521,7 +637,7 @@
         recognition.stop();
       } else {
         const lang = document.getElementById('targetLangSelect').value;
-        recognition.lang = lang; // Dynamically switch speech recognition language
+        recognition.lang = lang;
         recognition.start();
         isRecording = true;
         document.getElementById('micBtn').classList.add('recording');
@@ -571,6 +687,20 @@
       if (confirm(`Are you sure you want to delete ${document.getElementById('currentGroupName').textContent}?`)) {
         socket.emit('delete-group', { groupId: activeGroupId });
       }
+    }
+
+    function deleteSelectedGroups() {
+      const checkedBoxes = document.querySelectorAll('.group-chk:checked');
+      const ids = Array.from(checkedBoxes).map(cb => cb.value);
+      if (ids.length === 0) return alert("Select at least one group to delete!");
+      
+      if (confirm(`Delete ${ids.length} selected group(s)?`)) {
+        socket.emit('bulk-delete-groups', { groupIds: ids });
+      }
+    }
+
+    function toggleHighlight(groupId) {
+      socket.emit('toggle-highlight-group', { groupId });
     }
 
     function renameParty(party) {
@@ -657,9 +787,17 @@
       activeDMRoomId = msg.dmRoomId;
       document.getElementById('dmModal').style.display = 'flex';
       const body = document.getElementById('dmBody');
-      const div = document.createElement('div');
-      div.innerHTML = `<strong>${msg.sender}:</strong> ${msg.text} <span style="font-size:0.65rem; color:#64748b;">${msg.time}</span>`;
-      body.appendChild(div);
+      const isSelf = (msg.senderSocketId === socket.id);
+
+      const bubble = document.createElement('div');
+      bubble.className = `dm-bubble ${isSelf ? 'sent' : 'received'}`;
+      bubble.innerHTML = `
+        <span class="dm-sender-label">${msg.sender}</span>
+        <div>${msg.text}</div>
+        <span style="font-size:0.6rem; opacity:0.7; text-align:right; margin-top:4px;">${msg.time}</span>
+      `;
+      
+      body.appendChild(bubble);
       body.scrollTop = body.scrollHeight;
     });
 
@@ -716,15 +854,33 @@
 
     socket.on('all-groups-list', (groupList) => {
       const select = document.getElementById('adminGroupSelect');
-      if (!select) return;
-      select.innerHTML = '';
-      groupList.forEach(g => {
-        const opt = document.createElement('option');
-        opt.value = g.id;
-        opt.textContent = g.name;
-        if (g.id === activeGroupId) opt.selected = true;
-        select.appendChild(opt);
-      });
+      const checklist = document.getElementById('groupChecklist');
+      
+      if (select) {
+        select.innerHTML = '';
+        groupList.forEach(g => {
+          const opt = document.createElement('option');
+          opt.value = g.id;
+          opt.textContent = g.name;
+          if (g.id === activeGroupId) opt.selected = true;
+          select.appendChild(opt);
+        });
+      }
+
+      if (checklist) {
+        checklist.innerHTML = '';
+        groupList.forEach(g => {
+          const item = document.createElement('div');
+          item.className = `group-check-item ${g.highlighted ? 'highlighted' : ''}`;
+          item.innerHTML = `
+            <span>
+              <input type="checkbox" class="group-chk" value="${g.id}"> ${g.name}
+            </span>
+            <i class="fa-solid fa-star" style="cursor:pointer; color: ${g.highlighted ? '#f59e0b' : '#64748b'}" onclick="toggleHighlight('${g.id}')"></i>
+          `;
+          checklist.appendChild(item);
+        });
+      }
     });
 
     socket.on('force-room-switch', ({ newGroupId }) => {
@@ -735,24 +891,40 @@
 
     socket.on('error-msg', (msg) => { alert(msg); });
 
-    function sendMsg() {
+    async function sendMsg() {
       const input = document.getElementById('messageInput');
-      const text = input.value.trim();
-      if (!text) return;
+      const rawText = input.value.trim();
+      if (!rawText) return;
 
-      socket.emit('send-message', { groupId: activeGroupId, text });
+      const targetLang = document.getElementById('targetLangSelect').value;
+      const outgoingText = await translateText(rawText, targetLang);
+
+      socket.emit('send-message', { groupId: activeGroupId, text: outgoingText, targetLang });
       input.value = '';
     }
 
-    function renderMessage(data) {
+    async function renderMessage(data) {
       saveOfflineMessages(data);
       const container = document.getElementById('messageContainer');
       const msgDiv = document.createElement('div');
       msgDiv.className = `message ${data.sender === 'SYSTEM' ? 'msg-system' : (data.senderRole === 'ADMINISTRATOR' ? 'msg-admin' : 'msg-party')}`;
+
+      const selectedLang = document.getElementById('targetLangSelect').value;
+      let displayMsg = data.text;
+      let translatedNotice = '';
+
+      if (data.sender !== 'SYSTEM' && selectedLang !== 'en') {
+        const translated = await translateText(data.text, selectedLang);
+        if (translated !== data.text) {
+          translatedNotice = `<div class="trans-note"><i class="fa-solid fa-language"></i> Translated (${selectedLang.toUpperCase()}): ${translated}</div>`;
+        }
+      }
+
       msgDiv.innerHTML = `
         <div class="sender-tag">${data.sender}</div>
-        <div>${data.text}</div>
-        <div style="font-size:0.65rem; color:#64748b; text-align:right;">${data.time}</div>
+        <div>${displayMsg}</div>
+        ${translatedNotice}
+        <div style="font-size:0.65rem; color:#64748b; text-align:right; margin-top:4px;">${data.time}</div>
       `;
       container.appendChild(msgDiv);
       container.scrollTop = container.scrollHeight;
