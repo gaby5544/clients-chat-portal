@@ -3,24 +3,25 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Live Administrative Desk</title>
+  <title>Secure Workspace Hub</title>
   <script src="/socket.io/socket.io.js"></script>
   <style>
     :root {
-      --bg-dark: #030712;
-      --card-bg: rgba(11, 22, 44, 0.85);
-      --accent-blue: #1199fa;
-      --accent-green: #00d26a;
-      --border: rgba(17, 153, 250, 0.25);
-      --text: #ffffff;
-      --subtext: #88a2c0;
+      --bg-dark: #020617;
+      --card-bg: rgba(15, 23, 42, 0.95);
+      --accent-gold: #f59e0b;
+      --accent-blue: #38bdf8;
+      --accent-red: #ef4444;
+      --border: rgba(56, 189, 248, 0.2);
+      --text: #f8fafc;
+      --subtext: #94a3b8;
     }
 
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
 
     body {
       background: var(--bg-dark);
-      background-image: radial-gradient(circle at 50% 0%, #0b1a38 0%, #030712 80%);
+      background-image: radial-gradient(circle at 50% 0%, #0f172a 0%, #020617 80%);
       color: var(--text);
       display: flex;
       justify-content: center;
@@ -31,144 +32,191 @@
 
     .room-container {
       width: 100%;
-      max-width: 850px;
-      height: 650px;
+      max-width: 900px;
+      height: 700px;
       background: var(--card-bg);
       border: 1px solid var(--border);
-      border-radius: 20px;
-      box-shadow: 0 20px 50px rgba(0,0,0,0.8), 0 0 30px rgba(17, 153, 250, 0.15);
-      backdrop-filter: blur(20px);
+      border-radius: 16px;
+      box-shadow: 0 25px 50px -12px rgba(0,0,0,0.7);
       display: flex;
       flex-direction: column;
       overflow: hidden;
     }
 
     .header {
-      padding: 20px 25px;
-      background: rgba(6, 15, 30, 0.9);
+      padding: 16px 24px;
+      background: #090d16;
       border-bottom: 1px solid var(--border);
       display: flex;
       justify-content: space-between;
       align-items: center;
     }
 
-    .brand-title { font-size: 1.1rem; font-weight: 800; letter-spacing: 1px; }
+    .brand-title { font-size: 1rem; font-weight: 800; letter-spacing: 1.5px; text-transform: uppercase; }
     .brand-title span { color: var(--accent-blue); }
 
-    .status-badge {
-      background: rgba(0, 210, 106, 0.15);
-      color: var(--accent-green);
-      border: 1px solid rgba(0, 210, 106, 0.3);
-      padding: 6px 12px;
-      border-radius: 20px;
-      font-size: 0.8rem;
-      font-weight: 600;
-      display: flex;
+    .pinned-bar {
+      background: rgba(245, 158, 11, 0.1);
+      border-bottom: 1px solid rgba(245, 158, 11, 0.3);
+      padding: 10px 20px;
+      font-size: 0.85rem;
+      color: var(--accent-gold);
+      display: none;
       align-items: center;
-      gap: 6px;
+      gap: 10px;
+    }
+
+    .admin-tools {
+      background: #0b1120;
+      padding: 8px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      font-size: 0.8rem;
+    }
+
+    .admin-btn {
+      background: rgba(239, 68, 68, 0.15);
+      border: 1px solid rgba(239, 68, 68, 0.4);
+      color: #fca5a5;
+      padding: 4px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 600;
     }
 
     .chat-messages {
       flex: 1;
-      padding: 25px;
+      padding: 20px;
       overflow-y: auto;
       display: flex;
       flex-direction: column;
-      gap: 16px;
+      gap: 14px;
     }
 
     .message {
-      max-width: 75%;
-      padding: 12px 18px;
-      border-radius: 12px;
-      font-size: 0.95rem;
+      max-width: 80%;
+      padding: 12px 16px;
+      border-radius: 10px;
+      font-size: 0.9rem;
       line-height: 1.4;
       position: relative;
     }
 
     .msg-system {
       align-self: center;
-      background: rgba(17, 153, 250, 0.1);
-      border: 1px solid rgba(17, 153, 250, 0.2);
+      background: rgba(56, 189, 248, 0.08);
+      border: 1px solid rgba(56, 189, 248, 0.15);
       color: var(--subtext);
-      font-size: 0.85rem;
+      font-size: 0.8rem;
       text-align: center;
-      width: 90%;
+      width: 85%;
     }
 
     .msg-admin {
       align-self: flex-start;
-      background: rgba(17, 153, 250, 0.2);
+      background: rgba(56, 189, 248, 0.15);
       border: 1px solid var(--accent-blue);
-      color: #fff;
+      font-family: 'Georgia', serif; /* Elite distinct font for Admin */
+      font-weight: 500;
     }
 
     .msg-party {
       align-self: flex-end;
-      background: rgba(255, 255, 255, 0.08);
-      border: 1px solid rgba(255, 255, 255, 0.15);
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.12);
     }
 
     .sender-tag {
-      font-size: 0.75rem;
+      font-size: 0.7rem;
       font-weight: 700;
       margin-bottom: 4px;
       color: var(--accent-blue);
       text-transform: uppercase;
+      font-family: sans-serif;
     }
 
     .time-tag {
       font-size: 0.65rem;
       color: rgba(255,255,255,0.4);
-      margin-top: 4px;
+      margin-top: 6px;
       text-align: right;
     }
 
-    .footer-controls {
-      padding: 20px;
-      background: rgba(6, 15, 30, 0.9);
-      border-top: 1px solid var(--border);
-      display: flex;
-      gap: 12px;
+    .pin-btn {
+      position: absolute;
+      top: 6px;
+      right: 8px;
+      background: none;
+      border: none;
+      color: var(--subtext);
+      cursor: pointer;
+      font-size: 0.75rem;
     }
 
-    .role-dropdown {
-      background: #091428;
+    .footer-controls {
+      padding: 16px;
+      background: #090d16;
+      border-top: 1px solid var(--border);
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .role-dropdown, .file-btn-label {
+      background: #0f172a;
       border: 1px solid var(--border);
       color: var(--accent-blue);
-      padding: 12px;
-      border-radius: 10px;
-      font-weight: 700;
+      padding: 10px 12px;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 0.85rem;
       outline: none;
+      cursor: pointer;
     }
 
     .message-input {
       flex: 1;
-      background: #091428;
+      background: #0f172a;
       border: 1px solid var(--border);
       color: #fff;
-      padding: 12px 16px;
-      border-radius: 10px;
+      padding: 10px 14px;
+      border-radius: 8px;
       outline: none;
     }
 
     .send-btn {
-      background: linear-gradient(135deg, #1199fa 0%, #0052d4 100%);
-      color: #fff;
+      background: var(--accent-blue);
+      color: #020617;
       border: none;
-      padding: 12px 24px;
-      border-radius: 10px;
+      padding: 10px 20px;
+      border-radius: 8px;
       font-weight: 700;
       cursor: pointer;
     }
+
+    .file-input { display: none; }
   </style>
 </head>
 <body>
 
   <div class="room-container">
     <div class="header">
-      <div class="brand-title">ESCROW <span>ADMIN DESK</span></div>
-      <div class="status-badge"><span style="color:#00d26a;">●</span> LIVE SESSION #88204</div>
+      <div class="brand-title">TRANSACTION <span>ADMIN DESK</span></div>
+      <div style="font-size: 0.8rem; color: #4ade80;">● ACTIVE WORKSPACE #88204</div>
+    </div>
+
+    <div class="pinned-bar" id="pinnedBar">
+      📌 <strong>PINNED:</strong> <span id="pinnedContent">None</span>
+    </div>
+
+    <!-- Admin controls (Visible to Admin role) -->
+    <div class="admin-tools" id="adminTools" style="display: none;">
+      <span style="color: var(--subtext);">Admin Controls:</span>
+      <button class="admin-btn" onclick="kickUser('PARTY A (Buyer)')">Remove Party A</button>
+      <button class="admin-btn" onclick="kickUser('PARTY B (Seller)')">Remove Party B</button>
+      <button class="admin-btn" style="border-color: var(--accent-gold); color: var(--accent-gold);" onclick="toggleFileLock()" id="lockFileBtn">Lock File Uploads</button>
     </div>
 
     <div class="chat-messages" id="messageContainer"></div>
@@ -179,17 +227,24 @@
         <option value="PARTY A (Buyer)">Role: Party A</option>
         <option value="PARTY B (Seller)">Role: Party B</option>
       </select>
-      <input type="text" class="message-input" id="messageInput" placeholder="Enter message to session..." onkeydown="if(event.key==='Enter') sendMsg()" />
+      
+      <label class="file-btn-label" for="fileInput">📎 File</label>
+      <input type="file" id="fileInput" class="file-input" onchange="sendFile(this)" />
+
+      <input type="text" class="message-input" id="messageInput" placeholder="Enter message..." onkeydown="if(event.key==='Enter') sendMsg()" />
       <button class="send-btn" onclick="sendMsg()">SEND</button>
     </div>
   </div>
 
   <script>
     const socket = io();
-    const roomId = "88204-ONCHAIN-DESK";
+    const roomId = "88204-DESK";
+    let fileUploadsLocked = false;
 
     function joinSession() {
       const role = document.getElementById('roleSelect').value;
+      const isAdmin = role.includes('ADMIN');
+      document.getElementById('adminTools').style.display = isAdmin ? 'flex' : 'none';
       socket.emit('join-room', { roomId, role });
     }
 
@@ -202,31 +257,124 @@
       input.value = '';
     }
 
+    function sendFile(input) {
+      const file = input.files[0];
+      if (!file) return;
+
+      if (file.size > 10 * 1024 * 1024) {
+        alert("File size must be under 10MB");
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        socket.emit('send-message', {
+          roomId,
+          text: `Attached file: ${file.name}`,
+          fileData: e.target.result,
+          fileName: file.name
+        });
+        input.value = '';
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function pinMessage(msgId) {
+      socket.emit('pin-message', { roomId, msgId });
+    }
+
+    function kickUser(role) {
+      if (confirm(`Remove ${role} from session?`)) {
+        socket.emit('kick-participant', { roomId, targetRole: role });
+      }
+    }
+
+    function toggleFileLock() {
+      socket.emit('toggle-file-lock', { roomId });
+    }
+
     function sanitizeText(text) {
       const div = document.createElement('div');
       div.textContent = text;
       return div.innerHTML;
     }
 
-    socket.on('message', (data) => {
+    socket.on('init-state', (state) => {
+      document.getElementById('messageContainer').innerHTML = '';
+      state.history.forEach(renderMessage);
+      if (state.pinnedMessage) updatePinnedBar(state.pinnedMessage);
+      updateFileLockUI(state.fileUploadsLocked);
+    });
+
+    socket.on('message', (msg) => {
+      renderMessage(msg);
+    });
+
+    socket.on('update-pinned', (pinnedMsg) => {
+      updatePinnedBar(pinnedMsg);
+    });
+
+    socket.on('file-lock-updated', (isLocked) => {
+      updateFileLockUI(isLocked);
+    });
+
+    socket.on('kicked', (reason) => {
+      alert(reason);
+      window.location.reload();
+    });
+
+    socket.on('error-msg', (msg) => {
+      alert(msg);
+    });
+
+    function updatePinnedBar(msg) {
+      const bar = document.getElementById('pinnedBar');
+      const content = document.getElementById('pinnedContent');
+      bar.style.display = 'flex';
+      content.textContent = `${msg.sender}: ${msg.text}`;
+    }
+
+    function updateFileLockUI(isLocked) {
+      fileUploadsLocked = isLocked;
+      const btn = document.getElementById('lockFileBtn');
+      if (btn) btn.textContent = isLocked ? "Unlock File Uploads" : "Lock File Uploads";
+    }
+
+    function renderMessage(data) {
       const container = document.getElementById('messageContainer');
       const msgDiv = document.createElement('div');
       const safeText = sanitizeText(data.text);
+      const currentRole = document.getElementById('roleSelect').value;
 
       if (data.sender === 'SYSTEM') {
         msgDiv.className = 'message msg-system';
         msgDiv.innerHTML = `<strong>SYSTEM:</strong> ${safeText}`;
-      } else if (data.sender.includes('ADMIN')) {
-        msgDiv.className = 'message msg-admin';
-        msgDiv.innerHTML = `<div class="sender-tag">${sanitizeText(data.sender)}</div>${safeText}<div class="time-tag">${data.time}</div>`;
       } else {
-        msgDiv.className = 'message msg-party';
-        msgDiv.innerHTML = `<div class="sender-tag" style="color:#a3b8cc;">${sanitizeText(data.sender)}</div>${safeText}<div class="time-tag">${data.time}</div>`;
+        const isAdmin = data.sender.includes('ADMIN');
+        msgDiv.className = `message ${isAdmin ? 'msg-admin' : 'msg-party'}`;
+        
+        let fileHTML = '';
+        if (data.fileData) {
+          fileHTML = `<br><a href="${data.fileData}" download="${data.fileName}" style="color: var(--accent-blue); font-weight: bold;">📥 Download ${sanitizeText(data.fileName)}</a>`;
+        }
+
+        let pinButtonHTML = '';
+        if (currentRole.includes('ADMIN')) {
+          pinButtonHTML = `<button class="pin-btn" onclick="pinMessage('${data.id}')">📌 Pin</button>`;
+        }
+
+        msgDiv.innerHTML = `
+          ${pinButtonHTML}
+          <div class="sender-tag" style="color: ${isAdmin ? 'var(--accent-blue)' : '#a3b8cc'};">${sanitizeText(data.sender)}</div>
+          ${safeText}
+          ${fileHTML}
+          <div class="time-tag">${data.time}</div>
+        `;
       }
 
       container.appendChild(msgDiv);
       container.scrollTop = container.scrollHeight;
-    });
+    }
 
     // Initial Join
     joinSession();
