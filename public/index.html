@@ -253,6 +253,17 @@
       position: relative;
     }
 
+    .msg-wrapper {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+    }
+
+    .msg-wrapper.msg-party {
+      justify-content: flex-end;
+    }
+
     .msg-system {
       align-self: center;
       background: rgba(56, 189, 248, 0.05);
@@ -283,6 +294,21 @@
       font-weight: 800;
       margin-bottom: 6px;
       text-transform: uppercase;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .msg-action-btn {
+      cursor: pointer;
+      color: var(--accent-cyan);
+      font-size: 0.75rem;
+      transition: color 0.2s;
+    }
+
+    .msg-action-btn:hover {
+      color: var(--accent-amber);
     }
 
     .trans-note {
@@ -292,6 +318,18 @@
       border-top: 1px dashed rgba(56, 189, 248, 0.3);
       padding-top: 4px;
       font-style: italic;
+    }
+
+    .bulk-delete-bar {
+      display: none;
+      background: rgba(244, 63, 94, 0.15);
+      border-top: 1px solid var(--accent-rose);
+      padding: 8px 28px;
+      font-size: 0.8rem;
+      color: var(--accent-rose);
+      justify-content: space-between;
+      align-items: center;
+      font-weight: 700;
     }
 
     .typing-indicator-box {
@@ -342,7 +380,6 @@
       font-size: 0.92rem;
     }
 
-    /* Custom Unique Quantum Send Button */
     .send-btn {
       background: linear-gradient(135deg, var(--accent-cyan) 0%, var(--accent-indigo) 100%);
       color: #020617;
@@ -364,7 +401,7 @@
 
     .file-input { display: none; }
 
-    /* Direct Message Modal (Professional Left/Right Chat) */
+    /* Direct Message Modal (Professional Left/Right Chat Layout) */
     .dm-modal {
       position: absolute;
       bottom: 80px;
@@ -403,7 +440,19 @@
       font-size: 0.85rem; 
     }
 
-    /* Left and Right Bubble Rules for Professional DM */
+    .dm-bubble-row {
+      display: flex;
+      width: 100%;
+    }
+
+    .dm-bubble-row.sent {
+      justify-content: flex-end;
+    }
+
+    .dm-bubble-row.received {
+      justify-content: flex-start;
+    }
+
     .dm-bubble {
       max-width: 80%;
       padding: 10px 14px;
@@ -414,14 +463,12 @@
     }
 
     .dm-bubble.sent {
-      align-self: flex-end;
-      background: linear-gradient(135deg, rgba(99, 102, 241, 0.8) 0%, rgba(56, 189, 248, 0.8) 100%);
+      background: linear-gradient(135deg, rgba(99, 102, 241, 0.85) 0%, rgba(56, 189, 248, 0.85) 100%);
       color: #fff;
       border-bottom-right-radius: 2px;
     }
 
     .dm-bubble.received {
-      align-self: flex-start;
       background: rgba(30, 41, 59, 0.9);
       border: 1px solid rgba(255, 255, 255, 0.1);
       color: var(--text-main);
@@ -456,7 +503,6 @@
         <button class="admin-btn" onclick="copyInviteLink()"><i class="fa-solid fa-link"></i> Clean Invite Link</button>
       </div>
 
-      <!-- Batch Selection & Highlight Dashboard -->
       <div class="admin-section">
         <span style="font-size: 0.75rem; font-weight: 700; color: var(--accent-amber);"><i class="fa-solid fa-list-check"></i> MULTI-GROUP MANAGER</span>
         <div class="group-checklist" id="groupChecklist"></div>
@@ -470,20 +516,17 @@
         <button class="admin-btn" onclick="toggleFileLock()" id="lockFileBtn"><i class="fa-solid fa-lock"></i> Lock File Transfer</button>
       </div>
 
-      <!-- Live Spectator Box -->
       <div class="admin-section">
         <span style="font-size: 0.75rem; font-weight: 700; color: var(--accent-amber);"><i class="fa-solid fa-eye"></i> LIVE SPECTATOR DRAFT</span>
         <div class="live-spectator-box" id="spectatorBox">No active typing detected...</div>
       </div>
 
-      <!-- Direct Message & Email Notification -->
       <div class="admin-section">
         <span style="font-size: 0.75rem; font-weight: 700; color: var(--accent-cyan);"><i class="fa-solid fa-comments"></i> DIRECT MESSAGE / EMAIL</span>
         <select class="group-dropdown" id="activeUsersSelect"></select>
         <button class="admin-btn" onclick="initiateAdminDM()"><i class="fa-solid fa-bolt-lightning"></i> Send Direct Message</button>
       </div>
 
-      <!-- Private Officer Notes -->
       <div class="admin-section">
         <span style="font-size: 0.75rem; font-weight: 700; color: var(--text-muted);"><i class="fa-solid fa-note-sticky"></i> PRIVATE OFFICER NOTES</span>
         <textarea class="admin-notes-area" id="adminPrivateNotes" placeholder="Write persistent internal notes here..." oninput="saveAdminNotes()"></textarea>
@@ -517,6 +560,14 @@
 
       <div class="chat-messages" id="messageContainer"></div>
 
+      <!-- Admin Bulk Delete Bar -->
+      <div class="bulk-delete-bar" id="bulkDeleteBar">
+        <span id="bulkDeleteCount">0 messages selected</span>
+        <button class="admin-btn admin-btn-danger" style="padding: 4px 10px;" onclick="executeBulkDeleteMessages()">
+          <i class="fa-solid fa-trash"></i> Delete Selected
+        </button>
+      </div>
+
       <div class="typing-indicator-box" id="typingIndicator"></div>
 
       <div class="footer-controls">
@@ -525,7 +576,6 @@
           <option value="PARTY B">Role: Seller (Party B)</option>
         </select>
 
-        <!-- TOP SPOKEN COUNTRIES / LANGUAGES DROPDOWN -->
         <select class="lang-dropdown" id="targetLangSelect">
           <option value="en">🇬🇧 English</option>
           <option value="zh">🇨🇳 Chinese (Mandarin)</option>
@@ -541,7 +591,6 @@
           <option value="de">🇩🇪 German</option>
         </select>
 
-        <!-- SPEECH RECOGNITION BUTTON -->
         <button class="icon-btn" id="micBtn" onclick="toggleSpeechRecognition()" title="Voice to Text"><i class="fa-solid fa-microphone"></i></button>
 
         <label class="icon-btn" for="fileInput"><i class="fa-solid fa-paperclip"></i></label>
@@ -549,7 +598,6 @@
 
         <input type="text" class="message-input" id="messageInput" placeholder="Write or speak message..." onkeydown="if(event.key==='Enter') sendMsg()" oninput="handleTyping()" />
         
-        <!-- UNIQUE ATTRACTIVE SEND BUTTON (NO TELEGRAM ICON) -->
         <button class="send-btn" onclick="sendMsg()">
           <i class="fa-solid fa-bolt-lightning"></i> SEND
         </button>
@@ -557,7 +605,7 @@
     </div>
   </div>
 
-  <!-- DM Modal with Professional Chat Layout -->
+  <!-- DM Modal -->
   <div class="dm-modal" id="dmModal">
     <div class="dm-header">
       <span><i class="fa-solid fa-user-shield"></i> Direct Message Channel</span>
@@ -590,6 +638,7 @@
     let typingTimeout = null;
     let recognition = null;
     let isRecording = false;
+    let selectedMsgIds = new Set();
 
     // --- REALTIME TRANSLATION ENGINE ---
     async function translateText(text, targetLang) {
@@ -604,7 +653,7 @@
       }
     }
 
-    // --- SPEECH RECOGNITION (VOICE TO TEXT) ---
+    // --- SPEECH RECOGNITION ---
     function initSpeechRecognition() {
       if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -644,7 +693,7 @@
       }
     }
 
-    // --- ADMIN LOGIN AND ROOM ACTIONS ---
+    // --- ADMIN ACTIONS ---
     document.addEventListener('keydown', (e) => {
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'A') loginAsAdmin();
     });
@@ -670,6 +719,64 @@
       });
       if (adminKey) socket.emit('get-all-groups');
     }
+
+    function editMessage(msgId, currentText) {
+      if (!isAdminConfirmed) return;
+      const newText = prompt("Admin: Edit Message Content:", currentText);
+      if (newText !== null && newText.trim() !== "") {
+        socket.emit('admin-edit-message', {
+          groupId: activeGroupId,
+          messageId: msgId,
+          newText: newText.trim()
+        });
+      }
+    }
+
+    function toggleMsgSelection(msgId, cb) {
+      if (cb.checked) {
+        selectedMsgIds.add(msgId);
+      } else {
+        selectedMsgIds.delete(msgId);
+      }
+      updateBulkDeleteBar();
+    }
+
+    function updateBulkDeleteBar() {
+      const bar = document.getElementById('bulkDeleteBar');
+      const countLabel = document.getElementById('bulkDeleteCount');
+      if (selectedMsgIds.size > 0 && isAdminConfirmed) {
+        bar.style.display = 'flex';
+        countLabel.textContent = `${selectedMsgIds.size} message(s) selected`;
+      } else {
+        bar.style.display = 'none';
+      }
+    }
+
+    function executeBulkDeleteMessages() {
+      if (selectedMsgIds.size === 0) return;
+      if (confirm(`Are you sure you want to delete ${selectedMsgIds.size} message(s)?`)) {
+        socket.emit('admin-bulk-delete-messages', {
+          groupId: activeGroupId,
+          messageIds: Array.from(selectedMsgIds)
+        });
+        selectedMsgIds.clear();
+        updateBulkDeleteBar();
+      }
+    }
+
+    socket.on('message-edited', ({ messageId, newText }) => {
+      const textNode = document.getElementById(`msg-text-${messageId}`);
+      if (textNode) {
+        textNode.innerHTML = `${newText} <span style="font-size:0.65rem; color:#f59e0b;">(edited)</span>`;
+      }
+    });
+
+    socket.on('messages-bulk-deleted', ({ messageIds }) => {
+      messageIds.forEach(id => {
+        const element = document.getElementById(`msg-row-${id}`);
+        if (element) element.remove();
+      });
+    });
 
     function createNewGroup() {
       const name = prompt("Enter new Group Name:");
@@ -725,12 +832,14 @@
       alert(`Clean Invite Link Copied:\n${cleanLink}`);
     }
 
-    // --- PERSISTENCE (LOCAL STORAGE) ---
+    // --- PERSISTENCE ---
     function saveOfflineMessages(msgData) {
       const key = `offline_msgs_${activeGroupId}`;
       let history = JSON.parse(localStorage.getItem(key) || '[]');
-      history.push(msgData);
-      localStorage.setItem(key, JSON.stringify(history));
+      if (!history.find(m => m.id === msgData.id)) {
+        history.push(msgData);
+        localStorage.setItem(key, JSON.stringify(history));
+      }
     }
 
     function loadOfflineMessages() {
@@ -789,15 +898,18 @@
       const body = document.getElementById('dmBody');
       const isSelf = (msg.senderSocketId === socket.id);
 
-      const bubble = document.createElement('div');
-      bubble.className = `dm-bubble ${isSelf ? 'sent' : 'received'}`;
-      bubble.innerHTML = `
-        <span class="dm-sender-label">${msg.sender}</span>
-        <div>${msg.text}</div>
-        <span style="font-size:0.6rem; opacity:0.7; text-align:right; margin-top:4px;">${msg.time}</span>
+      const row = document.createElement('div');
+      row.className = `dm-bubble-row ${isSelf ? 'sent' : 'received'}`;
+      
+      row.innerHTML = `
+        <div class="dm-bubble ${isSelf ? 'sent' : 'received'}">
+          <span class="dm-sender-label">${msg.sender}</span>
+          <div>${msg.text}</div>
+          <span style="font-size:0.6rem; opacity:0.7; text-align:right; margin-top:4px;">${msg.time}</span>
+        </div>
       `;
       
-      body.appendChild(bubble);
+      body.appendChild(row);
       body.scrollTop = body.scrollHeight;
     });
 
@@ -904,29 +1016,56 @@
     }
 
     async function renderMessage(data) {
+      if (!data.id) data.id = 'msg-' + Date.now();
       saveOfflineMessages(data);
+
       const container = document.getElementById('messageContainer');
+      const msgWrapper = document.createElement('div');
+      const isPartyClass = (data.senderRole === 'PARTY A' || data.senderRole === 'PARTY B') ? 'msg-party' : '';
+      
+      msgWrapper.className = `msg-wrapper ${isPartyClass}`;
+      msgWrapper.id = `msg-row-${data.id}`;
+
+      const isSystem = (data.sender === 'SYSTEM');
       const msgDiv = document.createElement('div');
-      msgDiv.className = `message ${data.sender === 'SYSTEM' ? 'msg-system' : (data.senderRole === 'ADMINISTRATOR' ? 'msg-admin' : 'msg-party')}`;
+      msgDiv.className = `message ${isSystem ? 'msg-system' : (data.senderRole === 'ADMINISTRATOR' ? 'msg-admin' : 'msg-party')}`;
 
       const selectedLang = document.getElementById('targetLangSelect').value;
-      let displayMsg = data.text;
       let translatedNotice = '';
 
-      if (data.sender !== 'SYSTEM' && selectedLang !== 'en') {
+      if (!isSystem && selectedLang !== 'en') {
         const translated = await translateText(data.text, selectedLang);
         if (translated !== data.text) {
           translatedNotice = `<div class="trans-note"><i class="fa-solid fa-language"></i> Translated (${selectedLang.toUpperCase()}): ${translated}</div>`;
         }
       }
 
+      const editBtnHtml = (isAdminConfirmed && !isSystem) 
+        ? `<i class="fa-solid fa-pen-to-square msg-action-btn" title="Edit Message" onclick="editMessage('${data.id}', '${data.text.replace(/'/g, "\\'")}')"></i>` 
+        : '';
+
+      const selectCheckboxHtml = (isAdminConfirmed && !isSystem)
+        ? `<input type="checkbox" style="cursor:pointer;" onchange="toggleMsgSelection('${data.id}', this)">`
+        : '';
+
       msgDiv.innerHTML = `
-        <div class="sender-tag">${data.sender}</div>
-        <div>${displayMsg}</div>
+        <div class="sender-tag">
+          <span>${data.sender}</span>
+          ${editBtnHtml}
+        </div>
+        <div id="msg-text-${data.id}">
+          ${data.text} ${data.edited ? '<span style="font-size:0.65rem; color:#f59e0b;">(edited)</span>' : ''}
+        </div>
         ${translatedNotice}
         <div style="font-size:0.65rem; color:#64748b; text-align:right; margin-top:4px;">${data.time}</div>
       `;
-      container.appendChild(msgDiv);
+
+      if (selectCheckboxHtml) {
+        msgWrapper.appendChild(document.createRange().createContextualFragment(selectCheckboxHtml));
+      }
+      msgWrapper.appendChild(msgDiv);
+
+      container.appendChild(msgWrapper);
       container.scrollTop = container.scrollHeight;
     }
 
