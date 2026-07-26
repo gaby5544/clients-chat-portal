@@ -140,9 +140,7 @@
       transition: all 0.2s;
     }
 
-    .admin-btn:hover {
-      background: rgba(239, 68, 68, 0.25);
-    }
+    .admin-btn:hover { background: rgba(239, 68, 68, 0.25); }
 
     .admin-btn-accent {
       background: rgba(6, 182, 212, 0.12);
@@ -238,7 +236,7 @@
       align-items: center;
     }
 
-    .role-dropdown, .file-btn-label {
+    .role-dropdown, .file-btn-label, .admin-login-btn {
       background: #091326;
       border: 1px solid var(--border);
       color: var(--accent-cyan);
@@ -248,6 +246,12 @@
       font-size: 0.85rem;
       outline: none;
       cursor: pointer;
+    }
+
+    .admin-login-btn {
+      background: rgba(245, 158, 11, 0.1);
+      border-color: rgba(245, 158, 11, 0.3);
+      color: var(--accent-gold);
     }
 
     .message-input {
@@ -298,19 +302,20 @@
       <button class="admin-btn admin-btn-accent" onclick="renameParty('A')">Rename Party A</button>
       <button class="admin-btn admin-btn-accent" onclick="renameParty('B')">Rename Party B</button>
       <button class="admin-btn admin-btn-accent" onclick="toggleFileLock()" id="lockFileBtn">Lock Uploads</button>
-      <button class="admin-btn" onclick="kickUser('PARTY A (Buyer)')">Kick Party A</button>
-      <button class="admin-btn" onclick="kickUser('PARTY B (Seller)')">Kick Party B</button>
+      <button class="admin-btn" onclick="kickUser('A')">Kick Party A</button>
+      <button class="admin-btn" onclick="kickUser('B')">Kick Party B</button>
     </div>
 
     <div class="chat-messages" id="messageContainer"></div>
 
     <div class="footer-controls">
       <select class="role-dropdown" id="roleSelect" onchange="joinSession()">
-        <option value="ADMINISTRATOR">Role: Admin</option>
-        <option value="PARTY A (Buyer)">Role: Party A</option>
-        <option value="PARTY B (Seller)">Role: Party B</option>
+        <option value="PARTY A">Role: Party A</option>
+        <option value="PARTY B">Role: Party B</option>
       </select>
       
+      <button class="admin-login-btn" id="adminAuthBtn" onclick="loginAsAdmin()">🔑 Admin Access</button>
+
       <label class="file-btn-label" for="fileInput">📎 File</label>
       <input type="file" id="fileInput" class="file-input" onchange="sendFile(this)" />
 
@@ -323,15 +328,24 @@
     const socket = io();
     const roomId = "88204-SESSION";
     let currentCustomNames = { 'PARTY A': 'Party A', 'PARTY B': 'Party B' };
+    let isAdminConfirmed = false;
 
-    function joinSession() {
-      const role = document.getElementById('roleSelect').value;
-      const isAdmin = role.includes('ADMIN');
-      
-      // Control panel visible ONLY to Admin
-      document.getElementById('adminTools').style.display = isAdmin ? 'flex' : 'none';
+    function joinSession(adminKey = null) {
+      const roleSelect = document.getElementById('roleSelect');
+      const selectedRole = adminKey ? 'ADMINISTRATOR' : roleSelect.value;
 
-      socket.emit('join-room', { roomId, role });
+      socket.emit('join-room', { 
+        roomId, 
+        role: selectedRole,
+        adminKey
+      });
+    }
+
+    function loginAsAdmin() {
+      const password = prompt("Enter Administrator Secret Password:");
+      if (password) {
+        joinSession(password);
+      }
     }
 
     function sendMsg() {
@@ -365,16 +379,17 @@
       reader.readAsDataURL(file);
     }
 
-    // Admin Functions
+    // Admin Actions
     function renameParty(party) {
-      const newName = prompt(`Enter custom display name for Party ${party}:`);
+      const current = party === 'A' ? currentCustomNames['PARTY A'] : currentCustomNames['PARTY B'];
+      const newName = prompt(`Enter custom name for Party ${party} (e.g. "John (Buyer)"):`, current);
       if (newName && newName.trim()) {
         socket.emit('rename-party', { roomId, targetParty: party, newName: newName.trim() });
       }
     }
 
     function editMessage(msgId, currentText) {
-      const newText = prompt("Edit message content (updates silently for everyone):", currentText);
+      const newText = prompt("Edit message content:", currentText);
       if (newText !== null && newText.trim()) {
         socket.emit('edit-message', { roomId, msgId, newText: newText.trim() });
       }
@@ -390,9 +405,10 @@
       socket.emit('pin-message', { roomId, msgId });
     }
 
-    function kickUser(role) {
-      if (confirm(`Terminate session for ${role}?`)) {
-        socket.emit('kick-participant', { roomId, targetRole: role });
+    function kickUser(party) {
+      const name = party === 'A' ? currentCustomNames['PARTY A'] : currentCustomNames['PARTY B'];
+      if (confirm(`Disconnect ${name}?`)) {
+        socket.emit('kick-participant', { roomId, targetParty: party });
       }
     }
 
@@ -406,10 +422,17 @@
       return div.innerHTML;
     }
 
-    // Socket Event Listeners
+    // Socket Event Handlers
     socket.on('init-state', (state) => {
       document.getElementById('messageContainer').innerHTML = '';
       currentCustomNames = state.customNames;
+      isAdminConfirmed = state.isAdminConfirmed;
+
+      // Render Admin UI conditionally
+      document.getElementById('adminTools').style.display = isAdminConfirmed ? 'flex' : 'none';
+      document.getElementById('roleSelect').style.display = isAdminConfirmed ? 'none' : 'block';
+      document.getElementById('adminAuthBtn').style.display = isAdminConfirmed ? 'none' : 'block';
+
       state.history.forEach(renderMessage);
       if (state.pinnedMessage) updatePinnedBar(state.pinnedMessage);
       updateFileLockUI(state.fileUploadsLocked);
@@ -417,6 +440,12 @@
 
     socket.on('message', (msg) => {
       renderMessage(msg);
+    });
+
+    socket.on('names-updated', ({ customNames, history }) => {
+      currentCustomNames = customNames;
+      document.getElementById('messageContainer').innerHTML = '';
+      history.forEach(renderMessage);
     });
 
     socket.on('message-edited', ({ msgId, newText }) => {
@@ -429,16 +458,16 @@
       if (msgElem) msgElem.remove();
     });
 
-    socket.on('names-updated', (names) => {
-      currentCustomNames = names;
-    });
-
     socket.on('update-pinned', (pinnedMsg) => {
       updatePinnedBar(pinnedMsg);
     });
 
     socket.on('file-lock-updated', (isLocked) => {
       updateFileLockUI(isLocked);
+    });
+
+    socket.on('auth-failed', (msg) => {
+      alert(msg);
     });
 
     socket.on('kicked', (reason) => {
@@ -467,14 +496,12 @@
       const msgDiv = document.createElement('div');
       msgDiv.id = `msg-box-${data.id}`;
       const safeText = sanitizeText(data.text);
-      const currentRole = document.getElementById('roleSelect').value;
-      const isAdminUser = currentRole.includes('ADMIN');
 
       if (data.sender === 'SYSTEM') {
         msgDiv.className = 'message msg-system';
         msgDiv.innerHTML = `<strong>SYSTEM:</strong> ${safeText}`;
       } else {
-        const isMsgFromAdmin = data.sender.includes('ADMIN');
+        const isMsgFromAdmin = data.senderRole === 'ADMINISTRATOR' || data.sender === 'ADMINISTRATOR';
         msgDiv.className = `message ${isMsgFromAdmin ? 'msg-admin' : 'msg-party'}`;
         
         let fileHTML = '';
@@ -483,7 +510,7 @@
         }
 
         let adminActionsHTML = '';
-        if (isAdminUser) {
+        if (isAdminConfirmed) {
           adminActionsHTML = `
             <div class="msg-action-bar">
               <button class="action-icon-btn" onclick="editMessage('${data.id}', \`${safeText}\`)">✏️</button>
