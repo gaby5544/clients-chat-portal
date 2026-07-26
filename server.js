@@ -11,7 +11,6 @@ const io = new Server(server, {
 
 app.use(express.static('public'));
 
-// Secure Admin Passkey (Can be overridden by environment variable)
 const ADMIN_SECRET = process.env.ADMIN_SECRET || 'ADMIN123';
 const ADMIN_SESSION_TIMEOUT_MS = 2 * 60 * 60 * 1000; // 2 Hours
 
@@ -35,13 +34,12 @@ function getRoomState(roomId) {
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
 
-  // Auto-logout timer helper
   function resetAdminTimeout() {
     if (socket.adminTimer) clearTimeout(socket.adminTimer);
     if (socket.isAdmin) {
       socket.adminTimer = setTimeout(() => {
         socket.isAdmin = false;
-        socket.role = 'PARTY A'; // Fallback
+        socket.role = 'PARTY A';
         socket.emit('admin-session-expired', 'Your Admin session expired after 2 hours of inactivity.');
         
         const state = getRoomState(socket.roomId);
@@ -56,11 +54,9 @@ io.on('connection', (socket) => {
     }
   }
 
-  // Join Room Event
   socket.on('join-room', ({ roomId, role, adminKey }) => {
     const state = getRoomState(roomId);
     
-    // Strict Admin Password Check
     if (role === 'ADMINISTRATOR') {
       if (adminKey && adminKey === ADMIN_SECRET) {
         socket.isAdmin = true;
@@ -79,10 +75,9 @@ io.on('connection', (socket) => {
     socket.roomId = roomId;
 
     const displayName = socket.isAdmin 
-      ? 'Escrow Administrator' 
+      ? 'Transaction Administrator' 
       : (state.customNames[socket.role] || socket.role);
 
-    // Send state to joining user ONLY (never broadcast admin keys)
     socket.emit('init-state', {
       history: state.messages,
       pinnedMessage: state.pinnedMessage,
@@ -91,7 +86,6 @@ io.on('connection', (socket) => {
       isAdminConfirmed: socket.isAdmin
     });
 
-    // Notify room of connection
     io.to(roomId).emit('message', {
       id: Date.now().toString(),
       sender: 'SYSTEM',
@@ -100,15 +94,11 @@ io.on('connection', (socket) => {
     });
   });
 
-  // Track Admin activity to keep session alive
   socket.on('ping-activity', () => {
-    if (socket.isAdmin) {
-      resetAdminTimeout();
-    }
+    if (socket.isAdmin) resetAdminTimeout();
   });
 
-  // Send Message
-  socket.on('send-message', ({ roomId, text, fileData, fileName }) => {
+  socket.on('send-message', ({ roomId, text, englishOriginal, language, fileData, fileName }) => {
     const state = getRoomState(roomId);
 
     if (socket.isAdmin) resetAdminTimeout();
@@ -119,7 +109,7 @@ io.on('connection', (socket) => {
     }
 
     const senderName = socket.isAdmin 
-      ? 'ESCROW OFFICER' 
+      ? 'TRANSACTION OFFICER' 
       : (state.customNames[socket.role] || socket.role);
 
     const msg = {
@@ -127,6 +117,8 @@ io.on('connection', (socket) => {
       senderRole: socket.role,
       sender: senderName,
       text: text || '',
+      englishOriginal: englishOriginal || text || '',
+      language: language || 'en',
       fileData: fileData || null,
       fileName: fileName || null,
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -136,7 +128,6 @@ io.on('connection', (socket) => {
     io.to(roomId).emit('message', msg);
   });
 
-  // Admin Actions
   socket.on('rename-party', ({ roomId, targetParty, newName }) => {
     if (!socket.isAdmin) return;
     resetAdminTimeout();
@@ -145,7 +136,6 @@ io.on('connection', (socket) => {
     const partyKey = targetParty === 'A' ? 'PARTY A' : 'PARTY B';
     state.customNames[partyKey] = newName;
 
-    // Update prior history dynamically
     state.messages.forEach(m => {
       if (m.senderRole === partyKey) {
         m.sender = newName;
@@ -166,6 +156,7 @@ io.on('connection', (socket) => {
     const targetMsg = state.messages.find(m => m.id === msgId);
     if (targetMsg) {
       targetMsg.text = newText;
+      targetMsg.englishOriginal = newText;
       io.to(roomId).emit('message-edited', { msgId, newText });
     }
   });
@@ -213,7 +204,7 @@ io.on('connection', (socket) => {
       for (const socketId of socketsInRoom) {
         const clientSocket = io.sockets.sockets.get(socketId);
         if (clientSocket && clientSocket.role === targetRole) {
-          clientSocket.emit('kicked', 'Session terminated by Escrow Officer.');
+          clientSocket.emit('kicked', 'Session terminated by Transaction Officer.');
           clientSocket.leave(roomId);
           clientSocket.disconnect(true);
         }
@@ -223,7 +214,7 @@ io.on('connection', (socket) => {
     io.to(roomId).emit('message', {
       id: Date.now().toString(),
       sender: 'SYSTEM',
-      text: `${displayName} was disconnected by the Escrow Officer.`,
+      text: `${displayName} was disconnected by the Transaction Officer.`,
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     });
   });
@@ -233,7 +224,7 @@ io.on('connection', (socket) => {
     if (socket.roomId && socket.role) {
       const state = getRoomState(socket.roomId);
       const displayName = socket.isAdmin 
-        ? 'Escrow Administrator' 
+        ? 'Transaction Administrator' 
         : (state.customNames[socket.role] || socket.role);
 
       io.to(socket.roomId).emit('message', {
@@ -247,4 +238,4 @@ io.on('connection', (socket) => {
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`[Secure Gateway Active] Listening on port ${PORT}`));
+server.listen(PORT, () => console.log(`[Transaction Gateway Active] Listening on port ${PORT}`));
