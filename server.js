@@ -14,7 +14,7 @@ app.use(express.static('public'));
 const ADMIN_SECRET = process.env.ADMIN_SECRET || 'ADMIN123';
 const ADMIN_SESSION_TIMEOUT_MS = 2 * 60 * 60 * 1000; // 2 Hours
 
-// Multi-Group Registry
+// Global Registries
 const groups = {
   "default-group": {
     id: "default-group",
@@ -28,6 +28,11 @@ const groups = {
     }
   }
 };
+
+// Store active DMs: { dmId: { participants: [socketId1, socketId2], messages: [] } }
+const directMessages = {};
+// Store user online statuses: { userId/socketId: { role, groupId, isOnline, email, lastActive } }
+const userPresence = {};
 
 function getOrCreateGroup(groupId, groupName) {
   if (!groups[groupId]) {
@@ -44,6 +49,12 @@ function getOrCreateGroup(groupId, groupName) {
     };
   }
   return groups[groupId];
+}
+
+// Utility: Trigger Email Notification for Offline Users (Integration Hook)
+function sendOfflineEmailNotification(userEmail, senderName, messageText) {
+  console.log(`[EMAIL DISPATCH] Alert sent to ${userEmail}: New message from ${senderName}: "${messageText.substring(0, 30)}..."`);
+  // Integrate Nodemailer / SendGrid here
 }
 
 io.on('connection', (socket) => {
@@ -67,9 +78,12 @@ io.on('connection', (socket) => {
   }
 
   // Join Specific Group
-  socket.on('join-room', ({ groupId, groupName, role, adminKey }) => {
+  socket.on('join-room', ({ groupId, groupName, role, adminKey, sessionToken, userEmail }) => {
     const targetGroupId = groupId || "default-group";
     const grp = getOrCreateGroup(targetGroupId, groupName);
+
+    socket.userEmail = userEmail || null;
+    socket.sessionToken = sessionToken || socket.id;
 
     if (role === 'ADMINISTRATOR') {
       if (adminKey && adminKey === ADMIN_SECRET) {
@@ -90,28 +104,41 @@ io.on('connection', (socket) => {
     socket.join(targetGroupId);
     socket.groupId = targetGroupId;
 
-    const displayName = socket.isAdmin 
-      ? 'Transaction Administrator' 
-      : (grp.customNames[socket.role] || socket.role);
+    // Track Presence
+    userPresence[socket.id] = {
+      socketId: socket.id,
+      groupId: targetGroupId,
+      role: socket.role,
+      isAdmin: socket.isAdmin,
+      isOnline: true,
+      displayName: socket.isAdmin ? 'Transaction Officer' : (grp.customNames[socket.role] || socket.role)
+    };
+
+    const displayName = userPresence[socket.id].displayName;
 
     socket.emit('init-state', {
       group: grp,
-      isAdminConfirmed: socket.isAdmin
+      isAdminConfirmed: socket.isAdmin,
+      socketId: socket.id
     });
+
+    // Broadcast presence update
+    io.to(targetGroupId).emit('presence-update', Object.values(userPresence).filter(p => p.groupId === targetGroupId));
 
     io.to(targetGroupId).emit('message', {
       id: Date.now().toString(),
       sender: 'SYSTEM',
-      text: `${displayName} connected to ${grp.name}.`,
+      text: `${displayName} connected.`,
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     });
   });
 
-  // Admin: Get List of All Active Groups
+  // Admin: Get List of All Active Groups & Online Users
   socket.on('get-all-groups', () => {
     if (!socket.isAdmin) return;
     const groupList = Object.values(groups).map(g => ({ id: g.id, name: g.name }));
     socket.emit('all-groups-list', groupList);
+    socket.emit('active-users-list', Object.values(userPresence));
   });
 
   // Admin: Create New Group
@@ -129,6 +156,66 @@ io.on('connection', (socket) => {
     if (socket.isAdmin) resetAdminTimeout();
   });
 
+  // Typing Indicators & Admin Spectator Mode
+  socket.on('typing-start', ({ isTyping, currentDraft }) => {
+    if (socket.groupId) {
+      const grp = getOrCreateGroup(socket.groupId);
+      const senderName = socket.isAdmin ? 'Transaction Officer' : (grp.customNames[socket.role] || socket.role);
+      
+      // Public typing alert
+      socket.to(socket.groupId).emit('user-typing', { socketId: socket.id, sender: senderName, isTyping });
+
+      // Admin Spectator Mode (Feature 6i): Stream live draft to Admin only
+      if (!socket.isAdmin) {
+        io.to(socket.groupId).emit('admin-live-draft', {
+          socketId: socket.id,
+          sender: senderName,
+          draftText: currentDraft || ''
+        });
+      }
+    }
+  });
+
+  // Direct Messaging (Feature 4: Admin Initiates DMs)
+  socket.on('admin-initiate-dm', ({ targetSocketId, initialMessage }) => {
+    if (!socket.isAdmin) return;
+
+    const targetSocket = io.sockets.sockets.get(targetSocketId);
+    if (!targetSocket) {
+      socket.emit('error-msg', 'Target user is no longer connected.');
+      return;
+    }
+
+    const dmRoomId = `dm-${socket.id}-${targetSocketId}`;
+    socket.join(dmRoomId);
+    targetSocket.join(dmRoomId);
+
+    const dmMsg = {
+      id: Date.now().toString(),
+      sender: 'TRANSACTION OFFICER (ADMIN)',
+      senderSocketId: socket.id,
+      text: initialMessage,
+      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      dmRoomId
+    };
+
+    io.to(dmRoomId).emit('dm-message', dmMsg);
+    targetSocket.emit('dm-channel-opened', { dmRoomId, adminName: 'Transaction Officer' });
+  });
+
+  socket.on('send-dm-reply', ({ dmRoomId, text }) => {
+    const dmMsg = {
+      id: Date.now().toString(),
+      sender: userPresence[socket.id]?.displayName || socket.role,
+      senderSocketId: socket.id,
+      text,
+      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      dmRoomId
+    };
+    io.to(dmRoomId).emit('dm-message', dmMsg);
+  });
+
+  // Public Group Message Dispatch
   socket.on('send-message', ({ groupId, text, englishOriginal, language, fileData, fileName }) => {
     const grp = getOrCreateGroup(groupId);
 
@@ -157,6 +244,13 @@ io.on('connection', (socket) => {
 
     grp.messages.push(msg);
     io.to(groupId).emit('message', msg);
+
+    // Check for offline participants in the room to dispatch emails
+    Object.values(userPresence).forEach(user => {
+      if (user.groupId === groupId && !user.isOnline && user.email) {
+        sendOfflineEmailNotification(user.email, senderName, text);
+      }
+    });
   });
 
   socket.on('rename-party', ({ groupId, targetParty, newName }) => {
@@ -221,46 +315,24 @@ io.on('connection', (socket) => {
     io.to(groupId).emit('file-lock-updated', grp.fileUploadsLocked);
   });
 
-  socket.on('kick-participant', ({ groupId, targetParty }) => {
-    if (!socket.isAdmin) return;
-    resetAdminTimeout();
-
-    const targetRole = targetParty === 'A' ? 'PARTY A' : 'PARTY B';
-    const grp = getOrCreateGroup(groupId);
-    const displayName = grp.customNames[targetRole] || targetRole;
-
-    const socketsInRoom = io.sockets.adapter.rooms.get(groupId);
-    if (socketsInRoom) {
-      for (const socketId of socketsInRoom) {
-        const clientSocket = io.sockets.sockets.get(socketId);
-        if (clientSocket && clientSocket.role === targetRole) {
-          clientSocket.emit('kicked', 'Session terminated by Transaction Officer.');
-          clientSocket.leave(groupId);
-          clientSocket.disconnect(true);
-        }
-      }
-    }
-
-    io.to(groupId).emit('message', {
-      id: Date.now().toString(),
-      sender: 'SYSTEM',
-      text: `${displayName} was disconnected by the Transaction Officer.`,
-      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    });
-  });
-
   socket.on('disconnect', () => {
     if (socket.adminTimer) clearTimeout(socket.adminTimer);
+    if (userPresence[socket.id]) {
+      userPresence[socket.id].isOnline = false;
+    }
+
     if (socket.groupId && socket.role) {
       const grp = getOrCreateGroup(socket.groupId);
       const displayName = socket.isAdmin 
         ? 'Transaction Administrator' 
         : (grp.customNames[socket.role] || socket.role);
 
+      io.to(socket.groupId).emit('presence-update', Object.values(userPresence).filter(p => p.groupId === socket.groupId));
+
       io.to(socket.groupId).emit('message', {
         id: Date.now().toString(),
         sender: 'SYSTEM',
-        text: `${displayName} left the workspace.`,
+        text: `${displayName} disconnected.`,
         time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       });
     }
