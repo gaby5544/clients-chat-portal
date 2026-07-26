@@ -1,12 +1,14 @@
 {
-  "name": "escrow-chat-portal",
+  "name": "quantum-secure-desk",
   "version": "1.0.0",
+  "description": "Quantum Secure Transaction Desk Server",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "express": "^4.18.2",
-    "socket.io": "^4.7.2"
+    "express": "^4.19.2",
+    "nodemailer": "^6.9.13",
+    "socket.io": "^4.7.5"
   }
 }
