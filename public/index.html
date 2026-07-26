@@ -3,54 +3,57 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Ultra Secure Session Portal</title>
+  <title>Quantum Secure Escrow Desk</title>
   <script src="/socket.io/socket.io.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <style>
     :root {
-      --bg-dark: #030712;
-      --card-bg: rgba(11, 20, 38, 0.88);
-      --accent-gold: #f59e0b;
-      --accent-cyan: #06b6d4;
-      --accent-blue: #3b82f6;
-      --accent-red: #ef4444;
-      --border: rgba(6, 182, 212, 0.25);
-      --text: #f8fafc;
-      --subtext: #94a3b8;
+      --bg-dark: #020617;
+      --panel-bg: rgba(15, 23, 42, 0.85);
+      --accent-cyan: #38bdf8;
+      --accent-emerald: #10b981;
+      --accent-amber: #f59e0b;
+      --accent-rose: #f43f5e;
+      --accent-indigo: #6366f1;
+      --border: rgba(56, 189, 248, 0.2);
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
     }
 
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', system-ui, -apple-system, sans-serif; }
 
     body {
       background: var(--bg-dark);
       background-image: 
-        radial-gradient(at 0% 0%, rgba(6, 182, 212, 0.12) 0px, transparent 50%),
-        radial-gradient(at 100% 100%, rgba(59, 130, 246, 0.12) 0px, transparent 50%),
-        radial-gradient(at 50% 50%, #030712 0px, #02040a 100%);
-      color: var(--text);
+        radial-gradient(at 10% 10%, rgba(99, 102, 241, 0.15) 0px, transparent 50%),
+        radial-gradient(at 90% 90%, rgba(56, 189, 248, 0.12) 0px, transparent 50%),
+        radial-gradient(at 50% 50%, #020617 0px, #000 100%);
+      color: var(--text-main);
       display: flex;
       justify-content: center;
       align-items: center;
       min-height: 100vh;
-      padding: 20px;
+      padding: 16px;
     }
 
     .room-container {
       width: 100%;
-      max-width: 950px;
-      height: 750px;
-      background: var(--card-bg);
+      max-width: 1000px;
+      height: 820px;
+      background: var(--panel-bg);
       border: 1px solid var(--border);
-      border-radius: 20px;
-      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.9), 0 0 30px rgba(6, 182, 212, 0.1);
-      backdrop-filter: blur(25px);
+      border-radius: 24px;
+      box-shadow: 0 30px 60px -12px rgba(0, 0, 0, 0.9), 0 0 40px rgba(56, 189, 248, 0.08);
+      backdrop-filter: blur(20px);
       display: flex;
       flex-direction: column;
       overflow: hidden;
     }
 
+    /* Redesigned Header */
     .header {
-      padding: 18px 25px;
-      background: rgba(5, 11, 24, 0.95);
+      padding: 20px 28px;
+      background: rgba(2, 6, 23, 0.95);
       border-bottom: 1px solid var(--border);
       display: flex;
       justify-content: space-between;
@@ -60,59 +63,77 @@
     .brand-group {
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 14px;
     }
 
-    .logo-icon {
-      width: 28px;
-      height: 28px;
-      fill: var(--accent-cyan);
-      filter: drop-shadow(0 0 6px var(--accent-cyan));
+    .vault-icon {
+      width: 42px;
+      height: 42px;
+      background: rgba(56, 189, 248, 0.1);
+      border: 1px solid rgba(56, 189, 248, 0.3);
+      border-radius: 12px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      color: var(--accent-cyan);
+      font-size: 1.2rem;
+      box-shadow: 0 0 15px rgba(56, 189, 248, 0.2);
     }
 
-    .brand-title { 
-      font-size: 1.05rem; 
-      font-weight: 800; 
-      letter-spacing: 2px; 
-      text-transform: uppercase; 
+    .brand-title {
+      font-size: 1.15rem;
+      font-weight: 800;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      background: linear-gradient(135deg, #fff 30%, var(--accent-cyan) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
     }
-    .brand-title span { color: var(--accent-cyan); }
+
+    .brand-subtitle {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      letter-spacing: 0.5px;
+      font-weight: 600;
+    }
 
     .status-badge {
-      font-size: 0.8rem;
+      font-size: 0.75rem;
       font-weight: 700;
-      color: #10b981;
+      color: var(--accent-emerald);
       display: flex;
       align-items: center;
-      gap: 6px;
-      background: rgba(16, 185, 129, 0.1);
-      border: 1px solid rgba(16, 185, 129, 0.3);
-      padding: 4px 12px;
-      border-radius: 20px;
+      gap: 8px;
+      background: rgba(16, 185, 129, 0.08);
+      border: 1px solid rgba(16, 185, 129, 0.25);
+      padding: 6px 14px;
+      border-radius: 30px;
     }
 
     .pulse {
       width: 8px;
       height: 8px;
-      background-color: #10b981;
+      background-color: var(--accent-emerald);
       border-radius: 50%;
-      box-shadow: 0 0 8px #10b981;
+      box-shadow: 0 0 10px var(--accent-emerald);
     }
 
+    /* Pinned Bar */
     .pinned-bar {
       background: rgba(245, 158, 11, 0.08);
-      border-bottom: 1px solid rgba(245, 158, 11, 0.25);
-      padding: 10px 24px;
+      border-bottom: 1px solid rgba(245, 158, 11, 0.2);
+      padding: 10px 28px;
       font-size: 0.85rem;
-      color: var(--accent-gold);
+      color: var(--accent-amber);
       display: none;
       align-items: center;
       gap: 10px;
     }
 
+    /* Admin Panel */
     .admin-tools {
-      background: rgba(2, 6, 18, 0.8);
-      padding: 10px 24px;
+      background: rgba(15, 23, 42, 0.95);
+      padding: 12px 28px;
       border-bottom: 1px solid var(--border);
       display: none;
       gap: 10px;
@@ -121,115 +142,119 @@
     }
 
     .admin-label {
-      font-size: 0.75rem;
+      font-size: 0.72rem;
       font-weight: 800;
       letter-spacing: 1px;
-      color: var(--accent-gold);
-      margin-right: 6px;
+      color: var(--accent-amber);
+      margin-right: 8px;
     }
 
     .admin-btn {
-      background: rgba(239, 68, 68, 0.12);
-      border: 1px solid rgba(239, 68, 68, 0.35);
-      color: #fca5a5;
-      padding: 5px 12px;
-      border-radius: 6px;
+      background: rgba(244, 63, 94, 0.1);
+      border: 1px solid rgba(244, 63, 94, 0.3);
+      color: #fda4af;
+      padding: 6px 14px;
+      border-radius: 8px;
       cursor: pointer;
       font-weight: 600;
-      font-size: 0.75rem;
+      font-size: 0.78rem;
       transition: all 0.2s;
     }
 
-    .admin-btn:hover { background: rgba(239, 68, 68, 0.25); }
+    .admin-btn:hover { background: rgba(244, 63, 94, 0.25); }
 
     .admin-btn-accent {
-      background: rgba(6, 182, 212, 0.12);
-      border: 1px solid rgba(6, 182, 212, 0.35);
+      background: rgba(56, 189, 248, 0.1);
+      border: 1px solid rgba(56, 189, 248, 0.3);
       color: var(--accent-cyan);
     }
+    .admin-btn-accent:hover { background: rgba(56, 189, 248, 0.25); }
 
+    /* Chat Body */
     .chat-messages {
       flex: 1;
-      padding: 24px;
+      padding: 28px;
       overflow-y: auto;
       display: flex;
       flex-direction: column;
-      gap: 16px;
+      gap: 18px;
     }
 
     .message {
-      max-width: 78%;
-      padding: 12px 18px;
-      border-radius: 12px;
+      max-width: 75%;
+      padding: 14px 18px;
+      border-radius: 16px;
       font-size: 0.92rem;
-      line-height: 1.45;
+      line-height: 1.5;
       position: relative;
     }
 
     .msg-system {
       align-self: center;
-      background: rgba(6, 182, 212, 0.08);
-      border: 1px solid rgba(6, 182, 212, 0.18);
-      color: var(--subtext);
-      font-size: 0.8rem;
+      background: rgba(56, 189, 248, 0.05);
+      border: 1px solid rgba(56, 189, 248, 0.15);
+      color: var(--text-muted);
+      font-size: 0.78rem;
       text-align: center;
-      width: 88%;
-      border-radius: 20px;
+      border-radius: 30px;
+      padding: 8px 20px;
     }
 
     .msg-admin {
       align-self: flex-start;
-      background: rgba(6, 182, 212, 0.12);
-      border: 1px solid var(--accent-cyan);
-      font-family: 'Georgia', serif;
+      background: rgba(56, 189, 248, 0.08);
+      border: 1px solid rgba(56, 189, 248, 0.3);
+      border-top-left-radius: 4px;
     }
 
     .msg-party {
       align-self: flex-end;
-      background: rgba(255, 255, 255, 0.05);
-      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(30, 41, 59, 0.7);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-top-right-radius: 4px;
     }
 
     .sender-tag {
       font-size: 0.72rem;
       font-weight: 800;
       margin-bottom: 6px;
-      color: var(--accent-cyan);
       text-transform: uppercase;
-      font-family: sans-serif;
+      letter-spacing: 0.5px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
     }
 
     .time-tag {
       font-size: 0.65rem;
-      color: rgba(255,255,255,0.4);
+      color: var(--text-muted);
       margin-top: 6px;
       text-align: right;
-      font-family: sans-serif;
     }
 
     .msg-action-bar {
       position: absolute;
-      top: 6px;
-      right: 10px;
+      top: 8px;
+      right: 12px;
       display: flex;
-      gap: 6px;
+      gap: 8px;
     }
 
     .action-icon-btn {
       background: none;
       border: none;
-      color: var(--subtext);
+      color: var(--text-muted);
       cursor: pointer;
       font-size: 0.75rem;
-      opacity: 0.7;
-      transition: opacity 0.2s;
+      transition: color 0.2s;
     }
 
-    .action-icon-btn:hover { opacity: 1; }
+    .action-icon-btn:hover { color: #fff; }
 
+    /* Footer */
     .footer-controls {
-      padding: 18px 24px;
-      background: rgba(5, 11, 24, 0.95);
+      padding: 20px 28px;
+      background: rgba(2, 6, 23, 0.95);
       border-top: 1px solid var(--border);
       display: flex;
       gap: 12px;
@@ -237,115 +262,160 @@
     }
 
     .role-dropdown, .file-btn-label, .admin-login-btn {
-      background: #091326;
+      background: rgba(15, 23, 42, 0.8);
       border: 1px solid var(--border);
       color: var(--accent-cyan);
-      padding: 12px 14px;
-      border-radius: 10px;
+      padding: 12px 16px;
+      border-radius: 12px;
       font-weight: 700;
       font-size: 0.85rem;
       outline: none;
       cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      transition: all 0.2s;
+    }
+
+    .role-dropdown:hover, .file-btn-label:hover {
+      border-color: var(--accent-cyan);
+      box-shadow: 0 0 10px rgba(56, 189, 248, 0.15);
     }
 
     .admin-login-btn {
-      background: rgba(245, 158, 11, 0.1);
-      border-color: rgba(245, 158, 11, 0.3);
-      color: var(--accent-gold);
+      background: rgba(245, 158, 11, 0.08);
+      border-color: rgba(245, 158, 11, 0.25);
+      color: var(--accent-amber);
     }
+    .admin-login-btn:hover { background: rgba(245, 158, 11, 0.2); }
 
     .message-input {
       flex: 1;
-      background: #091326;
+      background: rgba(15, 23, 42, 0.8);
       border: 1px solid var(--border);
       color: #fff;
-      padding: 12px 16px;
-      border-radius: 10px;
+      padding: 12px 18px;
+      border-radius: 12px;
       outline: none;
       font-size: 0.95rem;
+      transition: border-color 0.2s;
+    }
+
+    .message-input:focus {
+      border-color: var(--accent-cyan);
     }
 
     .send-btn {
-      background: linear-gradient(135deg, #06b6d4 0%, #3b82f6 100%);
-      color: #030712;
+      background: linear-gradient(135deg, var(--accent-cyan) 0%, var(--accent-indigo) 100%);
+      color: #020617;
       border: none;
       padding: 12px 24px;
-      border-radius: 10px;
+      border-radius: 12px;
       font-weight: 800;
       cursor: pointer;
       letter-spacing: 0.5px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      transition: opacity 0.2s;
     }
 
+    .send-btn:hover { opacity: 0.9; }
+
     .file-input { display: none; }
+
+    .file-card {
+      margin-top: 10px;
+      padding: 10px 14px;
+      background: rgba(0, 0, 0, 0.25);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .file-card a {
+      color: var(--accent-cyan);
+      text-decoration: none;
+      font-weight: 700;
+      font-size: 0.85rem;
+    }
   </style>
 </head>
 <body>
 
   <div class="room-container">
+    <!-- Redesigned Header -->
     <div class="header">
       <div class="brand-group">
-        <svg class="logo-icon" viewBox="0 0 24 24">
-          <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-5.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8s0 0 0 0z"/>
-        </svg>
-        <div class="brand-title">SECURE <span>SESSION DESK</span></div>
+        <div class="vault-icon"><i class="fa-solid fa-shield-halved"></i></div>
+        <div>
+          <div class="brand-title">QUANTUM SECURE ESCROW DESK</div>
+          <div class="brand-subtitle">Encrypted Multi-Party Session Portal</div>
+        </div>
       </div>
       <div class="status-badge"><span class="pulse"></span> LIVE SESSION #88204</div>
     </div>
 
+    <!-- Pinned Bar -->
     <div class="pinned-bar" id="pinnedBar">
-      📌 <strong>PINNED:</strong> <span id="pinnedContent">None</span>
+      <i class="fa-solid fa-thumbtack"></i> <strong>PINNED:</strong> <span id="pinnedContent">None</span>
     </div>
 
-    <!-- Strictly Admin Tools -->
+    <!-- Escrow Officer Control Panel -->
     <div class="admin-tools" id="adminTools">
-      <span class="admin-label">ADMIN PANEL:</span>
-      <button class="admin-btn admin-btn-accent" onclick="renameParty('A')">Rename Party A</button>
-      <button class="admin-btn admin-btn-accent" onclick="renameParty('B')">Rename Party B</button>
-      <button class="admin-btn admin-btn-accent" onclick="toggleFileLock()" id="lockFileBtn">Lock Uploads</button>
-      <button class="admin-btn" onclick="kickUser('A')">Kick Party A</button>
-      <button class="admin-btn" onclick="kickUser('B')">Kick Party B</button>
+      <span class="admin-label"><i class="fa-solid fa-user-gear"></i> ESCROW CONTROLS:</span>
+      <button class="admin-btn admin-btn-accent" onclick="renameParty('A')"><i class="fa-solid fa-pen"></i> Rename Buyer (A)</button>
+      <button class="admin-btn admin-btn-accent" onclick="renameParty('B')"><i class="fa-solid fa-pen"></i> Rename Seller (B)</button>
+      <button class="admin-btn admin-btn-accent" onclick="toggleFileLock()" id="lockFileBtn"><i class="fa-solid fa-lock"></i> Lock Files</button>
+      <button class="admin-btn" onclick="kickUser('A')"><i class="fa-solid fa-user-xmark"></i> Kick Party A</button>
+      <button class="admin-btn" onclick="kickUser('B')"><i class="fa-solid fa-user-xmark"></i> Kick Party B</button>
     </div>
 
+    <!-- Messages Window -->
     <div class="chat-messages" id="messageContainer"></div>
 
+    <!-- Control Bar -->
     <div class="footer-controls">
       <select class="role-dropdown" id="roleSelect" onchange="joinSession()">
-        <option value="PARTY A">Role: Party A</option>
-        <option value="PARTY B">Role: Party B</option>
+        <option value="PARTY A">Role: Party A (Buyer)</option>
+        <option value="PARTY B">Role: Party B (Seller)</option>
       </select>
       
-      <button class="admin-login-btn" id="adminAuthBtn" onclick="loginAsAdmin()">🔑 Admin Access</button>
+      <button class="admin-login-btn" id="adminAuthBtn" onclick="loginAsAdmin()">
+        <i class="fa-solid fa-key"></i> Escrow Login
+      </button>
 
-      <label class="file-btn-label" for="fileInput">📎 File</label>
+      <label class="file-btn-label" for="fileInput"><i class="fa-solid fa-paperclip"></i> File</label>
       <input type="file" id="fileInput" class="file-input" onchange="sendFile(this)" />
 
-      <input type="text" class="message-input" id="messageInput" placeholder="Enter message..." onkeydown="if(event.key==='Enter') sendMsg()" />
-      <button class="send-btn" onclick="sendMsg()">SEND</button>
+      <input type="text" class="message-input" id="messageInput" placeholder="Write a secure message..." onkeydown="if(event.key==='Enter') sendMsg()" oninput="pingActivity()" />
+      <button class="send-btn" onclick="sendMsg()"><i class="fa-solid fa-paper-plane"></i> SEND</button>
     </div>
   </div>
 
   <script>
     const socket = io();
     const roomId = "88204-SESSION";
-    let currentCustomNames = { 'PARTY A': 'Party A', 'PARTY B': 'Party B' };
+    let currentCustomNames = {};
     let isAdminConfirmed = false;
 
-    function joinSession(adminKey = null) {
-      const roleSelect = document.getElementById('roleSelect');
-      const selectedRole = adminKey ? 'ADMINISTRATOR' : roleSelect.value;
+    function pingActivity() {
+      if (isAdminConfirmed) socket.emit('ping-activity');
+    }
 
-      socket.emit('join-room', { 
-        roomId, 
-        role: selectedRole,
-        adminKey
-      });
+    document.addEventListener('click', pingActivity);
+
+    function joinSession(adminKey = null) {
+      const selectedRole = adminKey ? 'ADMINISTRATOR' : document.getElementById('roleSelect').value;
+      socket.emit('join-room', { roomId, role: selectedRole, adminKey });
     }
 
     function loginAsAdmin() {
-      const password = prompt("Enter Administrator Secret Password:");
-      if (password) {
-        joinSession(password);
-      }
+      const password = prompt("Enter Escrow Officer Passkey:");
+      if (password) joinSession(password);
     }
 
     function sendMsg() {
@@ -370,7 +440,7 @@
       reader.onload = function(e) {
         socket.emit('send-message', {
           roomId,
-          text: `Attached File: ${file.name}`,
+          text: `Shared Document: ${file.name}`,
           fileData: e.target.result,
           fileName: file.name
         });
@@ -379,10 +449,9 @@
       reader.readAsDataURL(file);
     }
 
-    // Admin Actions
     function renameParty(party) {
       const current = party === 'A' ? currentCustomNames['PARTY A'] : currentCustomNames['PARTY B'];
-      const newName = prompt(`Enter custom name for Party ${party} (e.g. "John (Buyer)"):`, current);
+      const newName = prompt(`Enter custom display name for Party ${party}:`, current);
       if (newName && newName.trim()) {
         socket.emit('rename-party', { roomId, targetParty: party, newName: newName.trim() });
       }
@@ -396,7 +465,7 @@
     }
 
     function deleteMessage(msgId) {
-      if (confirm("Delete this message remotely for all users?")) {
+      if (confirm("Permanently delete message for all participants?")) {
         socket.emit('delete-message', { roomId, msgId });
       }
     }
@@ -407,7 +476,7 @@
 
     function kickUser(party) {
       const name = party === 'A' ? currentCustomNames['PARTY A'] : currentCustomNames['PARTY B'];
-      if (confirm(`Disconnect ${name}?`)) {
+      if (confirm(`Remove ${name} from session?`)) {
         socket.emit('kick-participant', { roomId, targetParty: party });
       }
     }
@@ -422,16 +491,15 @@
       return div.innerHTML;
     }
 
-    // Socket Event Handlers
+    // Server Callbacks
     socket.on('init-state', (state) => {
       document.getElementById('messageContainer').innerHTML = '';
       currentCustomNames = state.customNames;
       isAdminConfirmed = state.isAdminConfirmed;
 
-      // Render Admin UI conditionally
       document.getElementById('adminTools').style.display = isAdminConfirmed ? 'flex' : 'none';
-      document.getElementById('roleSelect').style.display = isAdminConfirmed ? 'none' : 'block';
-      document.getElementById('adminAuthBtn').style.display = isAdminConfirmed ? 'none' : 'block';
+      document.getElementById('roleSelect').style.display = isAdminConfirmed ? 'none' : 'flex';
+      document.getElementById('adminAuthBtn').style.display = isAdminConfirmed ? 'none' : 'flex';
 
       state.history.forEach(renderMessage);
       if (state.pinnedMessage) updatePinnedBar(state.pinnedMessage);
@@ -466,6 +534,10 @@
       updateFileLockUI(isLocked);
     });
 
+    socket.on('admin-session-expired', (msg) => {
+      alert(msg);
+    });
+
     socket.on('auth-failed', (msg) => {
       alert(msg);
     });
@@ -488,7 +560,7 @@
 
     function updateFileLockUI(isLocked) {
       const btn = document.getElementById('lockFileBtn');
-      if (btn) btn.textContent = isLocked ? "Unlock Uploads" : "Lock Uploads";
+      if (btn) btn.innerHTML = isLocked ? '<i class="fa-solid fa-lock-open"></i> Unlock Files' : '<i class="fa-solid fa-lock"></i> Lock Files';
     }
 
     function renderMessage(data) {
@@ -499,30 +571,36 @@
 
       if (data.sender === 'SYSTEM') {
         msgDiv.className = 'message msg-system';
-        msgDiv.innerHTML = `<strong>SYSTEM:</strong> ${safeText}`;
+        msgDiv.innerHTML = `<i class="fa-solid fa-shield"></i> <strong>SYSTEM:</strong> ${safeText}`;
       } else {
-        const isMsgFromAdmin = data.senderRole === 'ADMINISTRATOR' || data.sender === 'ADMINISTRATOR';
+        const isMsgFromAdmin = data.senderRole === 'ADMINISTRATOR' || data.sender === 'ESCROW OFFICER';
         msgDiv.className = `message ${isMsgFromAdmin ? 'msg-admin' : 'msg-party'}`;
         
         let fileHTML = '';
         if (data.fileData) {
-          fileHTML = `<br><a href="${data.fileData}" download="${data.fileName}" style="color: var(--accent-cyan); font-weight: bold;">📥 Download ${sanitizeText(data.fileName)}</a>`;
+          fileHTML = `
+            <div class="file-card">
+              <span><i class="fa-solid fa-file-arrow-down"></i> ${sanitizeText(data.fileName)}</span>
+              <a href="${data.fileData}" download="${data.fileName}">Download</a>
+            </div>`;
         }
 
         let adminActionsHTML = '';
         if (isAdminConfirmed) {
           adminActionsHTML = `
             <div class="msg-action-bar">
-              <button class="action-icon-btn" onclick="editMessage('${data.id}', \`${safeText}\`)">✏️</button>
-              <button class="action-icon-btn" onclick="pinMessage('${data.id}')">📌</button>
-              <button class="action-icon-btn" onclick="deleteMessage('${data.id}')" style="color: var(--accent-red);">🗑️</button>
+              <button class="action-icon-btn" onclick="editMessage('${data.id}', \`${safeText}\`)"><i class="fa-solid fa-pen"></i></button>
+              <button class="action-icon-btn" onclick="pinMessage('${data.id}')"><i class="fa-solid fa-thumbtack"></i></button>
+              <button class="action-icon-btn" onclick="deleteMessage('${data.id}')" style="color: var(--accent-rose);"><i class="fa-solid fa-trash"></i></button>
             </div>
           `;
         }
 
         msgDiv.innerHTML = `
           ${adminActionsHTML}
-          <div class="sender-tag" style="color: ${isMsgFromAdmin ? 'var(--accent-cyan)' : '#a3b8cc'};">${sanitizeText(data.sender)}</div>
+          <div class="sender-tag" style="color: ${isMsgFromAdmin ? 'var(--accent-cyan)' : 'var(--accent-amber)'};">
+            <i class="fa-solid ${isMsgFromAdmin ? 'fa-user-shield' : 'fa-user'}"></i> ${sanitizeText(data.sender)}
+          </div>
           <span id="msg-text-${data.id}">${safeText}</span>
           ${fileHTML}
           <div class="time-tag">${data.time}</div>
