@@ -3,7 +3,6 @@ const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
 
-// Safely attempt to load nodemailer without crashing Render if missing
 let nodemailer = null;
 try {
   nodemailer = require('nodemailer');
@@ -13,17 +12,13 @@ try {
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, {
-  cors: { origin: "*" }
-});
+const io = new Server(server, { cors: { origin: "*" } });
 
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.json());
 
-// Admin Passkey
 const ADMIN_PASSKEY = "ADMIN123";
 
-// Optional Email Transporter Config
 let transporter = null;
 if (nodemailer && process.env.EMAIL_USER && process.env.EMAIL_PASS) {
   transporter = nodemailer.createTransport({
@@ -35,7 +30,6 @@ if (nodemailer && process.env.EMAIL_USER && process.env.EMAIL_PASS) {
   });
 }
 
-// Safe Email Dispatcher
 async function sendEmailNotification(to, subject, text) {
   try {
     if (transporter) {
@@ -54,7 +48,6 @@ async function sendEmailNotification(to, subject, text) {
   }
 }
 
-// In-Memory Data Store
 let groups = {
   "default-group": {
     id: "default-group",
@@ -101,7 +94,6 @@ io.on('connection', (socket) => {
       isOnline: true
     };
 
-    // Send initial room state
     socket.emit('init-state', {
       group: groups[groupId],
       isAdminConfirmed: isAdmin,
@@ -109,6 +101,7 @@ io.on('connection', (socket) => {
     });
 
     io.to(groupId).emit('message', {
+      id: 'sys-' + Date.now(),
       sender: 'SYSTEM',
       text: `${displayName} connected.`,
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -124,12 +117,12 @@ io.on('connection', (socket) => {
     if (!user) return;
 
     const msgData = {
-      id: 'msg-' + Date.now(),
+      id: 'msg-' + Date.now() + '-' + Math.random().toString(36).substr(2, 4),
       sender: user.displayName,
       senderRole: user.role,
       senderSocketId: socket.id,
       text: text,
-      targetLang: targetLang || 'en-US',
+      targetLang: targetLang || 'en',
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
 
@@ -137,7 +130,42 @@ io.on('connection', (socket) => {
     io.to(groupId).emit('message', msgData);
   });
 
-  // 3. ADMIN: Create New Group
+  // 3. ADMIN: Edit Any Message
+  socket.on('admin-edit-message', ({ groupId, messageId, newText }) => {
+    const user = activeSockets[socket.id];
+    if (!user || !user.isAdmin) return;
+
+    if (groups[groupId]) {
+      const msgIndex = groups[groupId].messages.findIndex(m => m.id === messageId);
+      if (msgIndex !== -1) {
+        groups[groupId].messages[msgIndex].text = newText;
+        groups[groupId].messages[msgIndex].edited = true;
+
+        io.to(groupId).emit('message-edited', {
+          groupId,
+          messageId,
+          newText
+        });
+      }
+    }
+  });
+
+  // 4. ADMIN: Bulk Delete Messages
+  socket.on('admin-bulk-delete-messages', ({ groupId, messageIds }) => {
+    const user = activeSockets[socket.id];
+    if (!user || !user.isAdmin) return;
+
+    if (groups[groupId] && Array.isArray(messageIds)) {
+      groups[groupId].messages = groups[groupId].messages.filter(m => !messageIds.includes(m.id));
+      
+      io.to(groupId).emit('messages-bulk-deleted', {
+        groupId,
+        messageIds
+      });
+    }
+  });
+
+  // 5. ADMIN: Create New Group
   socket.on('create-group', ({ groupName }) => {
     const newId = 'group-' + Date.now();
     const name = groupName || `General Transaction Group #${Object.keys(groups).length + 1}`;
@@ -155,7 +183,7 @@ io.on('connection', (socket) => {
     socket.emit('group-created-and-switch', { newGroupId: newId });
   });
 
-  // 4. ADMIN: Delete Group
+  // 6. ADMIN: Delete Group
   socket.on('delete-group', ({ groupId }) => {
     if (Object.keys(groups).length <= 1) {
       socket.emit('error-msg', "Cannot delete the last remaining group!");
@@ -169,7 +197,6 @@ io.on('connection', (socket) => {
     io.to(groupId).emit('force-room-switch', { newGroupId: remainingGroup });
   });
 
-  // Bulk Delete Groups (Admin Feature)
   socket.on('bulk-delete-groups', ({ groupIds }) => {
     if (!groupIds || !Array.isArray(groupIds)) return;
     
@@ -184,7 +211,6 @@ io.on('connection', (socket) => {
     io.emit('all-groups-list', Object.values(groups));
   });
 
-  // Highlight Group Toggle (Admin Feature)
   socket.on('toggle-highlight-group', ({ groupId }) => {
     if (groups[groupId]) {
       groups[groupId].highlighted = !groups[groupId].highlighted;
@@ -192,7 +218,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // 5. ADMIN: Rename Parties
   socket.on('rename-party', ({ groupId, party, newName }) => {
     if (groups[groupId]) {
       groups[groupId].customNames[party] = newName;
@@ -213,7 +238,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // 6. ADMIN: Toggle File Lock
   socket.on('toggle-file-lock', ({ groupId }) => {
     if (groups[groupId]) {
       groups[groupId].fileLocked = !groups[groupId].fileLocked;
@@ -221,7 +245,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // 7. Live Typing & Spectator Draft
   socket.on('typing-start', ({ isTyping, currentDraft }) => {
     const user = activeSockets[socket.id];
     if (!user) return;
@@ -235,7 +258,6 @@ io.on('connection', (socket) => {
     });
   });
 
-  // 8. ADMIN: Direct Messaging & Email Trigger
   socket.on('admin-initiate-dm', ({ targetSocketId, initialMessage, userEmail }) => {
     const dmRoomId = `dm-${socket.id}-${targetSocketId}`;
     
@@ -271,17 +293,16 @@ io.on('connection', (socket) => {
     io.emit('dm-message', msgPayload);
   });
 
-  // 9. Fetch Groups List
   socket.on('get-all-groups', () => {
     socket.emit('all-groups-list', Object.values(groups));
   });
 
-  // 10. Disconnect Handling
   socket.on('disconnect', () => {
     const user = activeSockets[socket.id];
     if (user) {
       user.isOnline = false;
       io.to(user.groupId).emit('message', {
+        id: 'sys-' + Date.now(),
         sender: 'SYSTEM',
         text: `${user.displayName} disconnected.`,
         time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
