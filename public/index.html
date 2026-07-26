@@ -8,174 +8,207 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <style>
     :root {
-      --bg-dark: #020617;
-      --panel-bg: rgba(15, 23, 42, 0.9);
-      --side-panel-bg: #090d16;
+      --bg-dark: #0e1621;
+      --panel-bg: #17212b;
+      --side-panel-bg: #0e1621;
+      --hover-bg: #202b36;
       --accent-cyan: #38bdf8;
       --accent-emerald: #10b981;
       --accent-amber: #f59e0b;
       --accent-rose: #f43f5e;
       --accent-indigo: #6366f1;
-      --border: rgba(56, 189, 248, 0.2);
+      --border: rgba(255, 255, 255, 0.08);
       --text-main: #f8fafc;
-      --text-muted: #94a3b8;
+      --text-muted: #7f91a4;
     }
 
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', system-ui, -apple-system, sans-serif; }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', system-ui, -apple-system, sans-serif; user-select: none; }
 
     body {
-      background: var(--bg-dark);
-      background-image: 
-        radial-gradient(at 10% 10%, rgba(99, 102, 241, 0.15) 0px, transparent 50%),
-        radial-gradient(at 90% 90%, rgba(56, 189, 248, 0.12) 0px, transparent 50%),
-        radial-gradient(at 50% 50%, #020617 0px, #000 100%);
+      background: #070a0d;
       color: var(--text-main);
       display: flex;
       justify-content: center;
       align-items: center;
       min-height: 100vh;
-      padding: 16px;
+      padding: 12px;
     }
 
     .app-wrapper {
       width: 100%;
-      max-width: 1280px;
-      height: 880px;
+      max-width: 1350px;
+      height: 900px;
       display: flex;
       background: var(--panel-bg);
       border: 1px solid var(--border);
-      border-radius: 24px;
-      box-shadow: 0 30px 60px -12px rgba(0, 0, 0, 0.9);
-      backdrop-filter: blur(20px);
+      border-radius: 16px;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.8);
       overflow: hidden;
       position: relative;
     }
 
-    /* Left Admin Command Panel */
-    .admin-side-panel {
-      width: 340px;
+    /* Telegram Style Side Navigation Panel */
+    .telegram-sidebar {
+      width: 360px;
       background: var(--side-panel-bg);
       border-right: 1px solid var(--border);
-      display: none;
+      display: flex;
       flex-direction: column;
-      padding: 20px;
-      gap: 16px;
-      overflow-y: auto;
     }
 
-    .admin-panel-title {
-      font-size: 0.85rem;
-      font-weight: 800;
-      color: var(--accent-amber);
-      letter-spacing: 1px;
-      text-transform: uppercase;
+    .tele-search-header {
+      padding: 14px;
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 12px;
+      border-bottom: 1px solid var(--border);
     }
 
-    .admin-section {
-      background: rgba(15, 23, 42, 0.6);
+    .tele-search-input {
+      flex: 1;
+      background: #17212b;
       border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 12px;
+      border-radius: 20px;
+      padding: 8px 16px;
+      color: #fff;
+      font-size: 0.85rem;
+      outline: none;
+    }
+
+    .tele-chat-list {
+      flex: 1;
+      overflow-y: auto;
       display: flex;
       flex-direction: column;
-      gap: 10px;
+    }
+
+    .tele-item {
+      display: flex;
+      align-items: center;
+      padding: 12px 16px;
+      gap: 12px;
+      cursor: pointer;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+      transition: background 0.15s ease;
+    }
+
+    .tele-item:hover, .tele-item.active {
+      background: var(--hover-bg);
+    }
+
+    .tele-avatar {
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #6366f1, #38bdf8);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      font-weight: 700;
+      color: #fff;
+      font-size: 1.1rem;
+      position: relative;
+      flex-shrink: 0;
+    }
+
+    .tele-avatar.user-avatar {
+      background: linear-gradient(135deg, #10b981, #059669);
+    }
+
+    .tele-info {
+      flex: 1;
+      overflow: hidden;
+    }
+
+    .tele-top-line {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 4px;
+    }
+
+    .tele-name {
+      font-size: 0.9rem;
+      font-weight: 700;
+      color: #fff;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .tele-time {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+    }
+
+    .tele-sub-line {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .tele-last-msg {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 200px;
+    }
+
+    .tele-badge {
+      background: var(--accent-cyan);
+      color: #0e1621;
+      font-size: 0.7rem;
+      font-weight: 800;
+      border-radius: 10px;
+      padding: 2px 7px;
+    }
+
+    /* Admin Overlay Controls inside Sidebar */
+    .admin-controls-drawer {
+      background: #17212b;
+      border-top: 1px solid var(--border);
+      padding: 12px;
+      display: none;
+      flex-direction: column;
+      gap: 8px;
+      max-height: 280px;
+      overflow-y: auto;
     }
 
     .admin-btn {
-      background: rgba(15, 23, 42, 0.8);
+      background: #0e1621;
       border: 1px solid var(--border);
       color: var(--accent-cyan);
-      padding: 10px 14px;
-      border-radius: 12px;
-      font-weight: 700;
-      font-size: 0.82rem;
-      outline: none;
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 0.8rem;
       cursor: pointer;
-      text-align: left;
-      transition: all 0.2s ease;
       display: flex;
       align-items: center;
       gap: 8px;
     }
 
-    .admin-btn:hover {
-      background: rgba(56, 189, 248, 0.15);
-      border-color: var(--accent-cyan);
-    }
+    .admin-btn:hover { background: rgba(56, 189, 248, 0.15); }
+    .admin-btn-danger { color: var(--accent-rose); border-color: rgba(244, 63, 94, 0.3); }
 
-    .admin-btn-danger {
-      color: var(--accent-rose);
-      border-color: rgba(244, 63, 94, 0.3);
-    }
-
-    .admin-btn-danger:hover {
-      background: rgba(244, 63, 94, 0.15);
-      border-color: var(--accent-rose);
-    }
-
-    .admin-notes-area {
-      width: 100%;
-      height: 90px;
-      background: #020617;
-      border: 1px solid var(--border);
-      color: #fff;
-      padding: 10px;
-      border-radius: 8px;
-      font-size: 0.8rem;
-      resize: none;
-      outline: none;
-    }
-
-    .live-spectator-box {
-      font-size: 0.78rem;
-      color: var(--accent-cyan);
-      background: rgba(56, 189, 248, 0.05);
-      border: 1px dashed rgba(56, 189, 248, 0.3);
-      padding: 8px 12px;
-      border-radius: 8px;
-      min-height: 45px;
-    }
-
-    .group-checklist {
-      max-height: 120px;
-      overflow-y: auto;
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-      background: rgba(2, 6, 23, 0.6);
-      padding: 8px;
-      border-radius: 8px;
-      border: 1px solid var(--border);
-    }
-
-    .group-check-item {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      font-size: 0.78rem;
-      color: var(--text-main);
-    }
-
-    .group-check-item.highlighted {
-      background: rgba(245, 158, 11, 0.15);
-      border-left: 3px solid var(--accent-amber);
-      padding-left: 4px;
-    }
-
-    /* Main Chat Desk Area */
+    /* Main Workspace */
     .room-container {
       flex: 1;
       display: flex;
       flex-direction: column;
       height: 100%;
+      background: #0e1621;
     }
 
     .header {
-      padding: 18px 28px;
-      background: rgba(2, 6, 23, 0.95);
+      padding: 16px 24px;
+      background: #17212b;
       border-bottom: 1px solid var(--border);
       display: flex;
       justify-content: space-between;
@@ -185,40 +218,22 @@
     .brand-group { display: flex; align-items: center; gap: 14px; }
 
     .vault-icon {
-      width: 42px;
-      height: 42px;
+      width: 40px;
+      height: 40px;
       background: rgba(56, 189, 248, 0.1);
       border: 1px solid rgba(56, 189, 248, 0.3);
-      border-radius: 12px;
+      border-radius: 10px;
       display: flex;
       justify-content: center;
       align-items: center;
       color: var(--accent-cyan);
-      font-size: 1.2rem;
       cursor: pointer;
-      transition: all 0.2s ease;
     }
 
-    .vault-icon:hover { box-shadow: 0 0 15px rgba(56, 189, 248, 0.4); }
-
-    .brand-title {
-      font-size: 1.1rem;
-      font-weight: 800;
-      letter-spacing: 1.5px;
-      text-transform: uppercase;
-      background: linear-gradient(135deg, #fff 30%, var(--accent-cyan) 100%);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-    }
-
+    .brand-title { font-size: 1rem; font-weight: 800; color: #fff; letter-spacing: 1px; }
     .brand-subtitle { font-size: 0.75rem; color: var(--accent-amber); font-weight: 700; }
 
-    .presence-bar {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      font-size: 0.75rem;
-    }
+    .presence-bar { display: flex; align-items: center; gap: 12px; font-size: 0.75rem; }
 
     .presence-badge {
       display: inline-flex;
@@ -226,7 +241,7 @@
       gap: 6px;
       padding: 4px 10px;
       border-radius: 20px;
-      background: rgba(15, 23, 42, 0.8);
+      background: #0e1621;
       border: 1px solid var(--border);
       font-weight: 600;
     }
@@ -235,22 +250,25 @@
     .status-dot.online { background: var(--accent-emerald); box-shadow: 0 0 8px var(--accent-emerald); }
     .status-dot.offline { background: var(--accent-rose); }
 
+    /* Pinned Header Bar */
+    .pinned-bar {
+      background: #17212b;
+      border-bottom: 1px solid var(--border);
+      padding: 8px 24px;
+      font-size: 0.8rem;
+      color: var(--accent-cyan);
+      display: none;
+      align-items: center;
+      justify-content: space-between;
+    }
+
     .chat-messages {
       flex: 1;
-      padding: 28px;
+      padding: 24px;
       overflow-y: auto;
       display: flex;
       flex-direction: column;
-      gap: 16px;
-    }
-
-    .message {
-      max-width: 78%;
-      padding: 14px 18px;
-      border-radius: 16px;
-      font-size: 0.92rem;
-      line-height: 1.5;
-      position: relative;
+      gap: 12px;
     }
 
     .msg-wrapper {
@@ -258,10 +276,20 @@
       align-items: center;
       gap: 10px;
       width: 100%;
+      position: relative;
     }
 
-    .msg-wrapper.msg-party {
-      justify-content: flex-end;
+    .msg-wrapper.msg-party { justify-content: flex-end; }
+
+    .message {
+      max-width: 70%;
+      padding: 10px 14px;
+      border-radius: 12px;
+      font-size: 0.9rem;
+      line-height: 1.4;
+      position: relative;
+      cursor: pointer;
+      user-select: text;
     }
 
     .msg-system {
@@ -270,61 +298,79 @@
       border: 1px solid rgba(56, 189, 248, 0.15);
       color: var(--text-muted);
       font-size: 0.78rem;
-      text-align: center;
-      border-radius: 30px;
-      padding: 8px 20px;
+      border-radius: 20px;
+      padding: 6px 16px;
     }
 
     .msg-admin {
       align-self: flex-start;
-      background: rgba(56, 189, 248, 0.08);
-      border: 1px solid rgba(56, 189, 248, 0.3);
-      border-top-left-radius: 4px;
+      background: #182533;
+      border: 1px solid var(--border);
+      border-top-left-radius: 2px;
     }
 
     .msg-party {
       align-self: flex-end;
-      background: rgba(30, 41, 59, 0.7);
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      border-top-right-radius: 4px;
+      background: #2b5278;
+      border-top-right-radius: 2px;
     }
 
     .sender-tag {
       font-size: 0.72rem;
       font-weight: 800;
-      margin-bottom: 6px;
+      margin-bottom: 4px;
       text-transform: uppercase;
+      color: var(--accent-cyan);
+    }
+
+    .msg-checkbox {
+      display: none;
+      width: 18px;
+      height: 18px;
+      cursor: pointer;
+    }
+
+    .msg-wrapper.selection-mode .msg-checkbox {
+      display: block;
+    }
+
+    /* Long-Press / Right-Click Context Menu */
+    .context-menu {
+      position: absolute;
+      background: #17212b;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+      display: none;
+      flex-direction: column;
+      z-index: 2000;
+      overflow: hidden;
+      min-width: 140px;
+    }
+
+    .context-menu button {
+      background: none;
+      border: none;
+      color: #fff;
+      padding: 10px 14px;
+      text-align: left;
+      font-size: 0.82rem;
+      cursor: pointer;
       display: flex;
       align-items: center;
-      justify-content: space-between;
       gap: 8px;
     }
 
-    .msg-action-btn {
-      cursor: pointer;
+    .context-menu button:hover {
+      background: var(--hover-bg);
       color: var(--accent-cyan);
-      font-size: 0.75rem;
-      transition: color 0.2s;
-    }
-
-    .msg-action-btn:hover {
-      color: var(--accent-amber);
-    }
-
-    .trans-note {
-      font-size: 0.72rem;
-      color: var(--accent-cyan);
-      margin-top: 6px;
-      border-top: 1px dashed rgba(56, 189, 248, 0.3);
-      padding-top: 4px;
-      font-style: italic;
     }
 
     .bulk-delete-bar {
       display: none;
       background: rgba(244, 63, 94, 0.15);
       border-top: 1px solid var(--accent-rose);
-      padding: 8px 28px;
+      padding: 8px 24px;
       font-size: 0.8rem;
       color: var(--accent-rose);
       justify-content: space-between;
@@ -332,85 +378,63 @@
       font-weight: 700;
     }
 
-    .typing-indicator-box {
-      height: 20px;
-      padding: 0 28px;
-      font-size: 0.75rem;
-      color: var(--accent-cyan);
-      font-style: italic;
-    }
-
     .footer-controls {
-      padding: 18px 28px;
-      background: rgba(2, 6, 23, 0.95);
+      padding: 16px 24px;
+      background: #17212b;
       border-top: 1px solid var(--border);
       display: flex;
       gap: 10px;
       align-items: center;
     }
 
-    .role-dropdown, .lang-dropdown, .group-dropdown, .icon-btn {
-      background: rgba(15, 23, 42, 0.8);
+    .role-dropdown, .lang-dropdown, .icon-btn {
+      background: #0e1621;
       border: 1px solid var(--border);
       color: var(--accent-cyan);
-      padding: 10px 14px;
-      border-radius: 12px;
+      padding: 10px 12px;
+      border-radius: 10px;
       font-weight: 700;
       font-size: 0.82rem;
       outline: none;
       cursor: pointer;
     }
 
-    .icon-btn.recording {
-      background: var(--accent-rose);
-      color: #fff;
-      animation: pulse 1s infinite alternate;
-    }
-
-    @keyframes pulse { from { opacity: 0.6; } to { opacity: 1; } }
-
     .message-input {
       flex: 1;
-      background: rgba(15, 23, 42, 0.8);
+      background: #0e1621;
       border: 1px solid var(--border);
       color: #fff;
-      padding: 12px 18px;
-      border-radius: 12px;
+      padding: 12px 16px;
+      border-radius: 10px;
       outline: none;
-      font-size: 0.92rem;
+      font-size: 0.9rem;
     }
 
     .send-btn {
-      background: linear-gradient(135deg, var(--accent-cyan) 0%, var(--accent-indigo) 100%);
-      color: #020617;
+      background: var(--accent-cyan);
+      color: #0e1621;
       border: none;
-      padding: 12px 22px;
-      border-radius: 12px;
+      padding: 12px 20px;
+      border-radius: 10px;
       font-weight: 800;
       cursor: pointer;
       display: flex;
       align-items: center;
-      gap: 8px;
-      transition: transform 0.15s ease, box-shadow 0.15s ease;
-    }
-
-    .send-btn:hover {
-      transform: translateY(-1px);
-      box-shadow: 0 4px 15px rgba(56, 189, 248, 0.4);
+      gap: 6px;
     }
 
     .file-input { display: none; }
 
-    /* Direct Message Modal (Professional Left/Right Chat Layout) */
+    /* Direct Message Modal */
     .dm-modal {
       position: absolute;
       bottom: 80px;
       right: 28px;
-      width: 400px;
-      height: 480px;
-      background: #090d16;
+      width: 380px;
+      height: 460px;
+      background: #17212b;
       border: 1px solid var(--accent-cyan);
-      border-radius: 18px;
+      border-radius: 16px;
       box-shadow: 0 25px 50px rgba(0,0,0,0.9);
       display: none;
       flex-direction: column;
@@ -419,129 +443,55 @@
     }
 
     .dm-header {
-      padding: 14px 18px;
-      background: rgba(56, 189, 248, 0.1);
+      padding: 12px 16px;
+      background: #0e1621;
       border-bottom: 1px solid var(--border);
       display: flex;
       justify-content: space-between;
       align-items: center;
       font-weight: 700;
-      font-size: 0.88rem;
+      font-size: 0.85rem;
       color: var(--accent-cyan);
     }
 
-    .dm-body { 
-      flex: 1; 
-      padding: 14px; 
-      overflow-y: auto; 
-      display: flex; 
-      flex-direction: column; 
-      gap: 12px; 
-      font-size: 0.85rem; 
-    }
-
-    .dm-bubble-row {
-      display: flex;
-      width: 100%;
-    }
-
-    .dm-bubble-row.sent {
-      justify-content: flex-end;
-    }
-
-    .dm-bubble-row.received {
-      justify-content: flex-start;
-    }
-
-    .dm-bubble {
-      max-width: 80%;
-      padding: 10px 14px;
-      border-radius: 14px;
-      line-height: 1.4;
-      display: flex;
-      flex-direction: column;
-    }
-
-    .dm-bubble.sent {
-      background: linear-gradient(135deg, rgba(99, 102, 241, 0.85) 0%, rgba(56, 189, 248, 0.85) 100%);
-      color: #fff;
-      border-bottom-right-radius: 2px;
-    }
-
-    .dm-bubble.received {
-      background: rgba(30, 41, 59, 0.9);
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      color: var(--text-main);
-      border-bottom-left-radius: 2px;
-    }
-
-    .dm-sender-label {
-      font-size: 0.68rem;
-      font-weight: 800;
-      opacity: 0.8;
-      margin-bottom: 3px;
-      text-transform: uppercase;
-    }
-
-    .dm-footer { padding: 12px; display: flex; gap: 8px; border-top: 1px solid var(--border); background: #020617; }
+    .dm-body { flex: 1; padding: 12px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+    .dm-footer { padding: 10px; display: flex; gap: 8px; border-top: 1px solid var(--border); background: #0e1621; }
   </style>
 </head>
 <body>
 
-  <div class="app-wrapper">
-    <!-- Left Admin Command Panel -->
-    <div class="admin-side-panel" id="adminSidePanel">
-      <div class="admin-panel-title">
-        <i class="fa-solid fa-user-gear"></i> Admin Command Panel
+  <div class="app-wrapper" onclick="hideContextMenu()">
+    
+    <!-- Telegram Style Side Navigation Panel -->
+    <div class="telegram-sidebar">
+      <div class="tele-search-header">
+        <i class="fa-solid fa-bars" style="color: var(--text-muted); cursor: pointer;" onclick="toggleAdminDrawer()"></i>
+        <input type="text" class="tele-search-input" placeholder="Search groups or buyers..." oninput="filterChatList(this.value)" />
       </div>
 
-      <div class="admin-section">
-        <span style="font-size: 0.75rem; font-weight: 700; color: var(--text-muted);">ACTIVE ROOM MANAGEMENT</span>
-        <select class="group-dropdown" id="adminGroupSelect" onchange="switchAdminGroup()"></select>
-        <button class="admin-btn" onclick="createNewGroup()"><i class="fa-solid fa-plus"></i> New Group</button>
+      <div class="tele-chat-list" id="telegramChatList"></div>
+
+      <!-- Admin Control Overlay Drawer -->
+      <div class="admin-controls-drawer" id="adminDrawer">
+        <span style="font-size: 0.75rem; font-weight: 800; color: var(--accent-amber);">ADMIN COMMAND CENTER</span>
+        <button class="admin-btn" onclick="createNewGroup()"><i class="fa-solid fa-plus"></i> Create New Group</button>
         <button class="admin-btn admin-btn-danger" onclick="deleteCurrentGroup()"><i class="fa-solid fa-trash"></i> Delete Active Group</button>
-        <button class="admin-btn" onclick="copyInviteLink()"><i class="fa-solid fa-link"></i> Clean Invite Link</button>
-      </div>
-
-      <div class="admin-section">
-        <span style="font-size: 0.75rem; font-weight: 700; color: var(--accent-amber);"><i class="fa-solid fa-list-check"></i> MULTI-GROUP MANAGER</span>
-        <div class="group-checklist" id="groupChecklist"></div>
-        <button class="admin-btn admin-btn-danger" onclick="deleteSelectedGroups()"><i class="fa-solid fa-dumpster"></i> Delete Selected Groups</button>
-      </div>
-
-      <div class="admin-section">
-        <span style="font-size: 0.75rem; font-weight: 700; color: var(--text-muted);">PARTY RENAMING</span>
-        <button class="admin-btn" onclick="renameParty('A')"><i class="fa-solid fa-pen"></i> Rename Buyer (A)</button>
-        <button class="admin-btn" onclick="renameParty('B')"><i class="fa-solid fa-pen"></i> Rename Seller (B)</button>
-        <button class="admin-btn" onclick="toggleFileLock()" id="lockFileBtn"><i class="fa-solid fa-lock"></i> Lock File Transfer</button>
-      </div>
-
-      <div class="admin-section">
-        <span style="font-size: 0.75rem; font-weight: 700; color: var(--accent-amber);"><i class="fa-solid fa-eye"></i> LIVE SPECTATOR DRAFT</span>
-        <div class="live-spectator-box" id="spectatorBox">No active typing detected...</div>
-      </div>
-
-      <div class="admin-section">
-        <span style="font-size: 0.75rem; font-weight: 700; color: var(--accent-cyan);"><i class="fa-solid fa-comments"></i> DIRECT MESSAGE / EMAIL</span>
-        <select class="group-dropdown" id="activeUsersSelect"></select>
-        <button class="admin-btn" onclick="initiateAdminDM()"><i class="fa-solid fa-bolt-lightning"></i> Send Direct Message</button>
-      </div>
-
-      <div class="admin-section">
-        <span style="font-size: 0.75rem; font-weight: 700; color: var(--text-muted);"><i class="fa-solid fa-note-sticky"></i> PRIVATE OFFICER NOTES</span>
-        <textarea class="admin-notes-area" id="adminPrivateNotes" placeholder="Write persistent internal notes here..." oninput="saveAdminNotes()"></textarea>
+        <button class="admin-btn" id="uploadPermBtn" onclick="toggleAdminUploads()"><i class="fa-solid fa-paperclip"></i> Uploads: Allowed</button>
+        <button class="admin-btn" onclick="renameParty('A')"><i class="fa-solid fa-pen"></i> Rename Buyer (Party A)</button>
+        <button class="admin-btn" onclick="renameParty('B')"><i class="fa-solid fa-pen"></i> Rename Seller (Party B)</button>
+        <button class="admin-btn" onclick="copyInviteLink()"><i class="fa-solid fa-link"></i> Copy Clean Link</button>
       </div>
     </div>
 
-    <!-- Main Chat Workspace -->
+    <!-- Main Workspace Desk -->
     <div class="room-container">
       <div class="header">
         <div class="brand-group">
           <div class="vault-icon" onclick="loginAsAdmin()" title="Admin Login">
-            <i class="fa-solid fa-layer-group"></i>
+            <i class="fa-solid fa-shield-halved"></i>
           </div>
           <div>
-            <div class="brand-title">QUANTUM SECURE TRANSACTION DESK</div>
+            <div class="brand-title">QUANTUM TRANSACTION DESK</div>
             <div class="brand-subtitle" id="currentGroupName">General Transaction Group #1</div>
           </div>
         </div>
@@ -558,6 +508,12 @@
         </div>
       </div>
 
+      <!-- Pinned Messages Bar -->
+      <div class="pinned-bar" id="pinnedBar">
+        <span id="pinnedText"><i class="fa-solid fa-thumbtack"></i> Pinned message preview...</span>
+        <i class="fa-solid fa-xmark" style="cursor:pointer;" onclick="unpinCurrentMsg()"></i>
+      </div>
+
       <div class="chat-messages" id="messageContainer"></div>
 
       <!-- Admin Bulk Delete Bar -->
@@ -568,8 +524,6 @@
         </button>
       </div>
 
-      <div class="typing-indicator-box" id="typingIndicator"></div>
-
       <div class="footer-controls">
         <select class="role-dropdown" id="roleSelect" onchange="joinSession()">
           <option value="PARTY A">Role: Buyer (Party A)</option>
@@ -578,45 +532,45 @@
 
         <select class="lang-dropdown" id="targetLangSelect">
           <option value="en">🇬🇧 English</option>
-          <option value="zh">🇨🇳 Chinese (Mandarin)</option>
-          <option value="hi">🇮🇳 Hindi</option>
+          <option value="zh">🇨🇳 Chinese</option>
           <option value="es">🇪🇸 Spanish</option>
           <option value="ar">🇸🇦 Arabic</option>
           <option value="fr">🇫🇷 French</option>
-          <option value="bn">🇧🇩 Bengali</option>
           <option value="pt">🇵🇹 Portuguese</option>
           <option value="ru">🇷🇺 Russian</option>
-          <option value="id">🇮🇩 Indonesian</option>
-          <option value="it">🇮🇹 Italian</option>
-          <option value="de">🇩🇪 German</option>
         </select>
 
-        <button class="icon-btn" id="micBtn" onclick="toggleSpeechRecognition()" title="Voice to Text"><i class="fa-solid fa-microphone"></i></button>
+        <button class="icon-btn" id="micBtn" onclick="toggleSpeechRecognition()" title="Voice Input"><i class="fa-solid fa-microphone"></i></button>
 
-        <label class="icon-btn" for="fileInput"><i class="fa-solid fa-paperclip"></i></label>
+        <label class="icon-btn" id="fileUploadLabel" for="fileInput"><i class="fa-solid fa-paperclip"></i></label>
         <input type="file" id="fileInput" class="file-input" />
 
-        <input type="text" class="message-input" id="messageInput" placeholder="Write or speak message..." onkeydown="if(event.key==='Enter') sendMsg()" oninput="handleTyping()" />
+        <input type="text" class="message-input" id="messageInput" placeholder="Write message..." onkeydown="if(event.key==='Enter') sendMsg()" />
         
         <button class="send-btn" onclick="sendMsg()">
-          <i class="fa-solid fa-bolt-lightning"></i> SEND
+          <i class="fa-solid fa-paper-plane"></i>
         </button>
       </div>
     </div>
   </div>
 
+  <!-- Context Action Menu (Long-Press / Right-Click) -->
+  <div class="context-menu" id="contextMenu">
+    <button onclick="contextAction('select')"><i class="fa-solid fa-check-square"></i> Select</button>
+    <button id="ctxEditBtn" onclick="contextAction('edit')"><i class="fa-solid fa-pen"></i> Edit</button>
+    <button id="ctxPinBtn" onclick="contextAction('pin')"><i class="fa-solid fa-thumbtack"></i> Pin / Unpin</button>
+  </div>
+
   <!-- DM Modal -->
   <div class="dm-modal" id="dmModal">
     <div class="dm-header">
-      <span><i class="fa-solid fa-user-shield"></i> Direct Message Channel</span>
+      <span><i class="fa-solid fa-user-shield"></i> Direct Message</span>
       <i class="fa-solid fa-xmark" style="cursor:pointer;" onclick="closeDMModal()"></i>
     </div>
     <div class="dm-body" id="dmBody"></div>
     <div class="dm-footer">
-      <input type="text" class="message-input" id="dmInput" placeholder="Type direct reply..." onkeydown="if(event.key==='Enter') sendDMReply()" />
-      <button class="send-btn" onclick="sendDMReply()">
-        <i class="fa-solid fa-arrow-up-right-from-square"></i>
-      </button>
+      <input type="text" class="message-input" id="dmInput" placeholder="Direct reply..." onkeydown="if(event.key==='Enter') sendDMReply()" />
+      <button class="send-btn" onclick="sendDMReply()"><i class="fa-solid fa-paper-plane"></i></button>
     </div>
   </div>
 
@@ -635,10 +589,12 @@
     let isAdminConfirmed = false;
     let currentSocketId = null;
     let activeDMRoomId = null;
-    let typingTimeout = null;
-    let recognition = null;
-    let isRecording = false;
     let selectedMsgIds = new Set();
+    let targetContextMsgId = null;
+    let targetContextText = "";
+    let longPressTimer = null;
+    let allGroupsData = [];
+    let activeUsersData = [];
 
     // --- REALTIME TRANSLATION ENGINE ---
     async function translateText(text, targetLang) {
@@ -648,60 +604,17 @@
         const data = await res.json();
         return data?.responseData?.translatedText || text;
       } catch (err) {
-        console.error("Translation Error:", err);
         return text;
       }
     }
 
-    // --- SPEECH RECOGNITION ---
-    function initSpeechRecognition() {
-      if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
-        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-        recognition = new SpeechRecognition();
-        recognition.continuous = false;
-        recognition.interimResults = false;
-
-        recognition.onresult = (event) => {
-          const transcript = event.results[0][0].transcript;
-          const msgInput = document.getElementById('messageInput');
-          msgInput.value += (msgInput.value ? ' ' : '') + transcript;
-          handleTyping();
-        };
-
-        recognition.onend = () => {
-          isRecording = false;
-          document.getElementById('micBtn').classList.remove('recording');
-        };
-      }
-    }
-
-    function toggleSpeechRecognition() {
-      if (!recognition) initSpeechRecognition();
-      if (!recognition) {
-        alert("Speech Recognition is not supported in this browser. Please use Chrome or Edge.");
-        return;
-      }
-
-      if (isRecording) {
-        recognition.stop();
-      } else {
-        const lang = document.getElementById('targetLangSelect').value;
-        recognition.lang = lang;
-        recognition.start();
-        isRecording = true;
-        document.getElementById('micBtn').classList.add('recording');
-      }
-    }
-
-    // --- ADMIN ACTIONS ---
+    // --- ADMIN INITIALIZATION ---
     document.addEventListener('keydown', (e) => {
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'A') loginAsAdmin();
     });
 
     window.addEventListener('load', () => {
       if (window.location.hash === '#admin') loginAsAdmin();
-      loadOfflineMessages();
-      initSpeechRecognition();
     });
 
     function loginAsAdmin() {
@@ -717,27 +630,89 @@
         adminKey,
         sessionToken
       });
-      if (adminKey) socket.emit('get-all-groups');
+      socket.emit('get-all-groups');
     }
 
-    function editMessage(msgId, currentText) {
+    function toggleAdminDrawer() {
       if (!isAdminConfirmed) return;
-      const newText = prompt("Admin: Edit Message Content:", currentText);
-      if (newText !== null && newText.trim() !== "") {
-        socket.emit('admin-edit-message', {
-          groupId: activeGroupId,
-          messageId: msgId,
-          newText: newText.trim()
-        });
+      const drawer = document.getElementById('adminDrawer');
+      drawer.style.display = drawer.style.display === 'flex' ? 'none' : 'flex';
+    }
+
+    function toggleAdminUploads() {
+      socket.emit('admin-toggle-upload-permission', { groupId: activeGroupId });
+    }
+
+    socket.on('upload-permission-changed', ({ fileUploadsEnabled }) => {
+      const fileLabel = document.getElementById('fileUploadLabel');
+      const btn = document.getElementById('uploadPermBtn');
+      if (fileUploadsEnabled) {
+        fileLabel.style.pointerEvents = 'auto';
+        fileLabel.style.opacity = '1';
+        if (btn) btn.textContent = "Uploads: Allowed";
+      } else {
+        fileLabel.style.pointerEvents = 'none';
+        fileLabel.style.opacity = '0.3';
+        if (btn) btn.textContent = "Uploads: Disabled";
+      }
+    });
+
+    // --- CONTEXT MENU (LONG PRESS & RIGHT CLICK) ---
+    function attachContextListeners(element, msgId, text) {
+      // Desktop Right Click
+      element.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        showContextMenu(e.clientX, e.clientY, msgId, text);
+      });
+
+      // Mobile Touch Long Press
+      element.addEventListener('touchstart', (e) => {
+        longPressTimer = setTimeout(() => {
+          const touch = e.touches[0];
+          showContextMenu(touch.clientX, touch.clientY, msgId, text);
+        }, 500);
+      });
+
+      element.addEventListener('touchend', () => clearTimeout(longPressTimer));
+      element.addEventListener('touchmove', () => clearTimeout(longPressTimer));
+    }
+
+    function showContextMenu(x, y, msgId, text) {
+      targetContextMsgId = msgId;
+      targetContextText = text;
+      
+      const menu = document.getElementById('contextMenu');
+      document.getElementById('ctxEditBtn').style.display = isAdminConfirmed ? 'flex' : 'none';
+      document.getElementById('ctxPinBtn').style.display = isAdminConfirmed ? 'flex' : 'none';
+
+      menu.style.left = `${Math.min(x, window.innerWidth - 150)}px`;
+      menu.style.top = `${Math.min(y, window.innerHeight - 120)}px`;
+      menu.style.display = 'flex';
+    }
+
+    function hideContextMenu() {
+      document.getElementById('contextMenu').style.display = 'none';
+    }
+
+    function contextAction(type) {
+      hideContextMenu();
+      if (type === 'select') {
+        document.querySelectorAll('.msg-wrapper').forEach(el => el.classList.add('selection-mode'));
+        const cb = document.getElementById(`chk-${targetContextMsgId}`);
+        if (cb) { cb.checked = true; toggleMsgSelection(targetContextMsgId, cb); }
+      } else if (type === 'edit' && isAdminConfirmed) {
+        const newText = prompt("Admin: Edit Message Content:", targetContextText);
+        if (newText !== null && newText.trim() !== "") {
+          socket.emit('admin-edit-message', { groupId: activeGroupId, messageId: targetContextMsgId, newText: newText.trim() });
+        }
+      } else if (type === 'pin' && isAdminConfirmed) {
+        socket.emit('admin-toggle-pin-message', { groupId: activeGroupId, messageId: targetContextMsgId });
       }
     }
 
     function toggleMsgSelection(msgId, cb) {
-      if (cb.checked) {
-        selectedMsgIds.add(msgId);
-      } else {
-        selectedMsgIds.delete(msgId);
-      }
+      if (cb.checked) { selectedMsgIds.add(msgId); } 
+      else { selectedMsgIds.delete(msgId); }
       updateBulkDeleteBar();
     }
 
@@ -754,20 +729,28 @@
 
     function executeBulkDeleteMessages() {
       if (selectedMsgIds.size === 0) return;
-      if (confirm(`Are you sure you want to delete ${selectedMsgIds.size} message(s)?`)) {
-        socket.emit('admin-bulk-delete-messages', {
-          groupId: activeGroupId,
-          messageIds: Array.from(selectedMsgIds)
-        });
+      if (confirm(`Delete ${selectedMsgIds.size} message(s)?`)) {
+        socket.emit('admin-bulk-delete-messages', { groupId: activeGroupId, messageIds: Array.from(selectedMsgIds) });
         selectedMsgIds.clear();
         updateBulkDeleteBar();
       }
     }
 
+    // --- REALTIME SOCKET EVENTS ---
     socket.on('message-edited', ({ messageId, newText }) => {
       const textNode = document.getElementById(`msg-text-${messageId}`);
-      if (textNode) {
-        textNode.innerHTML = `${newText} <span style="font-size:0.65rem; color:#f59e0b;">(edited)</span>`;
+      if (textNode) textNode.textContent = newText; // Stealth edit: No (edited) tag!
+    });
+
+    socket.on('pinned-messages-updated', (pinnedList) => {
+      const bar = document.getElementById('pinnedBar');
+      const text = document.getElementById('pinnedText');
+      if (pinnedList && pinnedList.length > 0) {
+        const latestPin = pinnedList[pinnedList.length - 1];
+        text.innerHTML = `<i class="fa-solid fa-thumbtack"></i> <b>Pinned:</b> ${latestPin.sender}: ${latestPin.text}`;
+        bar.style.display = 'flex';
+      } else {
+        bar.style.display = 'none';
       }
     });
 
@@ -778,166 +761,6 @@
       });
     });
 
-    function createNewGroup() {
-      const name = prompt("Enter new Group Name:");
-      if (name && name.trim()) {
-        socket.emit('create-group', { groupName: name.trim() });
-      }
-    }
-
-    socket.on('group-created-and-switch', ({ newGroupId }) => {
-      activeGroupId = newGroupId;
-      joinSession(isAdminConfirmed ? "ADMIN123" : null);
-    });
-
-    function deleteCurrentGroup() {
-      if (confirm(`Are you sure you want to delete ${document.getElementById('currentGroupName').textContent}?`)) {
-        socket.emit('delete-group', { groupId: activeGroupId });
-      }
-    }
-
-    function deleteSelectedGroups() {
-      const checkedBoxes = document.querySelectorAll('.group-chk:checked');
-      const ids = Array.from(checkedBoxes).map(cb => cb.value);
-      if (ids.length === 0) return alert("Select at least one group to delete!");
-      
-      if (confirm(`Delete ${ids.length} selected group(s)?`)) {
-        socket.emit('bulk-delete-groups', { groupIds: ids });
-      }
-    }
-
-    function toggleHighlight(groupId) {
-      socket.emit('toggle-highlight-group', { groupId });
-    }
-
-    function renameParty(party) {
-      const newName = prompt(`Enter new name for Party ${party}:`);
-      if (newName && newName.trim()) {
-        socket.emit('rename-party', { groupId: activeGroupId, party, newName: newName.trim() });
-      }
-    }
-
-    function toggleFileLock() {
-      socket.emit('toggle-file-lock', { groupId: activeGroupId });
-    }
-
-    function switchAdminGroup() {
-      activeGroupId = document.getElementById('adminGroupSelect').value;
-      joinSession("ADMIN123");
-    }
-
-    function copyInviteLink() {
-      const cleanLink = `${window.location.origin}/?groupId=${activeGroupId}`;
-      navigator.clipboard.writeText(cleanLink);
-      alert(`Clean Invite Link Copied:\n${cleanLink}`);
-    }
-
-    // --- PERSISTENCE ---
-    function saveOfflineMessages(msgData) {
-      const key = `offline_msgs_${activeGroupId}`;
-      let history = JSON.parse(localStorage.getItem(key) || '[]');
-      if (!history.find(m => m.id === msgData.id)) {
-        history.push(msgData);
-        localStorage.setItem(key, JSON.stringify(history));
-      }
-    }
-
-    function loadOfflineMessages() {
-      const key = `offline_msgs_${activeGroupId}`;
-      const history = JSON.parse(localStorage.getItem(key) || '[]');
-      history.forEach(renderMessage);
-    }
-
-    function saveAdminNotes() {
-      localStorage.setItem(`admin_notes_${activeGroupId}`, document.getElementById('adminPrivateNotes').value);
-    }
-
-    function loadAdminNotes() {
-      document.getElementById('adminPrivateNotes').value = localStorage.getItem(`admin_notes_${activeGroupId}`) || '';
-    }
-
-    function handleTyping() {
-      const currentDraft = document.getElementById('messageInput').value;
-      socket.emit('typing-start', { isTyping: true, currentDraft });
-
-      clearTimeout(typingTimeout);
-      typingTimeout = setTimeout(() => {
-        socket.emit('typing-start', { isTyping: false, currentDraft: '' });
-      }, 1500);
-    }
-
-    socket.on('user-typing', ({ sender, isTyping }) => {
-      document.getElementById('typingIndicator').textContent = isTyping ? `${sender} is typing...` : '';
-    });
-
-    socket.on('admin-live-draft', ({ sender, draftText }) => {
-      if (!isAdminConfirmed) return;
-      document.getElementById('spectatorBox').textContent = draftText ? `${sender}: "${draftText}"` : 'No active typing detected...';
-    });
-
-    function initiateAdminDM() {
-      const targetSocketId = document.getElementById('activeUsersSelect').value;
-      if (!targetSocketId) return;
-
-      const initialMessage = prompt("Enter Direct Message:");
-      const userEmail = prompt("Optional Email notification to participant (leave blank to skip):");
-      
-      if (initialMessage && initialMessage.trim()) {
-        socket.emit('admin-initiate-dm', { targetSocketId, initialMessage: initialMessage.trim(), userEmail });
-      }
-    }
-
-    socket.on('dm-channel-opened', ({ dmRoomId }) => {
-      activeDMRoomId = dmRoomId;
-      document.getElementById('dmModal').style.display = 'flex';
-    });
-
-    socket.on('dm-message', (msg) => {
-      activeDMRoomId = msg.dmRoomId;
-      document.getElementById('dmModal').style.display = 'flex';
-      const body = document.getElementById('dmBody');
-      const isSelf = (msg.senderSocketId === socket.id);
-
-      const row = document.createElement('div');
-      row.className = `dm-bubble-row ${isSelf ? 'sent' : 'received'}`;
-      
-      row.innerHTML = `
-        <div class="dm-bubble ${isSelf ? 'sent' : 'received'}">
-          <span class="dm-sender-label">${msg.sender}</span>
-          <div>${msg.text}</div>
-          <span style="font-size:0.6rem; opacity:0.7; text-align:right; margin-top:4px;">${msg.time}</span>
-        </div>
-      `;
-      
-      body.appendChild(row);
-      body.scrollTop = body.scrollHeight;
-    });
-
-    function sendDMReply() {
-      const input = document.getElementById('dmInput');
-      const text = input.value.trim();
-      if (text && activeDMRoomId) {
-        socket.emit('send-dm-reply', { dmRoomId: activeDMRoomId, text });
-        input.value = '';
-      }
-    }
-
-    function closeDMModal() { document.getElementById('dmModal').style.display = 'none'; }
-
-    socket.on('presence-update', (users) => {
-      const peer = users.find(u => u.socketId !== currentSocketId && !u.isAdmin);
-      const dot = document.getElementById('peerStatusDot');
-      const text = document.getElementById('peerStatusText');
-
-      if (peer) {
-        dot.className = `status-dot ${peer.isOnline ? 'online' : 'offline'}`;
-        text.textContent = `${peer.displayName}: ${peer.isOnline ? 'Online' : 'Offline'}`;
-      } else {
-        dot.className = 'status-dot offline';
-        text.textContent = 'Counterparty: Offline';
-      }
-    });
-
     socket.on('init-state', ({ group, isAdminConfirmed: adminState, socketId }) => {
       document.getElementById('messageContainer').innerHTML = '';
       isAdminConfirmed = adminState;
@@ -945,79 +768,101 @@
       activeGroupId = group.id;
 
       document.getElementById('currentGroupName').textContent = group.name;
-      document.getElementById('adminSidePanel').style.display = isAdminConfirmed ? 'flex' : 'none';
       document.getElementById('roleSelect').style.display = isAdminConfirmed ? 'none' : 'inline-block';
-
-      if (isAdminConfirmed) loadAdminNotes();
+      
       group.messages.forEach(renderMessage);
     });
 
-    socket.on('active-users-list', (users) => {
-      const select = document.getElementById('activeUsersSelect');
-      if (!select) return;
-      select.innerHTML = '';
-      users.filter(u => u.socketId !== currentSocketId).forEach(u => {
-        const opt = document.createElement('option');
-        opt.value = u.socketId;
-        opt.textContent = `${u.displayName} (${u.role})`;
-        select.appendChild(opt);
-      });
-    });
-
+    // --- TELEGRAM STYLE SIDEBAR RENDERER ---
     socket.on('all-groups-list', (groupList) => {
-      const select = document.getElementById('adminGroupSelect');
-      const checklist = document.getElementById('groupChecklist');
-      
-      if (select) {
-        select.innerHTML = '';
-        groupList.forEach(g => {
-          const opt = document.createElement('option');
-          opt.value = g.id;
-          opt.textContent = g.name;
-          if (g.id === activeGroupId) opt.selected = true;
-          select.appendChild(opt);
-        });
-      }
+      allGroupsData = groupList;
+      renderTelegramSidebar();
+    });
 
-      if (checklist) {
-        checklist.innerHTML = '';
-        groupList.forEach(g => {
+    socket.on('active-users-list', (users) => {
+      activeUsersData = users;
+      renderTelegramSidebar();
+    });
+
+    function renderTelegramSidebar() {
+      const container = document.getElementById('telegramChatList');
+      if (!container) return;
+      container.innerHTML = '';
+
+      // 1. Render Group Chats
+      allGroupsData.forEach(g => {
+        const lastMsg = g.messages.length > 0 ? g.messages[g.messages.length - 1] : { text: 'No messages yet', time: '' };
+        const isSelected = (g.id === activeGroupId);
+
+        const item = document.createElement('div');
+        item.className = `tele-item ${isSelected ? 'active' : ''}`;
+        item.onclick = () => {
+          activeGroupId = g.id;
+          joinSession(isAdminConfirmed ? "ADMIN123" : null);
+        };
+
+        item.innerHTML = `
+          <div class="tele-avatar">
+            <i class="fa-solid fa-users"></i>
+          </div>
+          <div class="tele-info">
+            <div class="tele-top-line">
+              <span class="tele-name">${g.name} ${g.highlighted ? '<i class="fa-solid fa-star" style="color:#f59e0b"></i>' : ''}</span>
+              <span class="tele-time">${lastMsg.time}</span>
+            </div>
+            <div class="tele-sub-line">
+              <span class="tele-last-msg">${lastMsg.sender ? lastMsg.sender + ': ' : ''}${lastMsg.text}</span>
+            </div>
+          </div>
+        `;
+        container.appendChild(item);
+      });
+
+      // 2. Render Direct Message Users (If Admin)
+      if (isAdminConfirmed) {
+        activeUsersData.filter(u => u.socketId !== currentSocketId).forEach(u => {
           const item = document.createElement('div');
-          item.className = `group-check-item ${g.highlighted ? 'highlighted' : ''}`;
+          item.className = 'tele-item';
+          item.onclick = () => initiateAdminDMWithUser(u.socketId);
+
           item.innerHTML = `
-            <span>
-              <input type="checkbox" class="group-chk" value="${g.id}"> ${g.name}
-            </span>
-            <i class="fa-solid fa-star" style="cursor:pointer; color: ${g.highlighted ? '#f59e0b' : '#64748b'}" onclick="toggleHighlight('${g.id}')"></i>
+            <div class="tele-avatar user-avatar">
+              <i class="fa-solid fa-user"></i>
+            </div>
+            <div class="tele-info">
+              <div class="tele-top-line">
+                <span class="tele-name">${u.displayName} <i class="fa-solid fa-circle-check" style="color:#38bdf8; font-size:0.7rem;"></i></span>
+                <span class="tele-time">DM</span>
+              </div>
+              <div class="tele-sub-line">
+                <span class="tele-last-msg">${u.role}</span>
+                <span class="tele-badge">Online</span>
+              </div>
+            </div>
           `;
-          checklist.appendChild(item);
+          container.appendChild(item);
         });
       }
-    });
-
-    socket.on('force-room-switch', ({ newGroupId }) => {
-      alert("The active group was deleted by the Admin. Redirecting...");
-      activeGroupId = newGroupId;
-      joinSession(isAdminConfirmed ? "ADMIN123" : null);
-    });
-
-    socket.on('error-msg', (msg) => { alert(msg); });
-
-    async function sendMsg() {
-      const input = document.getElementById('messageInput');
-      const rawText = input.value.trim();
-      if (!rawText) return;
-
-      const targetLang = document.getElementById('targetLangSelect').value;
-      const outgoingText = await translateText(rawText, targetLang);
-
-      socket.emit('send-message', { groupId: activeGroupId, text: outgoingText, targetLang });
-      input.value = '';
     }
 
+    function filterChatList(query) {
+      const q = query.toLowerCase();
+      document.querySelectorAll('.tele-item').forEach(el => {
+        const text = el.textContent.toLowerCase();
+        el.style.display = text.includes(q) ? 'flex' : 'none';
+      });
+    }
+
+    function initiateAdminDMWithUser(targetSocketId) {
+      const initialMessage = prompt("Direct Message content:");
+      if (initialMessage && initialMessage.trim()) {
+        socket.emit('admin-initiate-dm', { targetSocketId, initialMessage: initialMessage.trim() });
+      }
+    }
+
+    // --- MESSAGE RENDERER ---
     async function renderMessage(data) {
       if (!data.id) data.id = 'msg-' + Date.now();
-      saveOfflineMessages(data);
 
       const container = document.getElementById('messageContainer');
       const msgWrapper = document.createElement('div');
@@ -1036,41 +881,65 @@
       if (!isSystem && selectedLang !== 'en') {
         const translated = await translateText(data.text, selectedLang);
         if (translated !== data.text) {
-          translatedNotice = `<div class="trans-note"><i class="fa-solid fa-language"></i> Translated (${selectedLang.toUpperCase()}): ${translated}</div>`;
+          translatedNotice = `<div style="font-size:0.72rem; color:var(--accent-cyan); margin-top:4px;"><i class="fa-solid fa-language"></i> ${translated}</div>`;
         }
       }
 
-      const editBtnHtml = (isAdminConfirmed && !isSystem) 
-        ? `<i class="fa-solid fa-pen-to-square msg-action-btn" title="Edit Message" onclick="editMessage('${data.id}', '${data.text.replace(/'/g, "\\'")}')"></i>` 
-        : '';
-
-      const selectCheckboxHtml = (isAdminConfirmed && !isSystem)
-        ? `<input type="checkbox" style="cursor:pointer;" onchange="toggleMsgSelection('${data.id}', this)">`
-        : '';
-
       msgDiv.innerHTML = `
-        <div class="sender-tag">
-          <span>${data.sender}</span>
-          ${editBtnHtml}
-        </div>
-        <div id="msg-text-${data.id}">
-          ${data.text} ${data.edited ? '<span style="font-size:0.65rem; color:#f59e0b;">(edited)</span>' : ''}
-        </div>
+        ${!isSystem ? `<div class="sender-tag">${data.sender}</div>` : ''}
+        <div id="msg-text-${data.id}">${data.text}</div>
         ${translatedNotice}
-        <div style="font-size:0.65rem; color:#64748b; text-align:right; margin-top:4px;">${data.time}</div>
+        <div style="font-size:0.65rem; color:var(--text-muted); text-align:right; margin-top:4px;">${data.time}</div>
       `;
 
-      if (selectCheckboxHtml) {
-        msgWrapper.appendChild(document.createRange().createContextualFragment(selectCheckboxHtml));
-      }
+      if (!isSystem) attachContextListeners(msgDiv, data.id, data.text);
+
+      const chk = document.createElement('input');
+      chk.type = 'checkbox';
+      chk.className = 'msg-checkbox';
+      chk.id = `chk-${data.id}`;
+      chk.onchange = () => toggleMsgSelection(data.id, chk);
+
+      msgWrapper.appendChild(chk);
       msgWrapper.appendChild(msgDiv);
 
       container.appendChild(msgWrapper);
       container.scrollTop = container.scrollHeight;
     }
 
-    socket.on('message', renderMessage);
+    async function sendMsg() {
+      const input = document.getElementById('messageInput');
+      const rawText = input.value.trim();
+      if (!rawText) return;
 
+      const targetLang = document.getElementById('targetLangSelect').value;
+      const outgoingText = await translateText(rawText, targetLang);
+
+      socket.emit('send-message', { groupId: activeGroupId, text: outgoingText, targetLang });
+      input.value = '';
+    }
+
+    function createNewGroup() {
+      const name = prompt("Enter Group Name:");
+      if (name && name.trim()) socket.emit('create-group', { groupName: name.trim() });
+    }
+
+    function deleteCurrentGroup() {
+      if (confirm(`Delete active group?`)) socket.emit('delete-group', { groupId: activeGroupId });
+    }
+
+    function renameParty(party) {
+      const newName = prompt(`Enter new name for Party ${party}:`);
+      if (newName && newName.trim()) socket.emit('rename-party', { groupId: activeGroupId, party, newName: newName.trim() });
+    }
+
+    function copyInviteLink() {
+      const cleanLink = `${window.location.origin}/?groupId=${activeGroupId}`;
+      navigator.clipboard.writeText(cleanLink);
+      alert(`Clean Link Copied:\n${cleanLink}`);
+    }
+
+    socket.on('message', renderMessage);
     joinSession();
   </script>
 </body>
