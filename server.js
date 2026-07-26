@@ -6,12 +6,11 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { 
   cors: { origin: "*" },
-  maxHttpBufferSize: 1e7 // Allow file transfers up to 10MB
+  maxHttpBufferSize: 1e7 // Up to 10MB file transfers
 });
 
 app.use(express.static('public'));
 
-// In-memory state storage for demo rooms
 const roomStates = {};
 
 function getRoomState(roomId) {
@@ -19,7 +18,11 @@ function getRoomState(roomId) {
     roomStates[roomId] = {
       messages: [],
       pinnedMessage: null,
-      fileUploadsLocked: false
+      fileUploadsLocked: false,
+      customNames: {
+        'PARTY A': 'Party A',
+        'PARTY B': 'Party B'
+      }
     };
   }
   return roomStates[roomId];
@@ -28,7 +31,6 @@ function getRoomState(roomId) {
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
 
-  // User joins room
   socket.on('join-room', ({ roomId, role }) => {
     socket.join(roomId);
     socket.role = role;
@@ -36,35 +38,37 @@ io.on('connection', (socket) => {
 
     const state = getRoomState(roomId);
 
-    // Send room state and history to joining user
     socket.emit('init-state', {
       history: state.messages,
       pinnedMessage: state.pinnedMessage,
-      fileUploadsLocked: state.fileUploadsLocked
+      fileUploadsLocked: state.fileUploadsLocked,
+      customNames: state.customNames
     });
 
-    // Notify room
     io.to(roomId).emit('message', {
       id: Date.now().toString(),
       sender: 'SYSTEM',
-      text: `${role} has joined the workspace.`,
+      text: `${role} joined the portal session.`,
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     });
   });
 
-  // Handle incoming messages
   socket.on('send-message', ({ roomId, text, fileData, fileName }) => {
     const state = getRoomState(roomId);
 
-    // Check file upload lock for non-admin users
     if (fileData && state.fileUploadsLocked && !socket.role?.includes('ADMIN')) {
-      socket.emit('error-msg', 'File uploads are currently locked by the Administrator.');
+      socket.emit('error-msg', 'File transfers are currently restricted by Admin.');
       return;
     }
 
+    let displayName = socket.role || 'Participant';
+    if (socket.role === 'PARTY A (Buyer)') displayName = state.customNames['PARTY A'];
+    if (socket.role === 'PARTY B (Seller)') displayName = state.customNames['PARTY B'];
+
     const msg = {
       id: Date.now().toString(),
-      sender: socket.role || 'Participant',
+      sender: displayName,
+      rawRole: socket.role,
       text: text || '',
       fileData: fileData || null,
       fileName: fileName || null,
@@ -75,7 +79,36 @@ io.on('connection', (socket) => {
     io.to(roomId).emit('message', msg);
   });
 
-  // Admin Pin Message
+  // ✏️ Admin Edit Message
+  socket.on('edit-message', ({ roomId, msgId, newText }) => {
+    if (!socket.role?.includes('ADMIN')) return;
+    const state = getRoomState(roomId);
+    const targetMsg = state.messages.find(m => m.id === msgId);
+    if (targetMsg) {
+      targetMsg.text = newText;
+      io.to(roomId).emit('message-edited', { msgId, newText });
+    }
+  });
+
+  // 🗑️ Admin Delete Message
+  socket.on('delete-message', ({ roomId, msgId }) => {
+    if (!socket.role?.includes('ADMIN')) return;
+    const state = getRoomState(roomId);
+    state.messages = state.messages.filter(m => m.id !== msgId);
+    io.to(roomId).emit('message-deleted', { msgId });
+  });
+
+  // 👤 Admin Rename Party
+  socket.on('rename-party', ({ roomId, targetParty, newName }) => {
+    if (!socket.role?.includes('ADMIN')) return;
+    const state = getRoomState(roomId);
+    if (targetParty === 'A') state.customNames['PARTY A'] = newName;
+    if (targetParty === 'B') state.customNames['PARTY B'] = newName;
+
+    io.to(roomId).emit('names-updated', state.customNames);
+  });
+
+  // 📌 Admin Pin Message
   socket.on('pin-message', ({ roomId, msgId }) => {
     if (!socket.role?.includes('ADMIN')) return;
     const state = getRoomState(roomId);
@@ -86,7 +119,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Admin Lock/Unlock File Uploads
+  // 🔒 Lock File Uploads
   socket.on('toggle-file-lock', ({ roomId }) => {
     if (!socket.role?.includes('ADMIN')) return;
     const state = getRoomState(roomId);
@@ -94,7 +127,7 @@ io.on('connection', (socket) => {
     io.to(roomId).emit('file-lock-updated', state.fileUploadsLocked);
   });
 
-  // Admin Kick Participant
+  // 🚫 Kick Participant
   socket.on('kick-participant', ({ roomId, targetRole }) => {
     if (!socket.role?.includes('ADMIN')) return;
 
@@ -103,7 +136,7 @@ io.on('connection', (socket) => {
       for (const socketId of socketsInRoom) {
         const clientSocket = io.sockets.sockets.get(socketId);
         if (clientSocket && clientSocket.role === targetRole) {
-          clientSocket.emit('kicked', 'You have been disconnected by the Workspace Administrator.');
+          clientSocket.emit('kicked', 'Session terminated by Administrator.');
           clientSocket.leave(roomId);
           clientSocket.disconnect(true);
         }
@@ -113,7 +146,7 @@ io.on('connection', (socket) => {
     io.to(roomId).emit('message', {
       id: Date.now().toString(),
       sender: 'SYSTEM',
-      text: `${targetRole} was removed from the session by the Administrator.`,
+      text: `${targetRole} was disconnected by Administrator.`,
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     });
   });
