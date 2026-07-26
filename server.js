@@ -1,343 +1,245 @@
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
+const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, { 
-  cors: { origin: "*" },
-  maxHttpBufferSize: 1e7 // 10MB Limit
+const io = new Server(server, {
+  cors: { origin: "*" }
 });
 
-app.use(express.static('public'));
+app.use(express.static(path.join(__dirname, 'public')));
 
-const ADMIN_SECRET = process.env.ADMIN_SECRET || 'ADMIN123';
-const ADMIN_SESSION_TIMEOUT_MS = 2 * 60 * 60 * 1000; // 2 Hours
+// Admin Passkey
+const ADMIN_PASSKEY = "ADMIN123";
 
-// Global Registries
-const groups = {
+// In-Memory Data Store
+let groups = {
   "default-group": {
     id: "default-group",
     name: "General Transaction Group #1",
     messages: [],
+    customNames: { A: "Buyer (Party A)", B: "Seller (Party B)" },
     pinnedMessage: null,
-    fileUploadsLocked: false,
-    customNames: {
-      'PARTY A': 'Party A (Buyer)',
-      'PARTY B': 'Party B (Seller)'
-    }
+    fileLocked: false
   }
 };
 
-// Store active DMs: { dmId: { participants: [socketId1, socketId2], messages: [] } }
-const directMessages = {};
-// Store user online statuses: { userId/socketId: { role, groupId, isOnline, email, lastActive } }
-const userPresence = {};
-
-function getOrCreateGroup(groupId, groupName) {
-  if (!groups[groupId]) {
-    groups[groupId] = {
-      id: groupId,
-      name: groupName || `Transaction Group #${groupId}`,
-      messages: [],
-      pinnedMessage: null,
-      fileUploadsLocked: false,
-      customNames: {
-        'PARTY A': 'Party A (Buyer)',
-        'PARTY B': 'Party B (Seller)'
-      }
-    };
-  }
-  return groups[groupId];
-}
-
-// Utility: Trigger Email Notification for Offline Users (Integration Hook)
-function sendOfflineEmailNotification(userEmail, senderName, messageText) {
-  console.log(`[EMAIL DISPATCH] Alert sent to ${userEmail}: New message from ${senderName}: "${messageText.substring(0, 30)}..."`);
-  // Integrate Nodemailer / SendGrid here
-}
+let activeSockets = {}; // Tracks socketId -> user details
 
 io.on('connection', (socket) => {
-  console.log('Client connected:', socket.id);
 
-  function resetAdminTimeout() {
-    if (socket.adminTimer) clearTimeout(socket.adminTimer);
-    if (socket.isAdmin) {
-      socket.adminTimer = setTimeout(() => {
-        socket.isAdmin = false;
-        socket.role = 'PARTY A';
-        socket.emit('admin-session-expired', 'Your Admin session expired after 2 hours of inactivity.');
-        
-        const grp = getOrCreateGroup(socket.groupId);
-        socket.emit('init-state', {
-          group: grp,
-          isAdminConfirmed: false
-        });
-      }, ADMIN_SESSION_TIMEOUT_MS);
-    }
-  }
-
-  // Join Specific Group
-  socket.on('join-room', ({ groupId, groupName, role, adminKey, sessionToken, userEmail }) => {
-    const targetGroupId = groupId || "default-group";
-    const grp = getOrCreateGroup(targetGroupId, groupName);
-
-    socket.userEmail = userEmail || null;
-    socket.sessionToken = sessionToken || socket.id;
-
-    if (role === 'ADMINISTRATOR') {
-      if (adminKey && adminKey === ADMIN_SECRET) {
-        socket.isAdmin = true;
-        socket.role = 'ADMINISTRATOR';
-        resetAdminTimeout();
-      } else {
-        socket.emit('auth-failed', 'Access Denied: Invalid Administrator Credentials.');
-        return;
-      }
-    } else {
-      socket.isAdmin = false;
-      socket.role = role || 'PARTY A';
+  // 1. Join Room & Authenticate
+  socket.on('join-room', ({ groupId, role, adminKey, sessionToken }) => {
+    // Ensure group exists
+    if (!groups[groupId]) {
+      groups[groupId] = {
+        id: groupId,
+        name: `Transaction Group #${Object.keys(groups).length + 1}`,
+        messages: [],
+        customNames: { A: "Buyer (Party A)", B: "Seller (Party B)" },
+        pinnedMessage: null,
+        fileLocked: false
+      };
     }
 
-    if (socket.groupId) socket.leave(socket.groupId);
+    const isAdmin = (adminKey === ADMIN_PASSKEY);
+    const displayName = isAdmin 
+      ? "Desk Officer (Admin)" 
+      : (role === "PARTY A" ? groups[groupId].customNames.A : groups[groupId].customNames.B);
 
-    socket.join(targetGroupId);
-    socket.groupId = targetGroupId;
+    // Leave previous rooms
+    socket.rooms.forEach(r => { if(r !== socket.id) socket.leave(r); });
 
-    // Track Presence
-    userPresence[socket.id] = {
+    socket.join(groupId);
+
+    activeSockets[socket.id] = {
       socketId: socket.id,
-      groupId: targetGroupId,
-      role: socket.role,
-      isAdmin: socket.isAdmin,
-      isOnline: true,
-      displayName: socket.isAdmin ? 'Transaction Officer' : (grp.customNames[socket.role] || socket.role)
+      groupId,
+      role,
+      displayName,
+      isAdmin,
+      sessionToken,
+      isOnline: true
     };
 
-    const displayName = userPresence[socket.id].displayName;
-
+    // Send Init State to Joining Client
     socket.emit('init-state', {
-      group: grp,
-      isAdminConfirmed: socket.isAdmin,
+      group: groups[groupId],
+      isAdminConfirmed: isAdmin,
       socketId: socket.id
     });
 
-    // Broadcast presence update
-    io.to(targetGroupId).emit('presence-update', Object.values(userPresence).filter(p => p.groupId === targetGroupId));
-
-    io.to(targetGroupId).emit('message', {
-      id: Date.now().toString(),
+    // Notify Group of Connection
+    io.to(groupId).emit('message', {
       sender: 'SYSTEM',
       text: `${displayName} connected.`,
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     });
+
+    broadcastPresence(groupId);
+    broadcastActiveUsers();
   });
 
-  // Admin: Get List of All Active Groups & Online Users
-  socket.on('get-all-groups', () => {
-    if (!socket.isAdmin) return;
-    const groupList = Object.values(groups).map(g => ({ id: g.id, name: g.name }));
-    socket.emit('all-groups-list', groupList);
-    socket.emit('active-users-list', Object.values(userPresence));
-  });
+  // 2. Message Handling
+  socket.on('send-message', ({ groupId, text }) => {
+    const user = activeSockets[socket.id];
+    if (!user) return;
 
-  // Admin: Create New Group
-  socket.on('create-group', ({ groupName }) => {
-    if (!socket.isAdmin) return;
-    const newId = 'grp-' + Math.random().toString(36).substring(2, 9);
-    const grp = getOrCreateGroup(newId, groupName);
-
-    const groupList = Object.values(groups).map(g => ({ id: g.id, name: g.name }));
-    io.emit('all-groups-list', groupList);
-    socket.emit('group-created', { id: newId, name: grp.name });
-  });
-
-  socket.on('ping-activity', () => {
-    if (socket.isAdmin) resetAdminTimeout();
-  });
-
-  // Typing Indicators & Admin Spectator Mode
-  socket.on('typing-start', ({ isTyping, currentDraft }) => {
-    if (socket.groupId) {
-      const grp = getOrCreateGroup(socket.groupId);
-      const senderName = socket.isAdmin ? 'Transaction Officer' : (grp.customNames[socket.role] || socket.role);
-      
-      // Public typing alert
-      socket.to(socket.groupId).emit('user-typing', { socketId: socket.id, sender: senderName, isTyping });
-
-      // Admin Spectator Mode (Feature 6i): Stream live draft to Admin only
-      if (!socket.isAdmin) {
-        io.to(socket.groupId).emit('admin-live-draft', {
-          socketId: socket.id,
-          sender: senderName,
-          draftText: currentDraft || ''
-        });
-      }
-    }
-  });
-
-  // Direct Messaging (Feature 4: Admin Initiates DMs)
-  socket.on('admin-initiate-dm', ({ targetSocketId, initialMessage }) => {
-    if (!socket.isAdmin) return;
-
-    const targetSocket = io.sockets.sockets.get(targetSocketId);
-    if (!targetSocket) {
-      socket.emit('error-msg', 'Target user is no longer connected.');
-      return;
-    }
-
-    const dmRoomId = `dm-${socket.id}-${targetSocketId}`;
-    socket.join(dmRoomId);
-    targetSocket.join(dmRoomId);
-
-    const dmMsg = {
-      id: Date.now().toString(),
-      sender: 'TRANSACTION OFFICER (ADMIN)',
-      senderSocketId: socket.id,
-      text: initialMessage,
-      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      dmRoomId
-    };
-
-    io.to(dmRoomId).emit('dm-message', dmMsg);
-    targetSocket.emit('dm-channel-opened', { dmRoomId, adminName: 'Transaction Officer' });
-  });
-
-  socket.on('send-dm-reply', ({ dmRoomId, text }) => {
-    const dmMsg = {
-      id: Date.now().toString(),
-      sender: userPresence[socket.id]?.displayName || socket.role,
-      senderSocketId: socket.id,
-      text,
-      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      dmRoomId
-    };
-    io.to(dmRoomId).emit('dm-message', dmMsg);
-  });
-
-  // Public Group Message Dispatch
-  socket.on('send-message', ({ groupId, text, englishOriginal, language, fileData, fileName }) => {
-    const grp = getOrCreateGroup(groupId);
-
-    if (socket.isAdmin) resetAdminTimeout();
-
-    if (fileData && grp.fileUploadsLocked && !socket.isAdmin) {
-      socket.emit('error-msg', 'File transfers are currently locked by the Administrator.');
-      return;
-    }
-
-    const senderName = socket.isAdmin 
-      ? 'TRANSACTION OFFICER' 
-      : (grp.customNames[socket.role] || socket.role);
-
-    const msg = {
-      id: Date.now().toString(),
-      senderRole: socket.role,
-      sender: senderName,
-      text: text || '',
-      englishOriginal: englishOriginal || text || '',
-      language: language || 'en',
-      fileData: fileData || null,
-      fileName: fileName || null,
+    const msgData = {
+      id: 'msg-' + Date.now(),
+      sender: user.displayName,
+      senderRole: user.role,
+      text: text,
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
 
-    grp.messages.push(msg);
-    io.to(groupId).emit('message', msg);
+    groups[groupId].messages.push(msgData);
+    io.to(groupId).emit('message', msgData);
+  });
 
-    // Check for offline participants in the room to dispatch emails
-    Object.values(userPresence).forEach(user => {
-      if (user.groupId === groupId && !user.isOnline && user.email) {
-        sendOfflineEmailNotification(user.email, senderName, text);
+  // 3. ADMIN: Create New Group
+  socket.on('create-group', () => {
+    const newId = 'group-' + Date.now();
+    const groupNum = Object.keys(groups).length + 1;
+    groups[newId] = {
+      id: newId,
+      name: `General Transaction Group #${groupNum}`,
+      messages: [],
+      customNames: { A: "Buyer (Party A)", B: "Seller (Party B)" },
+      pinnedMessage: null,
+      fileLocked: false
+    };
+
+    io.emit('all-groups-list', Object.values(groups));
+  });
+
+  // 4. ADMIN: Delete Group
+  socket.on('delete-group', ({ groupId }) => {
+    if (Object.keys(groups).length <= 1) {
+      socket.emit('error-msg', "Cannot delete the last remaining group!");
+      return;
+    }
+
+    delete groups[groupId];
+    
+    // Broadcast updated groups list to admins
+    io.emit('all-groups-list', Object.values(groups));
+
+    // Redirect active users in the deleted room to remaining default group
+    const remainingGroup = Object.keys(groups)[0];
+    io.to(groupId).emit('force-room-switch', { newGroupId: remainingGroup });
+  });
+
+  // 5. ADMIN: Rename Parties
+  socket.on('rename-party', ({ groupId, party, newName }) => {
+    if (groups[groupId]) {
+      groups[groupId].customNames[party] = newName;
+
+      // Update names across active sockets in this room
+      Object.values(activeSockets).forEach(u => {
+        if (u.groupId === groupId) {
+          if (party === 'A' && u.role === 'PARTY A') u.displayName = newName;
+          if (party === 'B' && u.role === 'PARTY B') u.displayName = newName;
+        }
+      });
+
+      io.to(groupId).emit('init-state', {
+        group: groups[groupId],
+        isAdminConfirmed: activeSockets[socket.id]?.isAdmin || false,
+        socketId: socket.id
+      });
+      broadcastPresence(groupId);
+    }
+  });
+
+  // 6. ADMIN: Toggle File Lock
+  socket.on('toggle-file-lock', ({ groupId }) => {
+    if (groups[groupId]) {
+      groups[groupId].fileLocked = !groups[groupId].fileLocked;
+      io.to(groupId).emit('file-lock-status', { fileLocked: groups[groupId].fileLocked });
+    }
+  });
+
+  // 7. Live Typing & Spectator Draft
+  socket.on('typing-start', ({ isTyping, currentDraft }) => {
+    const user = activeSockets[socket.id];
+    if (!user) return;
+
+    socket.to(user.groupId).emit('user-typing', { sender: user.displayName, isTyping });
+
+    // Send unsent draft directly to Admin
+    Object.values(activeSockets).forEach(u => {
+      if (u.isAdmin && u.groupId === user.groupId) {
+        io.to(u.socketId).emit('admin-live-draft', { sender: user.displayName, draftText: currentDraft });
       }
     });
   });
 
-  socket.on('rename-party', ({ groupId, targetParty, newName }) => {
-    if (!socket.isAdmin) return;
-    resetAdminTimeout();
+  // 8. ADMIN: Direct Messaging
+  socket.on('admin-initiate-dm', ({ targetSocketId, initialMessage }) => {
+    const dmRoomId = `dm-${socket.id}-${targetSocketId}`;
+    
+    socket.emit('dm-channel-opened', { dmRoomId });
+    io.to(targetSocketId).emit('dm-channel-opened', { dmRoomId });
 
-    const grp = getOrCreateGroup(groupId);
-    const partyKey = targetParty === 'A' ? 'PARTY A' : 'PARTY B';
-    grp.customNames[partyKey] = newName;
+    const msgPayload = {
+      dmRoomId,
+      sender: "Desk Officer (Admin)",
+      text: initialMessage,
+      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    };
 
-    grp.messages.forEach(m => {
-      if (m.senderRole === partyKey) m.sender = newName;
-    });
-
-    io.to(groupId).emit('names-updated', {
-      customNames: grp.customNames,
-      history: grp.messages
-    });
+    socket.emit('dm-message', msgPayload);
+    io.to(targetSocketId).emit('dm-message', msgPayload);
   });
 
-  socket.on('edit-message', ({ groupId, msgId, newText }) => {
-    if (!socket.isAdmin) return;
-    resetAdminTimeout();
+  socket.on('send-dm-reply', ({ dmRoomId, text }) => {
+    const user = activeSockets[socket.id];
+    const msgPayload = {
+      dmRoomId,
+      sender: user ? user.displayName : "User",
+      text,
+      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    };
 
-    const grp = getOrCreateGroup(groupId);
-    const targetMsg = grp.messages.find(m => m.id === msgId);
-    if (targetMsg) {
-      targetMsg.text = newText;
-      targetMsg.englishOriginal = newText;
-      io.to(groupId).emit('message-edited', { msgId, newText });
-    }
+    io.emit('dm-message', msgPayload);
   });
 
-  socket.on('delete-message', ({ groupId, msgIds }) => {
-    if (!socket.isAdmin) return;
-    resetAdminTimeout();
-
-    const grp = getOrCreateGroup(groupId);
-    const idsToDelete = Array.isArray(msgIds) ? msgIds : [msgIds];
-    grp.messages = grp.messages.filter(m => !idsToDelete.includes(m.id));
-    io.to(groupId).emit('messages-deleted', { msgIds: idsToDelete });
+  // 9. Fetch All Groups List
+  socket.on('get-all-groups', () => {
+    socket.emit('all-groups-list', Object.values(groups));
   });
 
-  socket.on('pin-message', ({ groupId, msgId }) => {
-    if (!socket.isAdmin) return;
-    resetAdminTimeout();
-
-    const grp = getOrCreateGroup(groupId);
-    const targetMsg = grp.messages.find(m => m.id === msgId);
-    if (targetMsg) {
-      grp.pinnedMessage = targetMsg;
-      io.to(groupId).emit('update-pinned', grp.pinnedMessage);
-    }
-  });
-
-  socket.on('toggle-file-lock', ({ groupId }) => {
-    if (!socket.isAdmin) return;
-    resetAdminTimeout();
-
-    const grp = getOrCreateGroup(groupId);
-    grp.fileUploadsLocked = !grp.fileUploadsLocked;
-    io.to(groupId).emit('file-lock-updated', grp.fileUploadsLocked);
-  });
-
+  // 10. Disconnect Handling
   socket.on('disconnect', () => {
-    if (socket.adminTimer) clearTimeout(socket.adminTimer);
-    if (userPresence[socket.id]) {
-      userPresence[socket.id].isOnline = false;
-    }
-
-    if (socket.groupId && socket.role) {
-      const grp = getOrCreateGroup(socket.groupId);
-      const displayName = socket.isAdmin 
-        ? 'Transaction Administrator' 
-        : (grp.customNames[socket.role] || socket.role);
-
-      io.to(socket.groupId).emit('presence-update', Object.values(userPresence).filter(p => p.groupId === socket.groupId));
-
-      io.to(socket.groupId).emit('message', {
-        id: Date.now().toString(),
+    const user = activeSockets[socket.id];
+    if (user) {
+      user.isOnline = false;
+      io.to(user.groupId).emit('message', {
         sender: 'SYSTEM',
-        text: `${displayName} disconnected.`,
+        text: `${user.displayName} disconnected.`,
         time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       });
+      broadcastPresence(user.groupId);
+      delete activeSockets[socket.id];
+      broadcastActiveUsers();
     }
   });
+
+  function broadcastPresence(groupId) {
+    const roomUsers = Object.values(activeSockets).filter(u => u.groupId === groupId);
+    io.to(groupId).emit('presence-update', roomUsers);
+  }
+
+  function broadcastActiveUsers() {
+    const users = Object.values(activeSockets);
+    io.emit('active-users-list', users);
+  }
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`[Transaction Gateway Active] Listening on port ${PORT}`));
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
