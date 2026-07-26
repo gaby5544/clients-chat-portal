@@ -51,7 +51,7 @@
       position: relative;
     }
 
-    /* Left Admin Panel (Feature 3) */
+    /* Left Admin Panel */
     .admin-side-panel {
       width: 320px;
       background: var(--side-panel-bg);
@@ -137,6 +137,12 @@
       align-items: center;
       color: var(--accent-cyan);
       font-size: 1.2rem;
+      cursor: pointer; /* Secret admin trigger */
+      transition: all 0.2s ease;
+    }
+
+    .vault-icon:hover {
+      box-shadow: 0 0 15px rgba(56, 189, 248, 0.4);
     }
 
     .brand-title {
@@ -151,7 +157,7 @@
 
     .brand-subtitle { font-size: 0.75rem; color: var(--accent-amber); font-weight: 700; }
 
-    /* Presence Badges (Feature 5) */
+    /* Presence Badges */
     .presence-bar {
       display: flex;
       align-items: center;
@@ -296,7 +302,7 @@
 
     .file-input { display: none; }
 
-    /* Direct Message Modal (Feature 4) */
+    /* Direct Message Modal */
     .dm-modal {
       position: absolute;
       bottom: 80px;
@@ -332,7 +338,7 @@
 <body>
 
   <div class="app-wrapper">
-    <!-- Left Panel: Dedicated Admin Workspace (Feature 3) -->
+    <!-- Left Panel: Dedicated Admin Workspace -->
     <div class="admin-side-panel" id="adminSidePanel">
       <div class="admin-panel-title">
         <i class="fa-solid fa-user-gear"></i> Admin Command Panel
@@ -352,20 +358,20 @@
         <button class="admin-btn" onclick="toggleFileLock()" id="lockFileBtn"><i class="fa-solid fa-lock"></i> Lock File Transfer</button>
       </div>
 
-      <!-- Feature 6i: Live User Draft Spectator Box -->
+      <!-- Live User Draft Spectator Box -->
       <div class="admin-section">
         <span style="font-size: 0.75rem; font-weight: 700; color: var(--accent-amber);"><i class="fa-solid fa-eye"></i> LIVE SPECTATOR DRAFT</span>
         <div class="live-spectator-box" id="spectatorBox">No active typing detected...</div>
       </div>
 
-      <!-- Feature 4: Initiated Direct Messages -->
+      <!-- Initiated Direct Messages -->
       <div class="admin-section">
         <span style="font-size: 0.75rem; font-weight: 700; color: var(--accent-cyan);"><i class="fa-solid fa-comments"></i> DIRECT MESSAGE PARTICIPANT</span>
         <select class="group-dropdown" id="activeUsersSelect"></select>
         <button class="admin-btn" onclick="initiateAdminDM()"><i class="fa-solid fa-paper-plane"></i> Send Direct Message</button>
       </div>
 
-      <!-- Private Admin Notes (Feature 3) -->
+      <!-- Private Admin Notes -->
       <div class="admin-section">
         <span style="font-size: 0.75rem; font-weight: 700; color: var(--text-muted);"><i class="fa-solid fa-note-sticky"></i> PRIVATE OFFICER NOTES</span>
         <textarea class="admin-notes-area" id="adminPrivateNotes" placeholder="Write persistent internal notes here..." oninput="saveAdminNotes()"></textarea>
@@ -376,14 +382,17 @@
     <div class="room-container">
       <div class="header">
         <div class="brand-group">
-          <div class="vault-icon"><i class="fa-solid fa-layer-group"></i></div>
+          <!-- SECRET ADMIN TRIGGER: Click Logo to trigger login -->
+          <div class="vault-icon" onclick="loginAsAdmin()" title="Transaction Vault">
+            <i class="fa-solid fa-layer-group"></i>
+          </div>
           <div>
             <div class="brand-title">QUANTUM SECURE TRANSACTION DESK</div>
             <div class="brand-subtitle" id="currentGroupName">General Transaction Group #1</div>
           </div>
         </div>
 
-        <!-- Presence Indicators (Feature 5) -->
+        <!-- Presence Indicators -->
         <div class="presence-bar">
           <div class="presence-badge">
             <div class="status-dot online" id="selfStatusDot"></div>
@@ -402,7 +411,7 @@
 
       <div class="chat-messages" id="messageContainer"></div>
 
-      <!-- Typing Indicator Area (Feature 6) -->
+      <!-- Typing Indicator Area -->
       <div class="typing-indicator-box" id="typingIndicator"></div>
 
       <div class="footer-controls">
@@ -428,7 +437,7 @@
     </div>
   </div>
 
-  <!-- DM Modal (Feature 4: Non-admin participant DM view) -->
+  <!-- DM Modal -->
   <div class="dm-modal" id="dmModal">
     <div class="dm-header">
       <span><i class="fa-solid fa-user-shield"></i> Officer Direct Message</span>
@@ -444,7 +453,7 @@
   <script>
     const socket = io();
 
-    // Feature 7: Browser Session Reconnection
+    // Session Reconnection Token
     let sessionToken = sessionStorage.getItem('q_session_token');
     if (!sessionToken) {
       sessionToken = 'token-' + Math.random().toString(36).substring(2, 15);
@@ -460,13 +469,23 @@
     let activeDMRoomId = null;
     let typingTimeout = null;
 
-    // Feature 1: Admin stealth login via hotkey Ctrl+Shift+A
+    // Login Triggers (Hotkey + #admin URL Detection)
     document.addEventListener('keydown', (e) => {
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'A') {
-        const pass = prompt("Enter Administrator Passkey:");
-        if (pass) joinSession(pass);
+        loginAsAdmin();
       }
     });
+
+    window.addEventListener('load', () => {
+      if (window.location.hash === '#admin') {
+        loginAsAdmin();
+      }
+    });
+
+    function loginAsAdmin() {
+      const password = prompt("Enter Administrator Passkey:");
+      if (password) joinSession(password);
+    }
 
     function joinSession(adminKey = null) {
       const selectedRole = adminKey ? 'ADMINISTRATOR' : document.getElementById('roleSelect').value;
@@ -479,15 +498,12 @@
       if (adminKey) socket.emit('get-all-groups');
     }
 
-    // Feature 2: Clean Invite Link Generator
     function copyInviteLink() {
-      // Relative clean path + window origin
       const cleanLink = `${window.location.origin}/?groupId=${activeGroupId}`;
       navigator.clipboard.writeText(cleanLink);
       alert(`Clean Group Invite Link Copied:\n${cleanLink}`);
     }
 
-    // Feature 3: Load Private Admin Notes
     function saveAdminNotes() {
       const notes = document.getElementById('adminPrivateNotes').value;
       localStorage.setItem(`admin_notes_${activeGroupId}`, notes);
@@ -498,7 +514,6 @@
       document.getElementById('adminPrivateNotes').value = saved;
     }
 
-    // Feature 6: Real-time Typing Handlers
     function handleTyping() {
       const currentDraft = document.getElementById('messageInput').value;
       socket.emit('typing-start', { isTyping: true, currentDraft });
@@ -514,14 +529,12 @@
       indicator.textContent = isTyping ? `${sender} is typing...` : '';
     });
 
-    // Feature 6i: Live Draft Spectator Mode for Admin
     socket.on('admin-live-draft', ({ sender, draftText }) => {
       if (!isAdminConfirmed) return;
       const box = document.getElementById('spectatorBox');
       box.textContent = draftText ? `${sender}: "${draftText}"` : 'No active typing detected...';
     });
 
-    // Feature 4: DM Operations
     function initiateAdminDM() {
       const targetSocketId = document.getElementById('activeUsersSelect').value;
       if (!targetSocketId) return;
@@ -559,7 +572,6 @@
 
     function closeDMModal() { document.getElementById('dmModal').style.display = 'none'; }
 
-    // Feature 5: Presence Updates
     socket.on('presence-update', (users) => {
       const peer = users.find(u => u.socketId !== currentSocketId && !u.isAdmin);
       const dot = document.getElementById('peerStatusDot');
@@ -574,7 +586,6 @@
       }
     });
 
-    // Init & State Setup
     socket.on('init-state', ({ group, isAdminConfirmed: adminState, socketId }) => {
       document.getElementById('messageContainer').innerHTML = '';
       currentCustomNames = group.customNames;
