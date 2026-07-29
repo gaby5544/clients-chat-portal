@@ -61,6 +61,15 @@ class PgStore {
     return rows;
   }
 
+  async deleteUser(sessionToken) {
+    await this.pool.query(`DELETE FROM users WHERE session_token=$1`, [sessionToken]);
+  }
+
+  async clearOfflineUsers() {
+    const { rowCount } = await this.pool.query(`DELETE FROM users WHERE is_online=FALSE`);
+    return rowCount;
+  }
+
   // ---------- GROUPS ----------
   async createGroupIfMissing(groupId, name) {
     const { rows } = await this.pool.query(

@@ -81,6 +81,7 @@ body {
 .rail-btn.active { background: linear-gradient(135deg, rgba(56,189,248,0.22), rgba(139,92,246,0.22)); color: #fff; border-color: var(--border-glow); }
 .admin-only { display: none; }
 body.is-admin .admin-only { display: flex; }
+.icon-rail.fully-hidden { display: none; }
 
 /* ---------------- LIST PANEL ---------------- */
 .list-panel { width: 320px; background: #070a12; border-right: 1px solid var(--border-soft); display: flex; flex-direction: column; }
@@ -239,7 +240,13 @@ body.is-admin .admin-only { display: flex; }
 
 .footer-controls-secondary { padding: 10px 26px 0; background: rgba(5,7,13,0.9); display: flex; gap: 9px; align-items: center; flex-wrap: wrap; }
 .footer-controls { padding: 16px 26px; background: rgba(5,7,13,0.9); border-top: 1px solid var(--border-soft); display: flex; gap: 9px; align-items: center; }
-.role-dropdown, .lang-dropdown, .group-dropdown { background: rgba(255,255,255,0.03); border: 1px solid var(--border-soft); color: var(--text-main); padding: 10px 10px; border-radius: 11px; font-weight: 600; font-size: 0.78rem; outline: none; cursor: pointer; }
+.role-dropdown, .lang-dropdown, .group-dropdown {
+  background-color: #0d1119; color: #f1f5f9; border: 1px solid var(--border-soft);
+  padding: 10px 10px; border-radius: 11px; font-weight: 600; font-size: 0.78rem; outline: none; cursor: pointer;
+}
+.role-dropdown option, .lang-dropdown option, .group-dropdown option {
+  background-color: #0d1119; color: #f1f5f9;
+}
 .message-input { flex: 1; background: rgba(255,255,255,0.03); border: 1px solid var(--border-soft); color: #fff; padding: 12px 18px; border-radius: 13px; outline: none; font-size: 0.9rem; min-width: 0; }
 .message-input:focus { border-color: var(--border-glow); }
 .send-btn { background: linear-gradient(135deg, var(--accent-cyan), var(--accent-violet)); color: #05070d; border: none; padding: 12px 20px; border-radius: 13px; font-weight: 800; cursor: pointer; display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
@@ -274,6 +281,22 @@ body.is-admin .admin-only { display: flex; }
 .live-spectator-box { font-size: 0.76rem; color: var(--accent-cyan); background: rgba(56,189,248,0.05); border: 1px dashed rgba(56,189,248,0.3); padding: 8px 12px; border-radius: 8px; min-height: 40px; }
 
 .transactions-list { display: flex; flex-direction: column; gap: 8px; }
+.tx-status-badge {
+  font-size: 0.72rem; font-weight: 800; padding: 8px 12px; border-radius: 9px; text-align: center;
+  background: rgba(148,163,184,0.08); color: var(--text-muted); border: 1px solid var(--border-soft);
+}
+.tx-status-badge.enabled { background: rgba(34,211,165,0.12); color: var(--accent-emerald); border-color: rgba(34,211,165,0.3); }
+.tx-status-badge.disabled { background: rgba(251,84,121,0.1); color: var(--accent-rose); border-color: rgba(251,84,121,0.25); }
+
+.admin-drawer-minimized {
+  position: absolute; bottom: 24px; right: 24px; z-index: 60;
+  width: 52px; height: 52px; border-radius: 50%; border: 1px solid var(--border-glow);
+  background: linear-gradient(135deg, var(--accent-cyan), var(--accent-violet)); color: #05070d;
+  font-size: 1.1rem; cursor: pointer; box-shadow: var(--shadow-deep); display: flex; align-items: center; justify-content: center;
+}
+
+.directory-delete-btn { color: var(--accent-rose); opacity: 0.6; cursor: pointer; font-size: 0.85rem; padding: 6px; flex-shrink: 0; }
+.directory-delete-btn:hover { opacity: 1; }
 .tx-card { background: rgba(255,255,255,0.03); border: 1px solid var(--border-soft); border-radius: 11px; padding: 10px; font-size: 0.76rem; }
 .tx-card-row { display: flex; justify-content: space-between; margin-bottom: 3px; color: var(--text-muted); }
 .tx-card-row b { color: var(--text-main); }

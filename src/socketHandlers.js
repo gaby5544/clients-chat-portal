@@ -1,6 +1,5 @@
 const { store } = require('./db');
 const { escapeHtml, sanitizeText, RateLimiter } = require('./security');
-const { countryFromIp, countryCodeToFlagEmoji, countryNameFromCode } = require('./geo');
 const { notifyOfflineMessage, notifyTransactionSubmitted } = require('./email');
 const { ADMIN_PASSKEY } = require('./routes');
 
@@ -19,9 +18,6 @@ function publicUser(u) {
     displayName: u.display_name,
     role: u.role,
     isAdmin: u.is_admin,
-    countryCode: u.country_code,
-    flag: countryCodeToFlagEmoji(u.country_code),
-    countryName: countryNameFromCode(u.country_code),
     isOnline: u.is_online,
     lastSeen: u.last_seen
   };
@@ -69,11 +65,6 @@ function registerSocketHandlers(io, socket) {
   const activeSockets = io._activeSockets || (io._activeSockets = new Map()); // socketId -> {sessionToken, groupId, isAdmin}
   const pendingDisconnects = io._pendingDisconnects || (io._pendingDisconnects = new Map()); // sessionToken -> timeout handle
   const DISCONNECT_GRACE_MS = 8000; // absorb brief network blips / tab backgrounding without spamming the chat
-
-  function clientIp() {
-    const fwd = socket.handshake.headers['x-forwarded-for'];
-    return (fwd ? fwd.split(',')[0].trim() : socket.handshake.address);
-  }
 
   async function broadcastPresence(groupId) {
     const all = await store.getAllUsers();
@@ -139,8 +130,6 @@ function registerSocketHandlers(io, socket) {
         ? 'Desk Officer (Admin)'
         : (safeRole === 'PARTY A' ? group.custom_name_a : group.custom_name_b);
 
-      const countryCode = countryFromIp(clientIp());
-
       // Was this session already considered "present" before this connection?
       // (another open tab, or a disconnect that's still within its grace
       // window) — if so, this is a resume, not a fresh arrival, and should
@@ -159,7 +148,6 @@ function registerSocketHandlers(io, socket) {
         role: isAdmin ? 'ADMINISTRATOR' : safeRole,
         isAdmin,
         email: isValidEmailSafe(email) ? email : undefined,
-        countryCode: countryCode || undefined,
         isOnline: true
       });
 
@@ -381,8 +369,8 @@ function registerSocketHandlers(io, socket) {
   socket.on('admin-get-transactions', async ({ groupId }) => {
     const meta = activeSockets.get(socket.id);
     if (!meta || !meta.isAdmin) return;
-    const rows = await store.getTransactions(groupId);
-    socket.emit('transactions-list', { groupId, transactions: rows });
+    const [rows, group] = await Promise.all([store.getTransactions(groupId), store.getGroup(groupId)]);
+    socket.emit('transactions-list', { groupId, transactions: rows, formEnabled: !!(group && group.transaction_form_enabled) });
   });
 
   socket.on('admin-delete-transaction', async ({ groupId, txId }) => {
@@ -476,6 +464,31 @@ function registerSocketHandlers(io, socket) {
         }
       }
     }
+  });
+
+  // ---------------- ADMIN: DELETE / CLEAR DIRECTORY ENTRIES ----------------
+  socket.on('admin-delete-user', async ({ targetSessionToken }) => {
+    const meta = activeSockets.get(socket.id);
+    if (!meta || !meta.isAdmin || !targetSessionToken) return;
+    // Force-disconnect them first if currently online, then purge their record.
+    for (const [sockId, v] of activeSockets.entries()) {
+      if (v.sessionToken === targetSessionToken) {
+        const targetSocket = io.sockets.sockets.get(sockId);
+        if (targetSocket) { targetSocket.emit('error-msg', 'Your session was removed by the Desk Officer.'); targetSocket.disconnect(true); }
+      }
+    }
+    await store.deleteUser(targetSessionToken);
+    await broadcastDirectory();
+    await broadcastStats();
+  });
+
+  socket.on('admin-clear-offline-users', async () => {
+    const meta = activeSockets.get(socket.id);
+    if (!meta || !meta.isAdmin) return;
+    const removed = await store.clearOfflineUsers();
+    socket.emit('directory-cleared', { removed });
+    await broadcastDirectory();
+    await broadcastStats();
   });
 
   // ---------------- ADMIN: CLEAR CHAT HISTORY ----------------

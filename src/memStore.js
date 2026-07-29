@@ -67,6 +67,18 @@ class MemStore {
   async getUser(sessionToken) { return this.users.get(sessionToken) || null; }
   async getAllUsers() { return Array.from(this.users.values()); }
 
+  async deleteUser(sessionToken) {
+    this.users.delete(sessionToken);
+  }
+
+  async clearOfflineUsers() {
+    let count = 0;
+    for (const [token, u] of this.users.entries()) {
+      if (!u.is_online) { this.users.delete(token); count++; }
+    }
+    return count;
+  }
+
   // ---------- GROUPS ----------
   async createGroupIfMissing(groupId, name) {
     if (!this.groups.has(groupId)) {

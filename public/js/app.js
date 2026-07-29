@@ -9,6 +9,19 @@ const urlParams = new URLSearchParams(window.location.search);
 let activeGroupId = urlParams.get('groupId') || 'default-group';
 
 let isAdminConfirmed = false;
+
+// Admin Login is hidden from regular users entirely — it only appears if
+// this exact URL parameter is present (bookmark it as ?officer=1), or was
+// already revealed earlier in this browser tab.
+const ADMIN_REVEAL_PARAM = 'officer';
+if (urlParams.has(ADMIN_REVEAL_PARAM)) sessionStorage.setItem('q_admin_reveal', '1');
+const adminLoginVisible = sessionStorage.getItem('q_admin_reveal') === '1';
+if (adminLoginVisible) el('railLogin').classList.remove('hidden');
+function updateRailVisibility() {
+  el('iconRail').classList.toggle('fully-hidden', !isAdminConfirmed && !adminLoginVisible);
+}
+updateRailVisibility();
+
 let currentSocketId = null;
 let adminPasskeyMemory = null; // kept only in memory, used for CSV export auth link
 let typingTimeout = null;
@@ -103,9 +116,20 @@ function toggleAdminDrawer(force) {
   const drawer = el('adminDrawer');
   const shouldOpen = force !== undefined ? force : !drawer.classList.contains('open');
   drawer.classList.toggle('open', shouldOpen);
+  el('adminDrawerMinimized').classList.add('hidden'); // any explicit open/close cancels a minimized state
   if (shouldOpen && isAdminConfirmed) socket.emit('admin-get-stats');
 }
 function openAdminDrawerTab(tab) { toggleAdminDrawer(true); setAdminTab(tab); }
+
+function minimizeAdminDrawer() {
+  el('adminDrawer').classList.remove('open');
+  el('adminDrawerMinimized').classList.remove('hidden');
+}
+function restoreAdminDrawer() {
+  el('adminDrawerMinimized').classList.add('hidden');
+  el('adminDrawer').classList.add('open');
+  if (isAdminConfirmed) socket.emit('admin-get-stats');
+}
 
 function setAdminTab(tab) {
   document.querySelectorAll('.drawer-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
@@ -139,6 +163,7 @@ socket.on('init-state', async (data) => {
   activeGroupId = data.group.id;
   _myToken = data.sessionToken; // must be set before rendering messages below
   document.body.classList.toggle('is-admin', isAdminConfirmed);
+  updateRailVisibility();
 
   el('currentGroupName').textContent = data.group.name;
   el('roleSelect').style.display = isAdminConfirmed ? 'none' : 'inline-block';
@@ -683,10 +708,11 @@ function renderDirectory() {
       <div class="directory-item">
         <div class="avatar" style="width:36px;height:36px;font-size:0.85rem;">${initialsOf(u.displayName)}<span class="online-ring ${u.isOnline ? '' : 'off'}"></span></div>
         <div class="directory-meta">
-          <div class="directory-name">${escapeHtml(u.displayName)} <span class="flag-emoji">${u.flag}</span></div>
-          <div class="directory-role">${u.isOnline ? 'Online' : 'Offline'} · ${u.countryName || ''}</div>
+          <div class="directory-name">${escapeHtml(u.displayName)}</div>
+          <div class="directory-role">${u.isOnline ? 'Online' : 'Offline'}</div>
         </div>
         <span class="role-chip ${u.isAdmin ? 'admin' : (u.role === 'PARTY A' ? 'buyer' : 'seller')}">${u.isAdmin ? 'Admin' : (u.role === 'PARTY A' ? 'Buyer' : 'Seller')}</span>
+        ${u.sessionToken !== myToken() ? `<i class="fa-solid fa-trash directory-delete-btn" onclick="deleteDirectoryUser('${u.sessionToken}')" title="Remove from directory"></i>` : ''}
       </div>`).join('');
   }
   el('directoryContainer').innerHTML = html || '<div style="padding:16px; color:var(--text-muted); font-size:0.85rem;">No users yet.</div>';
@@ -704,6 +730,21 @@ function renderDirectory() {
     ).join('') || '<option value="">No online users to disconnect</option>';
   }
 }
+
+function deleteDirectoryUser(targetSessionToken) {
+  showConfirmModal(
+    { title: 'Remove User', message: 'Remove this user from the directory? If they are currently online, they will be disconnected.' },
+    () => socket.emit('admin-delete-user', { targetSessionToken })
+  );
+}
+
+function clearOfflineUsers() {
+  showConfirmModal(
+    { title: 'Clear Offline Users', message: 'Remove every offline user from the directory? Online users are not affected.' },
+    () => socket.emit('admin-clear-offline-users')
+  );
+}
+socket.on('directory-cleared', ({ removed }) => toast(`Removed ${removed} offline user(s) from the directory.`));
 
 // ---------------- PRESENCE ----------------
 socket.on('presence-update', (users) => {
@@ -763,7 +804,20 @@ function closeDMModal() { el('dmModal').style.display = 'none'; }
 function updateTransactionBanner(enabled) {
   el('transactionBanner').classList.toggle('hidden', !enabled || isAdminConfirmed);
 }
-socket.on('transaction-form-status', ({ enabled }) => { updateTransactionBanner(enabled); toast(`Transaction form ${enabled ? 'enabled' : 'disabled'} for this group.`); });
+function updateTxStatusBadge(enabled) {
+  const badge = el('txStatusBadge');
+  if (!badge) return;
+  badge.textContent = `Status: ${enabled ? 'ENABLED' : 'DISABLED'} for this group`;
+  badge.classList.toggle('enabled', enabled);
+  badge.classList.toggle('disabled', !enabled);
+  const label = el('txToggleBtnLabel');
+  if (label) label.textContent = enabled ? 'Disable Form' : 'Enable Form';
+}
+socket.on('transaction-form-status', ({ enabled }) => {
+  updateTransactionBanner(enabled);
+  updateTxStatusBadge(enabled);
+  toast(`Transaction form ${enabled ? 'enabled' : 'disabled'} for this group.`);
+});
 
 function openTransactionForm() { el('txFormModal').classList.remove('hidden'); }
 function submitTransactionForm(evt) {
@@ -778,7 +832,8 @@ socket.on('transaction-submit-ack', () => { toast('Transaction submitted success
 // ---------------- ADMIN: TRANSACTION BOARD ----------------
 function toggleTransactionForm() { socket.emit('admin-toggle-transaction-form', { groupId: activeGroupId }); }
 function loadTransactionsList() { socket.emit('admin-get-transactions', { groupId: activeGroupId }); }
-socket.on('transactions-list', ({ transactions }) => {
+socket.on('transactions-list', ({ transactions, formEnabled }) => {
+  updateTxStatusBadge(!!formEnabled);
   const container = el('transactionsListContainer');
   container.innerHTML = transactions.length ? transactions.map(t => `
     <div class="tx-card">

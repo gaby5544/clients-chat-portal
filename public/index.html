@@ -20,7 +20,7 @@
     <button class="rail-btn admin-only" id="railDirectory" title="Directory" onclick="switchPanel('directory')"><i class="fa-solid fa-address-book"></i></button>
     <button class="rail-btn admin-only" id="railAdmin" title="Admin Dashboard" onclick="toggleAdminDrawer()"><i class="fa-solid fa-chart-line"></i></button>
     <div class="rail-spacer"></div>
-    <button class="rail-btn" id="railLogin" title="Admin Login" onclick="loginAsAdmin()"><i class="fa-solid fa-shield-halved"></i></button>
+    <button class="rail-btn hidden" id="railLogin" title="Admin Login" onclick="loginAsAdmin()"><i class="fa-solid fa-shield-halved"></i></button>
   </nav>
 
   <!-- LEFT LIST PANEL (admin only) -->
@@ -43,6 +43,7 @@
     <div class="list-panel-inner hidden" id="directoryPanel">
       <div class="panel-header">
         <span class="panel-title" data-i18n="directoryTitle">User Directory</span>
+        <button class="panel-action-btn" onclick="clearOfflineUsers()" title="Clear offline users"><i class="fa-solid fa-broom"></i></button>
       </div>
       <div class="search-box">
         <i class="fa-solid fa-magnifying-glass"></i>
@@ -59,7 +60,7 @@
         <button class="icon-btn mobile-back-btn admin-only hidden" id="mobileBackBtn" onclick="showListPanelMobile()" title="Back to groups"><i class="fa-solid fa-arrow-left"></i></button>
         <div class="vault-icon"><i class="fa-solid fa-layer-group"></i></div>
         <div>
-          <div class="brand-title">QUANTUM SECURE DESK</div>
+          <div class="brand-title">QUANTUM SECURE TRANSACTION DESK</div>
           <div class="brand-subtitle" id="currentGroupName">General Transaction Group #1</div>
         </div>
       </div>
@@ -160,7 +161,10 @@
   <aside class="admin-drawer" id="adminDrawer">
     <div class="drawer-header">
       <span><i class="fa-solid fa-user-gear"></i> <span data-i18n="adminPanel">Admin Command Panel</span></span>
-      <i class="fa-solid fa-xmark" onclick="toggleAdminDrawer(false)"></i>
+      <div style="display:flex; gap:14px; align-items:center;">
+        <i class="fa-solid fa-minus" onclick="minimizeAdminDrawer()" title="Minimize"></i>
+        <i class="fa-solid fa-xmark" onclick="toggleAdminDrawer(false)" title="Close"></i>
+      </div>
     </div>
     <div class="drawer-tabs">
       <button class="drawer-tab active" data-tab="dashboard" onclick="setAdminTab('dashboard')" data-i18n="dashboard">Dashboard</button>
@@ -210,13 +214,19 @@
     <div class="drawer-tab-panel hidden" id="tabTransactions">
       <div class="admin-section">
         <span class="admin-section-label" data-i18n="txBoard">TRANSACTION BOARD (ACTIVE GROUP)</span>
-        <button class="admin-btn" onclick="toggleTransactionForm()" id="txToggleBtn"><i class="fa-solid fa-toggle-on"></i> <span data-i18n="txToggle">Enable/Disable Form</span></button>
+        <div class="tx-status-badge" id="txStatusBadge">Status: Loading...</div>
+        <button class="admin-btn" onclick="toggleTransactionForm()" id="txToggleBtn"><i class="fa-solid fa-toggle-on"></i> <span id="txToggleBtnLabel" data-i18n="txToggle">Enable/Disable Form</span></button>
         <button class="admin-btn" onclick="loadTransactionsList()"><i class="fa-solid fa-list"></i> <span data-i18n="viewSubmissions">View Submissions</span></button>
         <button class="admin-btn" onclick="exportTransactions()"><i class="fa-solid fa-file-export"></i> <span data-i18n="exportCsv">Export CSV</span></button>
       </div>
       <div id="transactionsListContainer" class="transactions-list"></div>
     </div>
   </aside>
+
+  <!-- Minimized admin drawer pill (re-expand from here) -->
+  <button class="admin-drawer-minimized hidden" id="adminDrawerMinimized" onclick="restoreAdminDrawer()" title="Restore Admin Panel">
+    <i class="fa-solid fa-user-gear"></i>
+  </button>
 </div>
 
 <!-- CONTEXT MENU -->
