@@ -19,7 +19,7 @@ const I18N = {
     fullLegalName: 'Full Legal Name', countryRegion: 'Country / Region', txRole: 'Transaction Role', assetType: 'Asset or Item Type',
     assetDescription: 'Asset Description', quantity: 'Quantity / Amount', unitPrice: 'Agreed Unit Price', totalValue: 'Total Transaction Value',
     paymentCurrency: 'Payment Currency', paymentMethod: 'Payment Method', paymentTerms: 'Payment Terms', additionalNotes: 'Additional Notes',
-    submitForm: 'Submit Transaction', editHistoryTitle: 'Message Edit History'
+    submitForm: 'Submit Transaction', editHistoryTitle: 'Message Edit History', translate: 'Translate', clearChat: 'Clear Chat History', userManagement: 'User Management', kickUser: 'Disconnect User', selectAll: 'Select All'
   },
   de: {
     groupsTitle: 'Gruppen', directoryTitle: 'Benutzerverzeichnis', searchGroups: 'Gruppen suchen...', searchUsers: 'Benutzer suchen...',
@@ -38,7 +38,7 @@ const I18N = {
     fullLegalName: 'Vollständiger rechtlicher Name', countryRegion: 'Land / Region', txRole: 'Transaktionsrolle', assetType: 'Vermögenswert / Artikeltyp',
     assetDescription: 'Beschreibung des Vermögenswerts', quantity: 'Menge / Betrag', unitPrice: 'Vereinbarter Stückpreis', totalValue: 'Gesamttransaktionswert',
     paymentCurrency: 'Zahlungswährung', paymentMethod: 'Zahlungsmethode', paymentTerms: 'Zahlungsbedingungen', additionalNotes: 'Zusätzliche Hinweise',
-    submitForm: 'Transaktion einreichen', editHistoryTitle: 'Bearbeitungsverlauf der Nachricht'
+    submitForm: 'Transaktion einreichen', editHistoryTitle: 'Bearbeitungsverlauf der Nachricht', translate: 'Übersetzen', clearChat: 'Chatverlauf löschen', userManagement: 'Benutzerverwaltung', kickUser: 'Benutzer trennen', selectAll: 'Alle auswählen'
   },
   it: {
     groupsTitle: 'Gruppi', directoryTitle: 'Rubrica utenti', searchGroups: 'Cerca gruppi...', searchUsers: 'Cerca utenti...',
@@ -57,7 +57,7 @@ const I18N = {
     fullLegalName: 'Nome legale completo', countryRegion: 'Paese / Regione', txRole: 'Ruolo nella transazione', assetType: 'Tipo di bene/articolo',
     assetDescription: 'Descrizione del bene', quantity: 'Quantità / Importo', unitPrice: 'Prezzo unitario concordato', totalValue: 'Valore totale della transazione',
     paymentCurrency: 'Valuta di pagamento', paymentMethod: 'Metodo di pagamento', paymentTerms: 'Termini di pagamento', additionalNotes: 'Note aggiuntive',
-    submitForm: 'Invia transazione', editHistoryTitle: 'Cronologia modifiche del messaggio'
+    submitForm: 'Invia transazione', editHistoryTitle: 'Cronologia modifiche del messaggio', translate: 'Traduci', clearChat: 'Cancella cronologia chat', userManagement: 'Gestione utenti', kickUser: 'Disconnetti utente', selectAll: 'Seleziona tutto'
   },
   tr: {
     groupsTitle: 'Gruplar', directoryTitle: 'Kullanıcı Rehberi', searchGroups: 'Gruplarda ara...', searchUsers: 'Kullanıcılarda ara...',
@@ -76,7 +76,7 @@ const I18N = {
     fullLegalName: 'Tam Yasal Ad', countryRegion: 'Ülke / Bölge', txRole: 'İşlem Rolü', assetType: 'Varlık veya Ürün Türü',
     assetDescription: 'Varlık Açıklaması', quantity: 'Miktar / Tutar', unitPrice: 'Anlaşılan Birim Fiyat', totalValue: 'Toplam İşlem Değeri',
     paymentCurrency: 'Ödeme Para Birimi', paymentMethod: 'Ödeme Yöntemi', paymentTerms: 'Ödeme Koşulları', additionalNotes: 'Ek Notlar',
-    submitForm: 'İşlemi Gönder', editHistoryTitle: 'Mesaj Düzenleme Geçmişi'
+    submitForm: 'İşlemi Gönder', editHistoryTitle: 'Mesaj Düzenleme Geçmişi', translate: 'Çevir', clearChat: 'Sohbet Geçmişini Temizle', userManagement: 'Kullanıcı Yönetimi', kickUser: 'Kullanıcıyı Bağlantısını Kes', selectAll: 'Tümünü Seç'
   }
 };
 

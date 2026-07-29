@@ -14,21 +14,24 @@
 
 <div class="app-shell" id="appShell">
 
-  <!-- ICON RAIL -->
-  <nav class="icon-rail">
-    <button class="rail-btn active" id="railChats" title="Chats" onclick="switchPanel('groups')"><i class="fa-solid fa-comments"></i></button>
-    <button class="rail-btn" id="railDirectory" title="Directory" onclick="switchPanel('directory')"><i class="fa-solid fa-address-book"></i></button>
+  <!-- ICON RAIL (always present so Admin Login stays reachable; Chats/Directory/Dashboard are admin-only) -->
+  <nav class="icon-rail" id="iconRail">
+    <button class="rail-btn active admin-only" id="railChats" title="Chats" onclick="switchPanel('groups')"><i class="fa-solid fa-comments"></i></button>
+    <button class="rail-btn admin-only" id="railDirectory" title="Directory" onclick="switchPanel('directory')"><i class="fa-solid fa-address-book"></i></button>
     <button class="rail-btn admin-only" id="railAdmin" title="Admin Dashboard" onclick="toggleAdminDrawer()"><i class="fa-solid fa-chart-line"></i></button>
     <div class="rail-spacer"></div>
     <button class="rail-btn" id="railLogin" title="Admin Login" onclick="loginAsAdmin()"><i class="fa-solid fa-shield-halved"></i></button>
   </nav>
 
-  <!-- LEFT LIST PANEL -->
-  <section class="list-panel">
+  <!-- LEFT LIST PANEL (admin only) -->
+  <section class="list-panel admin-only">
     <div class="list-panel-inner" id="groupsPanel">
       <div class="panel-header">
         <span class="panel-title" data-i18n="groupsTitle">Groups</span>
-        <button class="panel-action-btn admin-only" onclick="createNewGroup()" title="New Group"><i class="fa-solid fa-plus"></i></button>
+        <div style="display:flex; gap:8px;">
+          <button class="panel-action-btn" onclick="createNewGroup()" title="New Group"><i class="fa-solid fa-plus"></i></button>
+          <button class="panel-action-btn mobile-only-btn" onclick="hideListPanelMobile()" title="Close"><i class="fa-solid fa-xmark"></i></button>
+        </div>
       </div>
       <div class="search-box">
         <i class="fa-solid fa-magnifying-glass"></i>
@@ -53,6 +56,7 @@
   <main class="chat-main">
     <header class="chat-header">
       <div class="brand-group">
+        <button class="icon-btn mobile-back-btn admin-only hidden" id="mobileBackBtn" onclick="showListPanelMobile()" title="Back to groups"><i class="fa-solid fa-arrow-left"></i></button>
         <div class="vault-icon"><i class="fa-solid fa-layer-group"></i></div>
         <div>
           <div class="brand-title">QUANTUM SECURE DESK</div>
@@ -63,6 +67,7 @@
         <button class="icon-btn" id="pinnedToggleBtn" onclick="togglePinnedBar()" title="Pinned Messages">
           <i class="fa-solid fa-thumbtack"></i><span class="badge-dot hidden" id="pinnedDot"></span>
         </button>
+        <button class="icon-btn admin-only" id="selectModeBtn" onclick="toggleSelectMode()" title="Select messages"><i class="fa-solid fa-square-check"></i></button>
         <button class="icon-btn admin-only" onclick="openAdminDrawerTab('transactions')" title="Transaction Board"><i class="fa-solid fa-file-invoice-dollar"></i></button>
         <div class="presence-badge">
           <div class="status-dot online"></div>
@@ -87,6 +92,7 @@
     <div class="bulk-delete-bar" id="bulkDeleteBar">
       <span id="bulkDeleteCount">0 message(s) selected</span>
       <div style="display:flex; gap:8px;">
+        <button class="ghost-btn" onclick="selectAllMessages()" data-i18n="selectAll">Select All</button>
         <button class="ghost-btn" onclick="clearSelection()" data-i18n="cancel">Cancel</button>
         <button class="admin-btn admin-btn-danger" onclick="executeBulkDeleteMessages()"><i class="fa-solid fa-trash"></i> <span data-i18n="deleteSelected">Delete Selected</span></button>
       </div>
@@ -107,7 +113,7 @@
       <button class="admin-btn" onclick="openTransactionForm()" data-i18n="fillForm">Fill Form</button>
     </div>
 
-    <div class="footer-controls">
+    <div class="footer-controls-secondary" id="footerSecondary">
       <select class="role-dropdown" id="roleSelect" onchange="joinSession()">
         <option value="PARTY A" data-i18n="roleBuyer">Role: Buyer (Party A)</option>
         <option value="PARTY B" data-i18n="roleSeller">Role: Seller (Party B)</option>
@@ -120,7 +126,7 @@
         <option value="tr">🇹🇷 TR</option>
       </select>
 
-      <select class="lang-dropdown" id="targetLangSelect" title="Translate messages to">
+      <select class="lang-dropdown" id="targetLangSelect" title="Translate to / from this language">
         <option value="en">🇬🇧 English</option>
         <option value="de">🇩🇪 German</option>
         <option value="it">🇮🇹 Italian</option>
@@ -133,6 +139,12 @@
         <option value="pt">🇵🇹 Portuguese</option>
         <option value="ru">🇷🇺 Russian</option>
       </select>
+    </div>
+
+    <div class="footer-controls">
+      <button class="icon-btn" id="moreOptionsBtn" onclick="toggleFooterSecondary()" title="Language & role settings"><i class="fa-solid fa-sliders"></i></button>
+
+      <button class="icon-btn" id="translateToggleBtn" onclick="toggleTranslateBeforeSend()" title="Translate before sending"><i class="fa-solid fa-language"></i></button>
 
       <button class="icon-btn" id="micBtn" onclick="toggleSpeechRecognition()" title="Voice to Text"><i class="fa-solid fa-microphone"></i></button>
       <label class="icon-btn" id="fileUploadLabel" for="fileInput" title="Attach file"><i class="fa-solid fa-paperclip"></i></label>
@@ -173,6 +185,7 @@
         <span class="admin-section-label" data-i18n="roomManagement">ACTIVE ROOM MANAGEMENT</span>
         <button class="admin-btn" onclick="createNewGroup()"><i class="fa-solid fa-plus"></i> <span data-i18n="newGroup">New Group</span></button>
         <button class="admin-btn admin-btn-danger" onclick="deleteCurrentGroup()"><i class="fa-solid fa-trash"></i> <span data-i18n="deleteGroup">Delete Active Group</span></button>
+        <button class="admin-btn admin-btn-danger" onclick="clearChatHistory()"><i class="fa-solid fa-broom"></i> <span data-i18n="clearChat">Clear Chat History</span></button>
         <button class="admin-btn" onclick="copyInviteLink()"><i class="fa-solid fa-link"></i> <span data-i18n="inviteLink">Clean Invite Link</span></button>
         <button class="admin-btn" onclick="toggleHighlightGroup()"><i class="fa-solid fa-star"></i> <span data-i18n="toggleHighlight">Toggle Group Highlight</span></button>
       </div>
@@ -181,6 +194,11 @@
         <button class="admin-btn" onclick="renameParty('A')"><i class="fa-solid fa-pen"></i> <span data-i18n="renameBuyer">Rename Buyer (A)</span></button>
         <button class="admin-btn" onclick="renameParty('B')"><i class="fa-solid fa-pen"></i> <span data-i18n="renameSeller">Rename Seller (B)</span></button>
         <button class="admin-btn" onclick="toggleFileLock()" id="lockFileBtn"><i class="fa-solid fa-lock"></i> <span data-i18n="toggleUploads">Toggle File Upload Switch</span></button>
+      </div>
+      <div class="admin-section">
+        <span class="admin-section-label"><i class="fa-solid fa-user-slash"></i> <span data-i18n="userManagement">USER MANAGEMENT</span></span>
+        <select class="group-dropdown" id="kickUserSelect"></select>
+        <button class="admin-btn admin-btn-danger" onclick="kickSelectedUser()"><i class="fa-solid fa-right-from-bracket"></i> <span data-i18n="kickUser">Disconnect User</span></button>
       </div>
       <div class="admin-section">
         <span class="admin-section-label"><i class="fa-solid fa-paper-plane"></i> <span data-i18n="directMessage">DIRECT MESSAGE USER</span></span>
@@ -270,6 +288,21 @@
   <div class="modal-box">
     <div class="modal-header"><span data-i18n="editHistoryTitle">Message Edit History</span><i class="fa-solid fa-xmark" onclick="closeModal('historyModal')"></i></div>
     <div class="modal-body" id="historyList"></div>
+  </div>
+</div>
+
+<!-- GENERIC PROMPT/CONFIRM MODAL (replaces native prompt()/confirm() for mobile reliability) -->
+<div class="modal-overlay hidden" id="genericModal">
+  <div class="modal-box">
+    <div class="modal-header"><span id="genericModalTitle">Confirm</span><i class="fa-solid fa-xmark" onclick="closeGenericModal()"></i></div>
+    <div class="modal-body">
+      <p id="genericModalMessage" style="color:var(--text-muted); font-size:0.85rem; margin-bottom:12px;"></p>
+      <input type="text" id="genericModalInput" class="message-input" style="width:100%; margin-bottom:14px;" />
+      <div style="display:flex; gap:10px; justify-content:flex-end;">
+        <button class="ghost-btn" onclick="closeGenericModal()">Cancel</button>
+        <button class="send-btn" id="genericModalConfirmBtn">Confirm</button>
+      </div>
+    </div>
   </div>
 </div>
 

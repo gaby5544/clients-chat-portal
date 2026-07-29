@@ -21,6 +21,38 @@ let groupsCache = [];
 let directoryCache = [];
 let messagesById = new Map();
 let favorites = new Set(JSON.parse(localStorage.getItem('q_favorites') || '[]'));
+let selectModeActive = false;
+let translateBeforeSend = false;
+
+// ---------------- GENERIC MODAL (replaces native prompt()/confirm()) ----------------
+function showPromptModal({ title, message = '', placeholder = '', defaultValue = '' }, onConfirm) {
+  el('genericModalTitle').textContent = title;
+  el('genericModalMessage').textContent = message;
+  el('genericModalMessage').style.display = message ? 'block' : 'none';
+  const input = el('genericModalInput');
+  input.style.display = 'block';
+  input.placeholder = placeholder;
+  input.value = defaultValue;
+  el('genericModal').classList.remove('hidden');
+  setTimeout(() => input.focus(), 50);
+  const btn = el('genericModalConfirmBtn');
+  const handler = () => {
+    const val = input.value.trim();
+    closeGenericModal();
+    if (val) onConfirm(val);
+  };
+  btn.onclick = handler;
+  input.onkeydown = (e) => { if (e.key === 'Enter') handler(); };
+}
+function showConfirmModal({ title, message }, onConfirm) {
+  el('genericModalTitle').textContent = title;
+  el('genericModalMessage').textContent = message;
+  el('genericModalMessage').style.display = 'block';
+  el('genericModalInput').style.display = 'none';
+  el('genericModal').classList.remove('hidden');
+  el('genericModalConfirmBtn').onclick = () => { closeGenericModal(); onConfirm(); };
+}
+function closeGenericModal() { el('genericModal').classList.add('hidden'); }
 
 // ---------------- UTIL ----------------
 function el(id) { return document.getElementById(id); }
@@ -48,11 +80,23 @@ function setUiLanguage(lang) { applyI18n(lang); }
 
 // ---------------- PANEL / NAV ----------------
 function switchPanel(name) {
+  if (!isAdminConfirmed) return; // defense in depth — regular users never get a group list
   el('railChats').classList.toggle('active', name === 'groups');
   el('railDirectory').classList.toggle('active', name === 'directory');
   el('groupsPanel').classList.toggle('hidden', name !== 'groups');
   el('directoryPanel').classList.toggle('hidden', name !== 'directory');
+  showListPanelMobile();
+}
+
+function showListPanelMobile() {
   document.querySelector('.list-panel').classList.add('mobile-open');
+}
+function hideListPanelMobile() {
+  document.querySelector('.list-panel').classList.remove('mobile-open');
+}
+
+function toggleFooterSecondary() {
+  el('footerSecondary').classList.toggle('open');
 }
 
 function toggleAdminDrawer(force) {
@@ -72,8 +116,10 @@ function setAdminTab(tab) {
 
 // ---------------- SESSION / JOIN ----------------
 function loginAsAdmin() {
-  const password = prompt('Enter Administrator Passkey:');
-  if (password) { adminPasskeyMemory = password; joinSession(password); }
+  showPromptModal(
+    { title: 'Administrator Login', placeholder: 'Enter Administrator Passkey' },
+    (password) => { adminPasskeyMemory = password; joinSession(password); }
+  );
 }
 
 function joinSession(adminKey = null) {
@@ -100,13 +146,21 @@ socket.on('init-state', async (data) => {
   updateUploadUiState();
   updateTransactionBanner(data.group.transactionFormEnabled);
 
+  // Admin lands on the chat view (list panel starts closed on mobile);
+  // regular users never have a list panel at all.
+  hideListPanelMobile();
+  exitSelectMode();
+
   el('messageContainer').innerHTML = '<div class="drop-overlay" id="dropOverlay"><i class="fa-solid fa-cloud-arrow-up"></i><span data-i18n="dropToUpload">Drop file to upload</span></div>';
   messagesById.clear();
   data.messages.forEach(renderMessage);
 
   renderPinned(data.pinnedMessages);
-  if (isAdminConfirmed) { loadAdminNotes(); socket.emit('admin-get-stats'); }
-  socket.emit('get-all-groups');
+  if (isAdminConfirmed) {
+    loadAdminNotes();
+    socket.emit('admin-get-stats');
+    socket.emit('get-all-groups'); // server ignores this for non-admins anyway; only bother asking as admin
+  }
 });
 
 // ---------------- MESSAGES ----------------
@@ -136,6 +190,11 @@ function renderMessage(data) {
     return;
   }
 
+  const checkbox = document.createElement('div');
+  checkbox.className = 'msg-select-checkbox';
+  checkbox.innerHTML = '<i class="fa-solid fa-check" style="font-size:0.7rem; opacity:0;"></i>';
+  checkbox.onclick = (e) => { e.stopPropagation(); toggleMessageSelected(data.id); };
+
   const msgDiv = document.createElement('div');
   msgDiv.className = `message ${bubbleClassFor(data)}`;
   msgDiv.dataset.msgId = data.id;
@@ -144,6 +203,7 @@ function renderMessage(data) {
   msgDiv.addEventListener('contextmenu', (e) => showContextMenu(e, data));
   msgDiv.addEventListener('touchstart', (e) => { pressTimer = setTimeout(() => showContextMenu(e, data), 500); });
   msgDiv.addEventListener('touchend', () => clearTimeout(pressTimer));
+  msgDiv.addEventListener('click', () => { if (selectModeActive && isAdminConfirmed) toggleMessageSelected(data.id); });
 
   let replyHtml = '';
   if (data.replyToId && messagesById.has(data.replyToId)) {
@@ -162,6 +222,7 @@ function renderMessage(data) {
 
   const editedBadge = (isAdminConfirmed && data.isEdited) ? '<span style="font-size:0.65rem; color:var(--accent-amber); margin-left:6px;">(edited)</span>' : '';
   const forwardedTag = data.forwardedFrom ? `<div style="font-size:0.68rem; color:var(--text-faint); margin-bottom:4px;"><i class="fa-solid fa-share"></i> Forwarded</div>` : '';
+  const translateLink = data.text ? `<div class="translate-link" onclick="event.stopPropagation(); translateMessage('${data.id}')" id="translate-link-${data.id}"><i class="fa-solid fa-language"></i> <span data-i18n="translate">Translate</span></div>` : '';
 
   msgDiv.innerHTML = `
     <div class="sender-tag">
@@ -173,10 +234,13 @@ function renderMessage(data) {
     <div id="msg-text-${data.id}">${data.text}${editedBadge}</div>
     ${fileHtml}
     <div class="msg-reactions" id="msg-reactions-${data.id}"></div>
+    ${translateLink}
+    <div id="translated-box-${data.id}"></div>
     <div class="msg-time">${data.time}</div>
   `;
 
-  wrapper.appendChild(msgDiv);
+  if (mine) { wrapper.appendChild(msgDiv); wrapper.appendChild(checkbox); }
+  else { wrapper.appendChild(checkbox); wrapper.appendChild(msgDiv); }
   container.appendChild(wrapper);
   container.scrollTop = container.scrollHeight;
   renderReactions(data.id, data.reactions || {});
@@ -209,14 +273,46 @@ socket.on('messages-bulk-deleted', ({ messageIds }) => {
 
 socket.on('reaction-updated', ({ messageId, reactions }) => renderReactions(messageId, reactions));
 
-// ---------------- SEND MESSAGE ----------------
-async function translateText(text, targetLang) {
-  if (!text || targetLang === 'en' || !targetLang) return text;
+// ---------------- SEND MESSAGE / TRANSLATION ----------------
+async function translateText(text, targetLang, sourceLang = 'autodetect') {
+  if (!text || !targetLang) return text;
   try {
-    const res = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=autodetect|${targetLang}`);
+    const res = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${sourceLang}|${targetLang}`);
     const data = await res.json();
     return data?.responseData?.translatedText || text;
   } catch (err) { return text; }
+}
+
+function toggleTranslateBeforeSend() {
+  translateBeforeSend = !translateBeforeSend;
+  el('translateToggleBtn').classList.toggle('active', translateBeforeSend);
+  toast(translateBeforeSend
+    ? `Messages will be translated to ${el('targetLangSelect').selectedOptions[0].textContent.trim()} before sending.`
+    : 'Sending in your original language (no auto-translate).');
+}
+
+async function translateMessage(messageId) {
+  const data = messagesById.get(messageId);
+  if (!data) return;
+  const box = el(`translated-box-${messageId}`);
+  const link = el(`translate-link-${messageId}`);
+  if (!box || !link) return;
+
+  // Toggle back to hidden if already showing a translation
+  if (box.dataset.showing === '1') {
+    box.innerHTML = '';
+    box.dataset.showing = '0';
+    link.innerHTML = '<i class="fa-solid fa-language"></i> <span data-i18n="translate">Translate</span>';
+    return;
+  }
+
+  link.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Translating...';
+  const targetLang = el('targetLangSelect').value || 'en';
+  const plainText = data.text.replace(/<[^>]*>/g, '');
+  const translated = await translateText(plainText, targetLang);
+  box.innerHTML = `<div class="translated-text"><i class="fa-solid fa-language"></i> ${escapeHtml(translated)}</div>`;
+  box.dataset.showing = '1';
+  link.innerHTML = '<i class="fa-solid fa-rotate-left"></i> <span>Show original</span>';
 }
 
 async function sendMsg() {
@@ -224,7 +320,7 @@ async function sendMsg() {
   const rawText = input.value.trim();
   if (!rawText) return;
   const targetLang = el('targetLangSelect').value;
-  const outgoingText = await translateText(rawText, targetLang);
+  const outgoingText = translateBeforeSend ? await translateText(rawText, targetLang) : rawText;
   socket.emit('send-message', {
     groupId: activeGroupId, text: outgoingText, targetLang,
     replyToId: replyTarget ? replyTarget.id : null
@@ -360,8 +456,10 @@ function triggerCtxPin() {
 }
 function triggerCtxEdit() {
   if (!currentTargetMsg || !isAdminConfirmed) return;
-  const newText = prompt('Admin Edit Message:', currentTargetMsg.text.replace(/<[^>]*>/g, ''));
-  if (newText && newText.trim()) socket.emit('admin-edit-message', { groupId: activeGroupId, messageId: currentTargetMsg.id, newText: newText.trim() });
+  showPromptModal(
+    { title: 'Edit Message', defaultValue: currentTargetMsg.text.replace(/<[^>]*>/g, '') },
+    (newText) => socket.emit('admin-edit-message', { groupId: activeGroupId, messageId: currentTargetMsg.id, newText })
+  );
 }
 function triggerCtxHistory() {
   if (!currentTargetMsg || !isAdminConfirmed) return;
@@ -375,16 +473,59 @@ socket.on('edit-history-result', ({ history }) => {
   el('historyModal').classList.remove('hidden');
 });
 
+// ---------------- SELECT MODE / BULK DELETE ----------------
+function toggleSelectMode() {
+  if (!isAdminConfirmed) return;
+  selectModeActive = !selectModeActive;
+  el('messageContainer').classList.toggle('select-mode', selectModeActive);
+  el('selectModeBtn').classList.toggle('active', selectModeActive);
+  if (!selectModeActive) clearSelection();
+}
+function exitSelectMode() {
+  selectModeActive = false;
+  el('messageContainer')?.classList.remove('select-mode');
+  el('selectModeBtn')?.classList.remove('active');
+  clearSelection();
+}
 function triggerCtxSelect() {
   if (!currentTargetMsg || !isAdminConfirmed) return;
-  const row = el(`msg-row-${currentTargetMsg.id}`);
+  if (!selectModeActive) toggleSelectMode();
+  toggleMessageSelected(currentTargetMsg.id);
+}
+function toggleMessageSelected(id) {
+  const row = el(`msg-row-${id}`);
+  if (!row) return;
   const bubble = row.querySelector('.message');
-  if (selectedMsgIds.has(currentTargetMsg.id)) { selectedMsgIds.delete(currentTargetMsg.id); bubble.classList.remove('selected-msg'); }
-  else { selectedMsgIds.add(currentTargetMsg.id); bubble.classList.add('selected-msg'); }
+  const checkbox = row.querySelector('.msg-select-checkbox');
+  if (selectedMsgIds.has(id)) {
+    selectedMsgIds.delete(id);
+    bubble?.classList.remove('selected-msg');
+    checkbox?.classList.remove('checked');
+  } else {
+    selectedMsgIds.add(id);
+    bubble?.classList.add('selected-msg');
+    checkbox?.classList.add('checked');
+  }
+  updateBulkDeleteBar();
+}
+function selectAllMessages() {
+  if (!isAdminConfirmed) return;
+  if (!selectModeActive) toggleSelectMode();
+  messagesById.forEach((data, id) => {
+    if (data.sender === 'SYSTEM') return;
+    selectedMsgIds.add(id);
+    const row = el(`msg-row-${id}`);
+    row?.querySelector('.message')?.classList.add('selected-msg');
+    row?.querySelector('.msg-select-checkbox')?.classList.add('checked');
+  });
   updateBulkDeleteBar();
 }
 function clearSelection() {
-  selectedMsgIds.forEach(id => { const rowEl = el(`msg-row-${id}`); if (rowEl) rowEl.querySelector('.message')?.classList.remove('selected-msg'); });
+  selectedMsgIds.forEach(id => {
+    const row = el(`msg-row-${id}`);
+    row?.querySelector('.message')?.classList.remove('selected-msg');
+    row?.querySelector('.msg-select-checkbox')?.classList.remove('checked');
+  });
   selectedMsgIds.clear();
   updateBulkDeleteBar();
 }
@@ -395,15 +536,20 @@ function updateBulkDeleteBar() {
 }
 function executeBulkDeleteMessages() {
   if (selectedMsgIds.size === 0) return;
-  if (confirm(`Delete ${selectedMsgIds.size} selected message(s)?`)) {
-    socket.emit('admin-bulk-delete-messages', { groupId: activeGroupId, messageIds: Array.from(selectedMsgIds) });
-    selectedMsgIds.clear();
-    updateBulkDeleteBar();
-  }
+  showConfirmModal(
+    { title: 'Delete Messages', message: `Delete ${selectedMsgIds.size} selected message(s)? This cannot be undone.` },
+    () => {
+      socket.emit('admin-bulk-delete-messages', { groupId: activeGroupId, messageIds: Array.from(selectedMsgIds) });
+      exitSelectMode();
+    }
+  );
 }
 function triggerCtxDelete() {
   if (!currentTargetMsg || !isAdminConfirmed) return;
-  if (confirm('Delete this message?')) socket.emit('admin-bulk-delete-messages', { groupId: activeGroupId, messageIds: [currentTargetMsg.id] });
+  showConfirmModal(
+    { title: 'Delete Message', message: 'Delete this message? This cannot be undone.' },
+    () => socket.emit('admin-bulk-delete-messages', { groupId: activeGroupId, messageIds: [currentTargetMsg.id] })
+  );
 }
 
 function closeModal(id) { el(id).classList.add('hidden'); }
@@ -460,6 +606,7 @@ function renderGroupsList() {
 }
 
 function switchGroup(groupId) {
+  hideListPanelMobile();
   if (groupId === activeGroupId) return;
   activeGroupId = groupId;
   socket.emit('mark-group-read', { groupId });
@@ -468,23 +615,52 @@ function switchGroup(groupId) {
 
 socket.on('group-created-and-switch', ({ newGroupId }) => { activeGroupId = newGroupId; joinSession(adminPasskeyMemory); });
 socket.on('force-room-switch', ({ newGroupId }) => { activeGroupId = newGroupId; joinSession(adminPasskeyMemory); });
-socket.on('party-renamed', () => joinSession(adminPasskeyMemory));
+
+// Renaming a party relabels new messages going forward; it deliberately does
+// NOT force a rejoin (that used to cause a disconnect/reconnect cycle that
+// spammed the chat with duplicate system messages). Just confirm it worked.
+socket.on('party-renamed', ({ party }) => {
+  toast(`Party ${party} renamed. They'll see their new label after their next reload.`);
+  socket.emit('get-all-groups');
+});
 
 function createNewGroup() {
-  const name = prompt('Enter new Group Name:');
-  if (name && name.trim()) socket.emit('create-group', { groupName: name.trim() });
+  showPromptModal({ title: 'New Group', placeholder: 'Group name' }, (name) => {
+    socket.emit('create-group', { groupName: name });
+  });
 }
-function deleteCurrentGroup() { if (confirm('Delete active group?')) socket.emit('delete-group', { groupId: activeGroupId }); }
+function deleteCurrentGroup() {
+  showConfirmModal({ title: 'Delete Group', message: 'Delete the active group? All its messages and transactions will be removed. This cannot be undone.' }, () => {
+    socket.emit('delete-group', { groupId: activeGroupId });
+  });
+}
+function clearChatHistory() {
+  showConfirmModal({ title: 'Clear Chat History', message: 'Delete every message in this group? This cannot be undone.' }, () => {
+    socket.emit('admin-clear-chat', { groupId: activeGroupId });
+    toast('Chat history cleared.');
+  });
+}
 function renameParty(party) {
-  const newName = prompt(`Enter new name for Party ${party}:`);
-  if (newName && newName.trim()) socket.emit('rename-party', { groupId: activeGroupId, party, newName: newName.trim() });
+  showPromptModal({ title: `Rename Party ${party}`, placeholder: 'New display name' }, (newName) => {
+    socket.emit('rename-party', { groupId: activeGroupId, party, newName });
+  });
 }
 function toggleFileLock() { socket.emit('admin-toggle-upload-permission', { groupId: activeGroupId }); }
-function toggleHighlightGroup() { socket.emit('toggle-highlight-group', { groupId: activeGroupId }); }
+function toggleHighlightGroup() { socket.emit('toggle-highlight-group', { groupId: activeGroupId }); toast('Group highlight toggled.'); }
 function copyInviteLink() {
   const link = `${window.location.origin}/?groupId=${activeGroupId}`;
-  navigator.clipboard.writeText(link);
-  toast(`Invite link copied:\n${link}`);
+  navigator.clipboard.writeText(link).then(
+    () => toast(`Invite link copied:\n${link}`),
+    () => toast(`Copy this link manually: ${link}`, true)
+  );
+}
+function kickSelectedUser() {
+  const targetSessionToken = el('kickUserSelect').value;
+  if (!targetSessionToken) return toast('No user selected.', true);
+  showConfirmModal({ title: 'Disconnect User', message: 'Force-disconnect this user? They can rejoin using their invite link.' }, () => {
+    socket.emit('admin-kick-user', { targetSessionToken });
+    toast('User disconnected.');
+  });
 }
 
 // ---------------- DIRECTORY ----------------
@@ -521,6 +697,12 @@ function renderDirectory() {
       `<option value="${u.sessionToken}">${escapeHtml(u.displayName)} (${u.isAdmin ? 'Admin' : u.role})</option>`
     ).join('');
   }
+  const kickSelect = el('kickUserSelect');
+  if (kickSelect) {
+    kickSelect.innerHTML = directoryCache.filter(u => u.sessionToken !== myToken() && !u.isAdmin && u.isOnline).map(u =>
+      `<option value="${u.sessionToken}">${escapeHtml(u.displayName)} (${u.role})</option>`
+    ).join('') || '<option value="">No online users to disconnect</option>';
+  }
 }
 
 // ---------------- PRESENCE ----------------
@@ -551,9 +733,10 @@ function loadAdminNotes() { el('adminPrivateNotes').value = localStorage.getItem
 // ---------------- ADMIN DM ----------------
 function initiateAdminDM() {
   const targetSessionToken = el('activeUsersSelect').value;
-  if (!targetSessionToken) return;
-  const initialMessage = prompt('Enter Direct Message:');
-  if (initialMessage) socket.emit('admin-initiate-dm', { targetSessionToken, initialMessage: initialMessage.trim() });
+  if (!targetSessionToken) return toast('No user selected.', true);
+  showPromptModal({ title: 'Direct Message', placeholder: 'Type your message...' }, (initialMessage) => {
+    socket.emit('admin-initiate-dm', { targetSessionToken, initialMessage });
+  });
 }
 socket.on('dm-channel-opened', () => { el('dmModal').style.display = 'flex'; });
 socket.on('dm-message', (msg) => {
@@ -608,7 +791,9 @@ socket.on('transactions-list', ({ transactions }) => {
 socket.on('transaction-submitted', () => { if (!el('tabTransactions').classList.contains('hidden')) loadTransactionsList(); toast('New transaction submitted.'); });
 socket.on('transaction-deleted', () => loadTransactionsList());
 function deleteTransaction(txId) {
-  if (confirm('Delete this transaction submission?')) socket.emit('admin-delete-transaction', { groupId: activeGroupId, txId });
+  showConfirmModal({ title: 'Delete Transaction', message: 'Delete this transaction submission? This cannot be undone.' }, () => {
+    socket.emit('admin-delete-transaction', { groupId: activeGroupId, txId });
+  });
 }
 function exportTransactions() {
   const key = adminPasskeyMemory || '';
@@ -616,4 +801,5 @@ function exportTransactions() {
 }
 
 // ---------------- KICKOFF ----------------
-switchPanel('groups');
+// (Initial view state is now handled inside the init-state handler once
+// admin status is known — see hideListPanelMobile()/exitSelectMode() there.)

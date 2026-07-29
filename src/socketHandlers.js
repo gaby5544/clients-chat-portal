@@ -66,7 +66,9 @@ async function groupSummary(g, viewerToken) {
 }
 
 function registerSocketHandlers(io, socket) {
-  const activeSockets = io._activeSockets || (io._activeSockets = new Map()); // socketId -> {sessionToken, groupId}
+  const activeSockets = io._activeSockets || (io._activeSockets = new Map()); // socketId -> {sessionToken, groupId, isAdmin}
+  const pendingDisconnects = io._pendingDisconnects || (io._pendingDisconnects = new Map()); // sessionToken -> timeout handle
+  const DISCONNECT_GRACE_MS = 8000; // absorb brief network blips / tab backgrounding without spamming the chat
 
   function clientIp() {
     const fwd = socket.handshake.headers['x-forwarded-for'];
@@ -84,15 +86,22 @@ function registerSocketHandlers(io, socket) {
 
   async function broadcastDirectory() {
     const all = await store.getAllUsers();
-    io.emit('user-directory', all.map(publicUser));
+    io.to('admins').emit('user-directory', all.map(publicUser));
   }
 
   async function broadcastGroupsList(viewerSocket) {
+    // Regular (non-admin) users must never receive the full groups list —
+    // they're locked to the single group they were invited into.
     const groups = await store.getAllGroups();
-    const viewer = activeSockets.get(viewerSocket ? viewerSocket.id : null);
-    const list = await Promise.all(groups.map(g => groupSummary(g, viewer ? viewer.sessionToken : null)));
-    if (viewerSocket) viewerSocket.emit('all-groups-list', list);
-    else io.emit('all-groups-list', list);
+    if (viewerSocket) {
+      const meta = activeSockets.get(viewerSocket.id);
+      if (!meta || !meta.isAdmin) return; // silently ignore for non-admins
+      const list = await Promise.all(groups.map(g => groupSummary(g, meta.sessionToken)));
+      viewerSocket.emit('all-groups-list', list);
+    } else {
+      const list = await Promise.all(groups.map(g => groupSummary(g, null)));
+      io.to('admins').emit('all-groups-list', list);
+    }
   }
 
   async function broadcastStats() {
@@ -115,17 +124,34 @@ function registerSocketHandlers(io, socket) {
     try {
       if (!sessionToken || typeof sessionToken !== 'string') return;
       groupId = sanitizeText(groupId || 'default-group', 100);
+      const isAdmin = adminKey === ADMIN_PASSKEY;
 
       let group = await store.getGroup(groupId);
-      if (!group) group = await store.createGroupIfMissing(groupId, `Transaction Group #${(await store.getAllGroups()).length + 1}`);
+      if (!group) {
+        if (!isAdmin) {
+          return socket.emit('error-msg', 'This group does not exist, or your invite link is invalid. Please check the link with your Desk Officer.');
+        }
+        group = await store.createGroupIfMissing(groupId, `Transaction Group #${(await store.getAllGroups()).length + 1}`);
+      }
 
-      const isAdmin = adminKey === ADMIN_PASSKEY;
       const safeRole = ['PARTY A', 'PARTY B'].includes(role) ? role : 'PARTY A';
       const displayName = isAdmin
         ? 'Desk Officer (Admin)'
         : (safeRole === 'PARTY A' ? group.custom_name_a : group.custom_name_b);
 
       const countryCode = countryFromIp(clientIp());
+
+      // Was this session already considered "present" before this connection?
+      // (another open tab, or a disconnect that's still within its grace
+      // window) — if so, this is a resume, not a fresh arrival, and should
+      // not post a new "connected" system message.
+      const alreadyActiveElsewhere = Array.from(activeSockets.values()).some(v => v.sessionToken === sessionToken);
+      const wasWithinGracePeriod = pendingDisconnects.has(sessionToken);
+      if (wasWithinGracePeriod) {
+        clearTimeout(pendingDisconnects.get(sessionToken));
+        pendingDisconnects.delete(sessionToken);
+      }
+      const isGenuinelyNewPresence = !alreadyActiveElsewhere && !wasWithinGracePeriod;
 
       const user = await store.upsertUser({
         sessionToken,
@@ -162,13 +188,15 @@ function registerSocketHandlers(io, socket) {
         unreadCounts
       });
 
-      const sysMsg = await store.insertMessage({
-        id: 'sys-' + Date.now() + Math.random().toString(36).slice(2, 6),
-        groupId,
-        senderName: 'SYSTEM',
-        text: `${escapeHtml(displayName)} connected.`
-      });
-      io.to(groupId).emit('message', await publicMessage(sysMsg));
+      if (isGenuinelyNewPresence) {
+        const sysMsg = await store.insertMessage({
+          id: 'sys-' + Date.now() + Math.random().toString(36).slice(2, 6),
+          groupId,
+          senderName: 'SYSTEM',
+          text: `${escapeHtml(displayName)} connected.`
+        });
+        io.to(groupId).emit('message', await publicMessage(sysMsg));
+      }
 
       await broadcastPresence(groupId);
       await broadcastDirectory();
@@ -425,7 +453,41 @@ function registerSocketHandlers(io, socket) {
     if (!clean || !['A', 'B'].includes(party)) return;
     await store.updateGroup(groupId, party === 'A' ? { custom_name_a: clean } : { custom_name_b: clean });
     const group = await store.getGroup(groupId);
+    // Note: this relabels the ROLE going forward (new messages from that
+    // role use the new name). It intentionally does NOT force connected
+    // clients to rejoin — that used to cause a disconnect/reconnect cycle
+    // that spammed the chat with duplicate system messages. Anyone
+    // currently connected picks up their new label next time they open
+    // the app (reload/rejoin).
     io.to(groupId).emit('party-renamed', { groupId, party, newName: clean, customNames: { A: group.custom_name_a, B: group.custom_name_b } });
+    await broadcastGroupsList();
+  });
+
+  // ---------------- ADMIN: KICK USER ----------------
+  socket.on('admin-kick-user', ({ targetSessionToken }) => {
+    const meta = activeSockets.get(socket.id);
+    if (!meta || !meta.isAdmin || !targetSessionToken) return;
+    for (const [sockId, v] of activeSockets.entries()) {
+      if (v.sessionToken === targetSessionToken) {
+        const targetSocket = io.sockets.sockets.get(sockId);
+        if (targetSocket) {
+          targetSocket.emit('error-msg', 'You have been disconnected by the Desk Officer.');
+          targetSocket.disconnect(true);
+        }
+      }
+    }
+  });
+
+  // ---------------- ADMIN: CLEAR CHAT HISTORY ----------------
+  socket.on('admin-clear-chat', async ({ groupId }) => {
+    const meta = activeSockets.get(socket.id);
+    if (!meta || !meta.isAdmin) return;
+    const messages = await store.getMessagesForGroup(groupId, 100000);
+    const ids = messages.map(m => m.id);
+    if (ids.length === 0) return;
+    await store.deleteMessages(groupId, ids);
+    io.to(groupId).emit('messages-bulk-deleted', { groupId, messageIds: ids });
+    io.to(groupId).emit('pinned-messages-updated', { groupId, pinnedMessages: [] });
     await broadcastGroupsList();
   });
 
@@ -499,9 +561,16 @@ function registerSocketHandlers(io, socket) {
     if (!meta) return;
     activeSockets.delete(socket.id);
 
-    // Only mark fully offline if no other socket for this session remains.
+    // Only start the offline countdown if no other socket for this session remains.
     const stillConnected = Array.from(activeSockets.values()).some(v => v.sessionToken === meta.sessionToken);
-    if (!stillConnected) {
+    if (stillConnected) return; // another tab/device is still active — nothing to announce
+
+    const timer = setTimeout(async () => {
+      pendingDisconnects.delete(meta.sessionToken);
+      // Re-check: they may have reconnected right at the boundary.
+      const reconnectedNow = Array.from(activeSockets.values()).some(v => v.sessionToken === meta.sessionToken);
+      if (reconnectedNow) return;
+
       await store.setUserOnline(meta.sessionToken, false);
       const user = await store.getUser(meta.sessionToken);
       const sysMsg = await store.insertMessage({
@@ -512,9 +581,11 @@ function registerSocketHandlers(io, socket) {
       });
       io.to(meta.groupId).emit('message', await publicMessage(sysMsg));
       await broadcastDirectory();
-    }
-    await broadcastPresence(meta.groupId);
-    await broadcastStats();
+      await broadcastPresence(meta.groupId);
+      await broadcastStats();
+    }, DISCONNECT_GRACE_MS);
+
+    pendingDisconnects.set(meta.sessionToken, timer);
   });
 }
 
