@@ -5,9 +5,9 @@ const path = require('path');
 const rateLimit = require('express-rate-limit');
 const { Server } = require('socket.io');
 
-const { initStore } = require('./src/db');
-const { registerSocketHandlers } = require('./src/socketHandlers');
-const { buildRouter } = require('./src/routes');
+const { initStore } = require('./db');
+const { registerSocketHandlers } = require('./socketHandlers');
+const { buildRouter } = require('./routes');
 
 const app = express();
 const server = http.createServer(app);

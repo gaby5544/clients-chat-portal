@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Quantum Secure Transaction Desk</title>
+<script src="/socket.io/socket.io.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Sora:wght@600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<div class="app-shell" id="appShell">
+
+  <!-- ICON RAIL (always present so Admin Login stays reachable; Chats/Directory/Dashboard are admin-only) -->
+  <nav class="icon-rail" id="iconRail">
+    <button class="rail-btn active admin-only" id="railChats" title="Chats" onclick="switchPanel('groups')"><i class="fa-solid fa-comments"></i></button>
+    <button class="rail-btn admin-only" id="railDirectory" title="Directory" onclick="switchPanel('directory')"><i class="fa-solid fa-address-book"></i></button>
+    <button class="rail-btn admin-only" id="railAdmin" title="Admin Dashboard" onclick="toggleAdminDrawer()"><i class="fa-solid fa-chart-line"></i></button>
+    <div class="rail-spacer"></div>
+    <button class="rail-btn hidden" id="railLogin" title="Admin Login" onclick="loginAsAdmin()"><i class="fa-solid fa-shield-halved"></i></button>
+  </nav>
+
+  <!-- LEFT LIST PANEL (admin only) -->
+  <section class="list-panel admin-only">
+    <div class="list-panel-inner" id="groupsPanel">
+      <div class="panel-header">
+        <span class="panel-title" data-i18n="groupsTitle">Groups</span>
+        <div style="display:flex; gap:8px;">
+          <button class="panel-action-btn" onclick="createNewGroup()" title="New Group"><i class="fa-solid fa-plus"></i></button>
+          <button class="panel-action-btn mobile-only-btn" onclick="hideListPanelMobile()" title="Close"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+      </div>
+      <div class="search-box">
+        <i class="fa-solid fa-magnifying-glass"></i>
+        <input type="text" id="groupSearchInput" data-i18n-placeholder="searchGroups" placeholder="Search groups..." oninput="renderGroupsList()">
+      </div>
+      <div class="chat-items-container" id="chatsListContainer"></div>
+    </div>
+
+    <div class="list-panel-inner hidden" id="directoryPanel">
+      <div class="panel-header">
+        <span class="panel-title" data-i18n="directoryTitle">User Directory</span>
+        <button class="panel-action-btn" onclick="clearOfflineUsers()" title="Clear offline users"><i class="fa-solid fa-broom"></i></button>
+      </div>
+      <div class="search-box">
+        <i class="fa-solid fa-magnifying-glass"></i>
+        <input type="text" id="directorySearchInput" data-i18n-placeholder="searchUsers" placeholder="Search users..." oninput="renderDirectory()">
+      </div>
+      <div class="directory-container" id="directoryContainer"></div>
+    </div>
+  </section>
+
+  <!-- MAIN CHAT -->
+  <main class="chat-main">
+    <header class="chat-header">
+      <div class="brand-group">
+        <button class="icon-btn mobile-back-btn admin-only hidden" id="mobileBackBtn" onclick="showListPanelMobile()" title="Back to groups"><i class="fa-solid fa-arrow-left"></i></button>
+        <div class="vault-icon"><i class="fa-solid fa-layer-group"></i></div>
+        <div>
+          <div class="brand-title">QUANTUM SECURE TRANSACTION DESK</div>
+          <div class="brand-subtitle" id="currentGroupName">General Transaction Group #1</div>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button class="icon-btn" id="pinnedToggleBtn" onclick="togglePinnedBar()" title="Pinned Messages">
+          <i class="fa-solid fa-thumbtack"></i><span class="badge-dot hidden" id="pinnedDot"></span>
+        </button>
+        <button class="icon-btn admin-only" id="selectModeBtn" onclick="toggleSelectMode()" title="Select messages"><i class="fa-solid fa-square-check"></i></button>
+        <button class="icon-btn admin-only" onclick="openAdminDrawerTab('transactions')" title="Transaction Board"><i class="fa-solid fa-file-invoice-dollar"></i></button>
+        <div class="presence-badge">
+          <div class="status-dot online"></div>
+          <span id="selfStatusText">You: Online</span>
+        </div>
+        <div class="presence-badge" id="counterpartyPresence">
+          <div class="status-dot offline" id="peerStatusDot"></div>
+          <span id="peerStatusText">Counterparty: Offline</span>
+        </div>
+      </div>
+    </header>
+
+    <div class="pinned-bar hidden" id="pinnedBar">
+      <div class="pinned-bar-title"><i class="fa-solid fa-thumbtack"></i> <span data-i18n="pinnedMessages">Pinned Messages</span></div>
+      <div id="pinnedList" class="pinned-list"></div>
+    </div>
+
+    <div class="chat-messages" id="messageContainer">
+      <div class="drop-overlay" id="dropOverlay"><i class="fa-solid fa-cloud-arrow-up"></i><span data-i18n="dropToUpload">Drop file to upload</span></div>
+    </div>
+
+    <div class="bulk-delete-bar" id="bulkDeleteBar">
+      <span id="bulkDeleteCount">0 message(s) selected</span>
+      <div style="display:flex; gap:8px;">
+        <button class="ghost-btn" onclick="selectAllMessages()" data-i18n="selectAll">Select All</button>
+        <button class="ghost-btn" onclick="clearSelection()" data-i18n="cancel">Cancel</button>
+        <button class="admin-btn admin-btn-danger" onclick="executeBulkDeleteMessages()"><i class="fa-solid fa-trash"></i> <span data-i18n="deleteSelected">Delete Selected</span></button>
+      </div>
+    </div>
+
+    <div class="reply-preview-bar hidden" id="replyPreviewBar">
+      <div class="reply-preview-content">
+        <i class="fa-solid fa-reply"></i>
+        <div><div class="reply-preview-sender" id="replyPreviewSender"></div><div class="reply-preview-text" id="replyPreviewText"></div></div>
+      </div>
+      <i class="fa-solid fa-xmark" onclick="cancelReply()"></i>
+    </div>
+
+    <div class="typing-indicator-box" id="typingIndicator"></div>
+
+    <div class="transaction-banner hidden" id="transactionBanner">
+      <span><i class="fa-solid fa-file-invoice-dollar"></i> <span data-i18n="txFormAvailable">A Transaction Form is available for this group.</span></span>
+      <button class="admin-btn" onclick="openTransactionForm()" data-i18n="fillForm">Fill Form</button>
+    </div>
+
+    <div class="footer-controls-secondary" id="footerSecondary">
+      <select class="role-dropdown" id="roleSelect" onchange="joinSession()">
+        <option value="PARTY A" data-i18n="roleBuyer">Role: Buyer (Party A)</option>
+        <option value="PARTY B" data-i18n="roleSeller">Role: Seller (Party B)</option>
+      </select>
+
+      <select class="lang-dropdown" id="uiLangSelect" onchange="setUiLanguage(this.value)" title="Interface Language">
+        <option value="en">🇬🇧 EN</option>
+        <option value="de">🇩🇪 DE</option>
+        <option value="it">🇮🇹 IT</option>
+        <option value="tr">🇹🇷 TR</option>
+      </select>
+
+      <select class="lang-dropdown" id="targetLangSelect" title="Translate to / from this language">
+        <option value="en">🇬🇧 English</option>
+        <option value="de">🇩🇪 German</option>
+        <option value="it">🇮🇹 Italian</option>
+        <option value="tr">🇹🇷 Turkish</option>
+        <option value="zh">🇨🇳 Chinese</option>
+        <option value="hi">🇮🇳 Hindi</option>
+        <option value="es">🇪🇸 Spanish</option>
+        <option value="ar">🇸🇦 Arabic</option>
+        <option value="fr">🇫🇷 French</option>
+        <option value="pt">🇵🇹 Portuguese</option>
+        <option value="ru">🇷🇺 Russian</option>
+      </select>
+    </div>
+
+    <div class="footer-controls">
+      <button class="icon-btn" id="moreOptionsBtn" onclick="toggleFooterSecondary()" title="Language & role settings"><i class="fa-solid fa-sliders"></i></button>
+
+      <button class="icon-btn" id="translateToggleBtn" onclick="toggleTranslateBeforeSend()" title="Translate before sending"><i class="fa-solid fa-language"></i></button>
+
+      <button class="icon-btn" id="micBtn" onclick="toggleSpeechRecognition()" title="Voice to Text"><i class="fa-solid fa-microphone"></i></button>
+      <label class="icon-btn" id="fileUploadLabel" for="fileInput" title="Attach file"><i class="fa-solid fa-paperclip"></i></label>
+      <input type="file" id="fileInput" class="file-input" onchange="handleFileInputUpload(this)" />
+
+      <input type="text" class="message-input" id="messageInput" data-i18n-placeholder="writeMessage" placeholder="Write or speak message..." onkeydown="if(event.key==='Enter') sendMsg()" oninput="handleTyping()" />
+
+      <button class="send-btn" onclick="sendMsg()"><i class="fa-solid fa-paper-plane"></i></button>
+    </div>
+  </main>
+
+  <!-- ADMIN DRAWER -->
+  <aside class="admin-drawer" id="adminDrawer">
+    <div class="drawer-header">
+      <span><i class="fa-solid fa-user-gear"></i> <span data-i18n="adminPanel">Admin Command Panel</span></span>
+      <div style="display:flex; gap:14px; align-items:center;">
+        <i class="fa-solid fa-minus" onclick="minimizeAdminDrawer()" title="Minimize"></i>
+        <i class="fa-solid fa-xmark" onclick="toggleAdminDrawer(false)" title="Close"></i>
+      </div>
+    </div>
+    <div class="drawer-tabs">
+      <button class="drawer-tab active" data-tab="dashboard" onclick="setAdminTab('dashboard')" data-i18n="dashboard">Dashboard</button>
+      <button class="drawer-tab" data-tab="controls" onclick="setAdminTab('controls')" data-i18n="controls">Controls</button>
+      <button class="drawer-tab" data-tab="transactions" onclick="setAdminTab('transactions')" data-i18n="transactions">Transactions</button>
+    </div>
+
+    <div class="drawer-tab-panel" id="tabDashboard">
+      <div class="stats-grid" id="statsGrid"></div>
+      <div class="admin-section">
+        <span class="admin-section-label"><i class="fa-solid fa-eye"></i> <span data-i18n="liveDraft">LIVE SPECTATOR DRAFT</span></span>
+        <div class="live-spectator-box" id="spectatorBox">No active typing detected...</div>
+      </div>
+      <div class="admin-section">
+        <span class="admin-section-label"><i class="fa-solid fa-note-sticky"></i> <span data-i18n="privateNotes">PRIVATE OFFICER NOTES</span></span>
+        <textarea class="admin-notes-area" id="adminPrivateNotes" placeholder="Write internal notes..." oninput="saveAdminNotes()"></textarea>
+      </div>
+    </div>
+
+    <div class="drawer-tab-panel hidden" id="tabControls">
+      <div class="admin-section">
+        <span class="admin-section-label" data-i18n="roomManagement">ACTIVE ROOM MANAGEMENT</span>
+        <button class="admin-btn" onclick="createNewGroup()"><i class="fa-solid fa-plus"></i> <span data-i18n="newGroup">New Group</span></button>
+        <button class="admin-btn admin-btn-danger" onclick="deleteCurrentGroup()"><i class="fa-solid fa-trash"></i> <span data-i18n="deleteGroup">Delete Active Group</span></button>
+        <button class="admin-btn admin-btn-danger" onclick="clearChatHistory()"><i class="fa-solid fa-broom"></i> <span data-i18n="clearChat">Clear Chat History</span></button>
+        <button class="admin-btn" onclick="copyInviteLink()"><i class="fa-solid fa-link"></i> <span data-i18n="inviteLink">Clean Invite Link</span></button>
+        <button class="admin-btn" onclick="toggleHighlightGroup()"><i class="fa-solid fa-star"></i> <span data-i18n="toggleHighlight">Toggle Group Highlight</span></button>
+      </div>
+      <div class="admin-section">
+        <span class="admin-section-label" data-i18n="permissions">PARTY RENAMING &amp; PERMISSIONS</span>
+        <button class="admin-btn" onclick="renameParty('A')"><i class="fa-solid fa-pen"></i> <span data-i18n="renameBuyer">Rename Buyer (A)</span></button>
+        <button class="admin-btn" onclick="renameParty('B')"><i class="fa-solid fa-pen"></i> <span data-i18n="renameSeller">Rename Seller (B)</span></button>
+        <button class="admin-btn" onclick="toggleFileLock()" id="lockFileBtn"><i class="fa-solid fa-lock"></i> <span data-i18n="toggleUploads">Toggle File Upload Switch</span></button>
+      </div>
+      <div class="admin-section">
+        <span class="admin-section-label"><i class="fa-solid fa-user-slash"></i> <span data-i18n="userManagement">USER MANAGEMENT</span></span>
+        <select class="group-dropdown" id="kickUserSelect"></select>
+        <button class="admin-btn admin-btn-danger" onclick="kickSelectedUser()"><i class="fa-solid fa-right-from-bracket"></i> <span data-i18n="kickUser">Disconnect User</span></button>
+      </div>
+      <div class="admin-section">
+        <span class="admin-section-label"><i class="fa-solid fa-paper-plane"></i> <span data-i18n="directMessage">DIRECT MESSAGE USER</span></span>
+        <select class="group-dropdown" id="activeUsersSelect"></select>
+        <button class="admin-btn" onclick="initiateAdminDM()"><i class="fa-solid fa-bolt-lightning"></i> <span data-i18n="sendDM">Direct Message</span></button>
+      </div>
+    </div>
+
+    <div class="drawer-tab-panel hidden" id="tabTransactions">
+      <div class="admin-section">
+        <span class="admin-section-label" data-i18n="txBoard">TRANSACTION BOARD (ACTIVE GROUP)</span>
+        <div class="tx-status-badge" id="txStatusBadge">Status: Loading...</div>
+        <button class="admin-btn" onclick="toggleTransactionForm()" id="txToggleBtn"><i class="fa-solid fa-toggle-on"></i> <span id="txToggleBtnLabel" data-i18n="txToggle">Enable/Disable Form</span></button>
+        <button class="admin-btn" onclick="loadTransactionsList()"><i class="fa-solid fa-list"></i> <span data-i18n="viewSubmissions">View Submissions</span></button>
+        <button class="admin-btn" onclick="exportTransactions()"><i class="fa-solid fa-file-export"></i> <span data-i18n="exportCsv">Export CSV</span></button>
+      </div>
+      <div id="transactionsListContainer" class="transactions-list"></div>
+    </div>
+  </aside>
+
+  <!-- Minimized admin drawer pill (re-expand from here) -->
+  <button class="admin-drawer-minimized hidden" id="adminDrawerMinimized" onclick="restoreAdminDrawer()" title="Restore Admin Panel">
+    <i class="fa-solid fa-user-gear"></i>
+  </button>
+</div>
+
+<!-- CONTEXT MENU -->
+<div class="custom-context-menu" id="contextMenu">
+  <div class="context-menu-item" onclick="triggerCtxReply()"><i class="fa-solid fa-reply"></i> <span data-i18n="reply">Reply</span></div>
+  <div class="context-menu-item" onclick="triggerCtxForward()"><i class="fa-solid fa-share"></i> <span data-i18n="forward">Forward</span></div>
+  <div class="context-menu-item" onclick="triggerCtxReact()"><i class="fa-solid fa-face-smile"></i> <span data-i18n="react">React</span></div>
+  <div class="context-menu-item admin-only" id="ctxPinBtn" onclick="triggerCtxPin()"><i class="fa-solid fa-thumbtack"></i> <span data-i18n="pin">Pin</span></div>
+  <div class="context-menu-item admin-only" id="ctxEditBtn" onclick="triggerCtxEdit()"><i class="fa-solid fa-pen"></i> <span data-i18n="edit">Edit</span></div>
+  <div class="context-menu-item admin-only" id="ctxHistoryBtn" onclick="triggerCtxHistory()"><i class="fa-solid fa-clock-rotate-left"></i> <span data-i18n="editHistory">Edit History</span></div>
+  <div class="context-menu-item admin-only" id="ctxSelectBtn" onclick="triggerCtxSelect()"><i class="fa-solid fa-check-square"></i> <span data-i18n="select">Select</span></div>
+  <div class="context-menu-item admin-only danger" id="ctxDeleteBtn" onclick="triggerCtxDelete()"><i class="fa-solid fa-trash"></i> <span data-i18n="delete">Delete</span></div>
+</div>
+
+<div class="reaction-picker" id="reactionPicker">
+  <span onclick="pickReaction('👍')">👍</span><span onclick="pickReaction('❤️')">❤️</span><span onclick="pickReaction('😂')">😂</span>
+  <span onclick="pickReaction('😮')">😮</span><span onclick="pickReaction('🙏')">🙏</span><span onclick="pickReaction('✅')">✅</span>
+</div>
+
+<!-- FORWARD MODAL -->
+<div class="modal-overlay hidden" id="forwardModal">
+  <div class="modal-box">
+    <div class="modal-header"><span data-i18n="forwardTo">Forward to group</span><i class="fa-solid fa-xmark" onclick="closeModal('forwardModal')"></i></div>
+    <div class="modal-body" id="forwardGroupList"></div>
+  </div>
+</div>
+
+<!-- DM MODAL -->
+<div class="dm-modal" id="dmModal">
+  <div class="dm-header">
+    <span><i class="fa-solid fa-user-shield"></i> <span data-i18n="dmChannel">Direct Message Channel</span></span>
+    <i class="fa-solid fa-xmark" onclick="closeDMModal()"></i>
+  </div>
+  <div class="dm-body" id="dmBody"></div>
+  <div class="dm-footer">
+    <input type="text" class="message-input" id="dmInput" data-i18n-placeholder="typeReply" placeholder="Type direct reply..." onkeydown="if(event.key==='Enter') sendDMReply()" />
+    <button class="send-btn" onclick="sendDMReply()"><i class="fa-solid fa-arrow-up-right-from-square"></i></button>
+  </div>
+</div>
+
+<!-- TRANSACTION FORM MODAL -->
+<div class="modal-overlay hidden" id="txFormModal">
+  <div class="modal-box wide">
+    <div class="modal-header"><span data-i18n="txFormTitle">Transaction Information Form</span><i class="fa-solid fa-xmark" onclick="closeModal('txFormModal')"></i></div>
+    <div class="modal-body">
+      <form id="txForm" class="tx-form" onsubmit="return submitTransactionForm(event)">
+        <label data-i18n="fullLegalName">Full Legal Name<input required name="full_legal_name" maxlength="200"></label>
+        <label data-i18n="countryRegion">Country / Region<input required name="country" maxlength="100"></label>
+        <label data-i18n="txRole">Transaction Role
+          <select required name="role"><option value="Buyer">Buyer</option><option value="Seller">Seller</option></select>
+        </label>
+        <label data-i18n="assetType">Asset or Item Type<input required name="asset_type" maxlength="200"></label>
+        <label class="span-2" data-i18n="assetDescription">Asset Description<textarea name="asset_description" maxlength="1000"></textarea></label>
+        <label data-i18n="quantity">Quantity / Amount<input name="quantity" maxlength="100"></label>
+        <label data-i18n="unitPrice">Agreed Unit Price<input name="unit_price" maxlength="100"></label>
+        <label data-i18n="totalValue">Total Transaction Value<input name="total_value" maxlength="100"></label>
+        <label data-i18n="paymentCurrency">Payment Currency<input name="payment_currency" maxlength="20"></label>
+        <label data-i18n="paymentMethod">Payment Method<input name="payment_method" maxlength="100"></label>
+        <label class="span-2" data-i18n="paymentTerms">Payment Terms<input name="payment_terms" maxlength="500"></label>
+        <label class="span-2" data-i18n="additionalNotes">Additional Notes<textarea name="notes" maxlength="1000"></textarea></label>
+        <button type="submit" class="send-btn span-2" data-i18n="submitForm">Submit Transaction</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- EDIT HISTORY MODAL (admin only) -->
+<div class="modal-overlay hidden" id="historyModal">
+  <div class="modal-box">
+    <div class="modal-header"><span data-i18n="editHistoryTitle">Message Edit History</span><i class="fa-solid fa-xmark" onclick="closeModal('historyModal')"></i></div>
+    <div class="modal-body" id="historyList"></div>
+  </div>
+</div>
+
+<!-- GENERIC PROMPT/CONFIRM MODAL (replaces native prompt()/confirm() for mobile reliability) -->
+<div class="modal-overlay hidden" id="genericModal">
+  <div class="modal-box">
+    <div class="modal-header"><span id="genericModalTitle">Confirm</span><i class="fa-solid fa-xmark" onclick="closeGenericModal()"></i></div>
+    <div class="modal-body">
+      <p id="genericModalMessage" style="color:var(--text-muted); font-size:0.85rem; margin-bottom:12px;"></p>
+      <input type="text" id="genericModalInput" class="message-input" style="width:100%; margin-bottom:14px;" />
+      <div style="display:flex; gap:10px; justify-content:flex-end;">
+        <button class="ghost-btn" onclick="closeGenericModal()">Cancel</button>
+        <button class="send-btn" id="genericModalConfirmBtn">Confirm</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast-container" id="toastContainer"></div>
+
+<script src="/i18n.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

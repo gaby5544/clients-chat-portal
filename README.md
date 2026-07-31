@@ -37,19 +37,21 @@ previews; admin dashboard with live stats; offline message delivery via
 unread counters + email notification.
 
 ## Structure
+Everything sits directly in the repo root except `public/` (the web-servable
+frontend) — deliberately flattened to a single folder so uploading to GitHub
+can't silently drop a nested subfolder the way it did with the previous
+multi-level layout.
 ```
 server.js              Entry point
-src/
-  db.js                 Picks Postgres or in-memory backend
-  pgStore.js             Postgres implementation
-  memStore.js             In-memory fallback (dev only)
-  socketHandlers.js     All Socket.IO event logic
-  routes.js              REST: file upload, CSV export, health check
-  security.js            Escaping, sanitization, validation, rate limiting
-  geo.js                  IP → country/flag resolution
-  email.js                Nodemailer wrapper
+db.js                   Picks Postgres or in-memory backend
+pgStore.js              Postgres implementation
+memStore.js             In-memory fallback (dev only)
+socketHandlers.js       All Socket.IO event logic
+routes.js               REST: file upload, CSV export, health check
+security.js             Escaping, sanitization, validation, rate limiting
+email.js                Nodemailer wrapper
 public/
-  index.html, css/style.css, js/app.js, js/i18n.js
+  index.html, style.css, app.js, i18n.js
 schema.sql              Postgres schema (auto-applied on boot)
 DEPLOY_RENDER.md        Step-by-step Render deployment guide
 .env.example            All configuration options

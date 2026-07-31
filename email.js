@@ -1,97 +1,68 @@
-// Security utilities: XSS protection, input validation/sanitization, rate limiting.
+// Email notifications via Nodemailer.
+// Configure with either:
+//   EMAIL_SERVICE (e.g. "gmail") + EMAIL_USER + EMAIL_PASS
+// or generic SMTP:
+//   SMTP_HOST + SMTP_PORT + SMTP_USER + SMTP_PASS
+// If neither is configured, emails are logged to the console instead of
+// sent (mock mode) so the app still runs fully in local/dev environments.
 
-/**
- * Escape HTML special characters so user-generated text can never be
- * interpreted as markup when injected into the DOM. Applied server-side
- * before storage AND again client-side before render (defense in depth).
- */
-function escapeHtml(str) {
-  if (str === null || str === undefined) return '';
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;')
-    .replace(/\//g, '&#x2F;');
+const nodemailer = require('nodemailer');
+
+let transporter = null;
+
+function buildTransporter() {
+  if (process.env.EMAIL_SERVICE && process.env.EMAIL_USER && process.env.EMAIL_PASS) {
+    return nodemailer.createTransport({
+      service: process.env.EMAIL_SERVICE,
+      auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS }
+    });
+  }
+  if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
+    return nodemailer.createTransport({
+      host: process.env.SMTP_HOST,
+      port: Number(process.env.SMTP_PORT) || 587,
+      secure: Number(process.env.SMTP_PORT) === 465,
+      auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
+    });
+  }
+  return null;
 }
 
-/**
- * Trim, strip control characters, and enforce a max length on free-text input.
- */
-function sanitizeText(str, maxLen = 4000) {
-  if (typeof str !== 'string') return '';
-  // eslint-disable-next-line no-control-regex
-  const stripped = str.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '');
-  return stripped.trim().slice(0, maxLen);
-}
+transporter = buildTransporter();
 
-function isValidEmail(email) {
-  if (!email || typeof email !== 'string') return false;
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()) && email.length <= 254;
-}
-
-function isNonEmptyString(val, maxLen = 500) {
-  return typeof val === 'string' && val.trim().length > 0 && val.trim().length <= maxLen;
-}
-
-/**
- * Validates the transaction submission form. Returns { valid, errors }.
- */
-function validateTransactionForm(body) {
-  const errors = [];
-  const required = {
-    full_legal_name: 200,
-    country: 100,
-    role: 50,
-    asset_type: 200
-  };
-  for (const [field, maxLen] of Object.entries(required)) {
-    if (!isNonEmptyString(body[field], maxLen)) {
-      errors.push(`${field.replace(/_/g, ' ')} is required`);
+async function sendEmail(to, subject, text) {
+  if (!to) return;
+  try {
+    if (transporter) {
+      await transporter.sendMail({
+        from: process.env.EMAIL_FROM || '"Quantum Desk Alerts" <no-reply@quantumdesk.com>',
+        to,
+        subject,
+        text
+      });
+      console.log(`[email] sent to ${to}: ${subject}`);
+    } else {
+      console.log(`[email:mock] to=${to} subject="${subject}" body="${text}"`);
     }
-  }
-  if (body.role && !['Buyer', 'Seller'].includes(body.role)) {
-    errors.push('role must be Buyer or Seller');
-  }
-  return { valid: errors.length === 0, errors };
-}
-
-/**
- * Minimal in-memory sliding-window rate limiter for Socket.IO events.
- * Not distributed (fine for a single Render instance); swap for a
- * Redis-backed limiter if you scale to multiple instances.
- */
-class RateLimiter {
-  constructor({ windowMs = 10000, max = 15 } = {}) {
-    this.windowMs = windowMs;
-    this.max = max;
-    this.hits = new Map(); // key -> [timestamps]
-  }
-
-  allow(key) {
-    const now = Date.now();
-    const arr = (this.hits.get(key) || []).filter(t => now - t < this.windowMs);
-    arr.push(now);
-    this.hits.set(key, arr);
-    return arr.length <= this.max;
-  }
-
-  // Periodically clean up old keys to avoid unbounded memory growth.
-  sweep() {
-    const now = Date.now();
-    for (const [key, arr] of this.hits.entries()) {
-      const fresh = arr.filter(t => now - t < this.windowMs);
-      if (fresh.length === 0) this.hits.delete(key); else this.hits.set(key, fresh);
-    }
+  } catch (err) {
+    console.error('[email] send failed:', err.message);
   }
 }
 
-module.exports = {
-  escapeHtml,
-  sanitizeText,
-  isValidEmail,
-  isNonEmptyString,
-  validateTransactionForm,
-  RateLimiter
-};
+function notifyOfflineMessage(toEmail, { fromName, groupName, text }) {
+  return sendEmail(
+    toEmail,
+    `New message in ${groupName}`,
+    `${fromName} sent you a message while you were offline:\n\n"${text}"\n\nLog in to Quantum Secure Desk to reply.`
+  );
+}
+
+function notifyTransactionSubmitted(toEmail, { submitterName, groupName }) {
+  return sendEmail(
+    toEmail,
+    `New transaction submitted in ${groupName}`,
+    `${submitterName} submitted a new transaction form in "${groupName}". Review it from the Admin Transaction Board.`
+  );
+}
+
+module.exports = { sendEmail, notifyOfflineMessage, notifyTransactionSubmitted };
