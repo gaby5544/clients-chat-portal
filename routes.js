@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const rateLimit = require('express-rate-limit');
 const { store } = require('./db');
 const { validateTransactionForm, escapeHtml } = require('./security');
+const { generateTransactionPdf } = require('./pdfReceipt');
 
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
@@ -45,6 +46,7 @@ const upload = multer({
 const uploadLimiter = rateLimit({ windowMs: 60 * 1000, max: 20, standardHeaders: true, legacyHeaders: false });
 const formLimiter = rateLimit({ windowMs: 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false });
 const exportLimiter = rateLimit({ windowMs: 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false });
+const pdfLimiter = rateLimit({ windowMs: 60 * 1000, max: 15, standardHeaders: true, legacyHeaders: false });
 
 function requireAdmin(req, res, next) {
   const key = req.headers['x-admin-key'] || req.query.adminKey;
@@ -113,6 +115,19 @@ function buildRouter() {
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', `attachment; filename="transactions-${req.params.groupId}.csv"`);
     res.send(lines.join('\n'));
+  });
+
+  // ---- PDF receipt download ----
+  // Accessible via the transaction's UUID alone (same "unguessable link"
+  // pattern as e.g. a payment receipt link) — this lets the person who just
+  // submitted the form download their own receipt immediately without an
+  // admin login, while remaining effectively private since UUIDs aren't
+  // enumerable.
+  router.get('/api/transactions/pdf/:txId', pdfLimiter, async (req, res) => {
+    const tx = await store.getTransactionById(req.params.txId);
+    if (!tx) return res.status(404).json({ error: 'Receipt not found' });
+    const group = await store.getGroup(tx.group_id);
+    generateTransactionPdf(res, tx, group ? group.name : 'Unknown Group');
   });
 
   router.get('/api/health', (req, res) => res.json({

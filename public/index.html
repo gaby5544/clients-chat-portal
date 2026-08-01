@@ -153,12 +153,12 @@
 
       <input type="text" class="message-input" id="messageInput" data-i18n-placeholder="writeMessage" placeholder="Write or speak message..." onkeydown="if(event.key==='Enter') sendMsg()" oninput="handleTyping()" />
 
-      <button class="send-btn" onclick="sendMsg()"><i class="fa-solid fa-paper-plane"></i></button>
+      <button class="send-btn-elite" onclick="sendMsg()" title="Send message"><i class="fa-solid fa-arrow-up"></i></button>
     </div>
   </main>
 
   <!-- ADMIN DRAWER -->
-  <aside class="admin-drawer" id="adminDrawer">
+  <aside class="admin-drawer admin-only" id="adminDrawer">
     <div class="drawer-header">
       <span><i class="fa-solid fa-user-gear"></i> <span data-i18n="adminPanel">Admin Command Panel</span></span>
       <div style="display:flex; gap:14px; align-items:center;">
@@ -219,12 +219,17 @@
         <button class="admin-btn" onclick="loadTransactionsList()"><i class="fa-solid fa-list"></i> <span data-i18n="viewSubmissions">View Submissions</span></button>
         <button class="admin-btn" onclick="exportTransactions()"><i class="fa-solid fa-file-export"></i> <span data-i18n="exportCsv">Export CSV</span></button>
       </div>
+      <div class="admin-section">
+        <span class="admin-section-label"><i class="fa-solid fa-paper-plane"></i> SEND FORM TO ANY GROUP</span>
+        <select class="group-dropdown" id="sendFormGroupSelect"></select>
+        <button class="admin-btn" onclick="sendFormToSelectedGroup()"><i class="fa-solid fa-bolt"></i> Enable Form For This Group</button>
+      </div>
       <div id="transactionsListContainer" class="transactions-list"></div>
     </div>
   </aside>
 
   <!-- Minimized admin drawer pill (re-expand from here) -->
-  <button class="admin-drawer-minimized hidden" id="adminDrawerMinimized" onclick="restoreAdminDrawer()" title="Restore Admin Panel">
+  <button class="admin-drawer-minimized admin-only hidden" id="adminDrawerMinimized" onclick="restoreAdminDrawer()" title="Restore Admin Panel">
     <i class="fa-solid fa-user-gear"></i>
   </button>
 </div>
@@ -269,25 +274,49 @@
 
 <!-- TRANSACTION FORM MODAL -->
 <div class="modal-overlay hidden" id="txFormModal">
-  <div class="modal-box wide">
-    <div class="modal-header"><span data-i18n="txFormTitle">Transaction Information Form</span><i class="fa-solid fa-xmark" onclick="closeModal('txFormModal')"></i></div>
-    <div class="modal-body">
-      <form id="txForm" class="tx-form" onsubmit="return submitTransactionForm(event)">
-        <label data-i18n="fullLegalName">Full Legal Name<input required name="full_legal_name" maxlength="200"></label>
-        <label data-i18n="countryRegion">Country / Region<input required name="country" maxlength="100"></label>
-        <label data-i18n="txRole">Transaction Role
-          <select required name="role"><option value="Buyer">Buyer</option><option value="Seller">Seller</option></select>
-        </label>
-        <label data-i18n="assetType">Asset or Item Type<input required name="asset_type" maxlength="200"></label>
-        <label class="span-2" data-i18n="assetDescription">Asset Description<textarea name="asset_description" maxlength="1000"></textarea></label>
-        <label data-i18n="quantity">Quantity / Amount<input name="quantity" maxlength="100"></label>
-        <label data-i18n="unitPrice">Agreed Unit Price<input name="unit_price" maxlength="100"></label>
-        <label data-i18n="totalValue">Total Transaction Value<input name="total_value" maxlength="100"></label>
-        <label data-i18n="paymentCurrency">Payment Currency<input name="payment_currency" maxlength="20"></label>
-        <label data-i18n="paymentMethod">Payment Method<input name="payment_method" maxlength="100"></label>
-        <label class="span-2" data-i18n="paymentTerms">Payment Terms<input name="payment_terms" maxlength="500"></label>
-        <label class="span-2" data-i18n="additionalNotes">Additional Notes<textarea name="notes" maxlength="1000"></textarea></label>
-        <button type="submit" class="send-btn span-2" data-i18n="submitForm">Submit Transaction</button>
+  <div class="modal-box wide tx-modal-elite">
+    <div class="tx-modal-header">
+      <div class="tx-modal-header-icon"><i class="fa-solid fa-file-signature"></i></div>
+      <div>
+        <div class="tx-modal-title" data-i18n="txFormTitle">Transaction Information Form</div>
+        <div class="tx-modal-subtitle">Secure · Encrypted in transit · Receipt issued instantly</div>
+      </div>
+      <i class="fa-solid fa-xmark tx-modal-close" onclick="closeModal('txFormModal')"></i>
+    </div>
+    <div class="modal-body tx-modal-body">
+      <form id="txForm" class="tx-form-elite" onsubmit="return submitTransactionForm(event)">
+
+        <div class="tx-section-heading"><i class="fa-solid fa-id-card"></i> Party Information</div>
+        <div class="tx-form-grid">
+          <label><i class="fa-solid fa-signature"></i> <span data-i18n="fullLegalName">Full Legal Name</span><input required name="full_legal_name" maxlength="200" placeholder="As it appears on official ID"></label>
+          <label><i class="fa-solid fa-earth-africa"></i> <span data-i18n="countryRegion">Country / Region</span><input required name="country" maxlength="100" placeholder="e.g. Rwanda"></label>
+          <label><i class="fa-solid fa-user-tag"></i> <span data-i18n="txRole">Transaction Role</span>
+            <select required name="role"><option value="">Select role...</option><option value="Buyer">Buyer</option><option value="Seller">Seller</option></select>
+          </label>
+        </div>
+
+        <div class="tx-section-heading"><i class="fa-solid fa-box-open"></i> Asset Details</div>
+        <div class="tx-form-grid">
+          <label><i class="fa-solid fa-cubes"></i> <span data-i18n="assetType">Asset or Item Type</span><input required name="asset_type" maxlength="200" placeholder="e.g. Gold Bullion, Real Estate"></label>
+          <label><i class="fa-solid fa-hashtag"></i> <span data-i18n="quantity">Quantity / Amount</span><input name="quantity" maxlength="100" placeholder="e.g. 10 units"></label>
+          <label class="span-2"><i class="fa-solid fa-align-left"></i> <span data-i18n="assetDescription">Asset Description</span><textarea name="asset_description" maxlength="1000" placeholder="Describe the asset in detail..."></textarea></label>
+        </div>
+
+        <div class="tx-section-heading"><i class="fa-solid fa-money-check-dollar"></i> Payment Terms</div>
+        <div class="tx-form-grid">
+          <label><i class="fa-solid fa-tag"></i> <span data-i18n="unitPrice">Agreed Unit Price</span><input name="unit_price" maxlength="100" placeholder="e.g. 65,000"></label>
+          <label><i class="fa-solid fa-sack-dollar"></i> <span data-i18n="totalValue">Total Transaction Value</span><input name="total_value" maxlength="100" placeholder="e.g. 650,000"></label>
+          <label><i class="fa-solid fa-coins"></i> <span data-i18n="paymentCurrency">Payment Currency</span><input name="payment_currency" maxlength="20" placeholder="e.g. USD"></label>
+          <label><i class="fa-solid fa-building-columns"></i> <span data-i18n="paymentMethod">Payment Method</span><input name="payment_method" maxlength="100" placeholder="e.g. Wire Transfer"></label>
+          <label class="span-2"><i class="fa-solid fa-file-contract"></i> <span data-i18n="paymentTerms">Payment Terms</span><input name="payment_terms" maxlength="500" placeholder="e.g. Net 30, Escrow release on delivery"></label>
+          <label class="span-2"><i class="fa-solid fa-note-sticky"></i> <span data-i18n="additionalNotes">Additional Notes</span><textarea name="notes" maxlength="1000" placeholder="Anything else worth noting..."></textarea></label>
+        </div>
+
+        <button type="submit" class="tx-submit-elite span-2">
+          <i class="fa-solid fa-shield-halved"></i>
+          <span data-i18n="submitForm">Submit Transaction</span>
+          <i class="fa-solid fa-arrow-right-long tx-submit-arrow"></i>
+        </button>
       </form>
     </div>
   </div>

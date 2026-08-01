@@ -363,7 +363,7 @@ function registerSocketHandlers(io, socket) {
     for (const admin of admins) {
       await notifyTransactionSubmitted(admin.email, { submitterName: tx.submitted_by, groupName: group.name });
     }
-    socket.emit('transaction-submit-ack', { success: true });
+    socket.emit('transaction-submit-ack', { success: true, txId: tx.id });
   });
 
   socket.on('admin-get-transactions', async ({ groupId }) => {

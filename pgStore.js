@@ -301,6 +301,11 @@ class PgStore {
     return rows;
   }
 
+  async getTransactionById(txId) {
+    const { rows } = await this.pool.query(`SELECT * FROM transactions WHERE id=$1`, [txId]);
+    return rows[0] || null;
+  }
+
   async deleteTransaction(groupId, txId) {
     await this.pool.query(`DELETE FROM transactions WHERE group_id=$1 AND id=$2`, [groupId, txId]);
   }

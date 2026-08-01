@@ -74,12 +74,12 @@ function escapeHtml(str) {
   d.textContent = str ?? '';
   return d.innerHTML;
 }
-function toast(msg, isError = false) {
+function toast(msg, isError = false, allowHtml = false) {
   const t = document.createElement('div');
   t.className = 'toast' + (isError ? ' error' : '');
-  t.textContent = msg;
+  if (allowHtml) t.innerHTML = msg; else t.textContent = msg;
   el('toastContainer').appendChild(t);
-  setTimeout(() => t.remove(), 4500);
+  setTimeout(() => t.remove(), allowHtml ? 9000 : 4500);
 }
 function initialsOf(name) { return (name || '?').trim().charAt(0).toUpperCase(); }
 
@@ -596,7 +596,16 @@ function scrollToMessage(id) {
 }
 
 // ---------------- GROUPS LIST ----------------
-socket.on('all-groups-list', (list) => { groupsCache = list; renderGroupsList(); });
+socket.on('all-groups-list', (list) => {
+  groupsCache = list;
+  renderGroupsList();
+  const sel = el('sendFormGroupSelect');
+  if (sel) {
+    const prevValue = sel.value;
+    sel.innerHTML = list.map(g => `<option value="${g.id}">${escapeHtml(g.name)}${g.transactionFormEnabled ? ' (currently ON)' : ''}</option>`).join('');
+    if (list.some(g => g.id === prevValue)) sel.value = prevValue;
+  }
+});
 
 function toggleFavorite(groupId, ev) {
   ev.stopPropagation();
@@ -827,10 +836,30 @@ function submitTransactionForm(evt) {
   socket.emit('submit-transaction', { groupId: activeGroupId, formData });
   return false;
 }
-socket.on('transaction-submit-ack', () => { toast('Transaction submitted successfully.'); closeModal('txFormModal'); el('txForm').reset(); });
+socket.on('transaction-submit-ack', ({ txId }) => {
+  toast('Transaction submitted successfully. Downloading your PDF receipt...');
+  closeModal('txFormModal');
+  el('txForm').reset();
+  if (txId) {
+    // Auto-download; if the browser's popup blocker intercepts it, the
+    // toast link below is the fallback.
+    const pdfUrl = `/api/transactions/pdf/${txId}`;
+    const win = window.open(pdfUrl, '_blank');
+    if (!win) toast(`Pop-up blocked — <a href="${pdfUrl}" target="_blank" style="color:var(--accent-cyan); text-decoration:underline;">tap here to download your receipt</a>.`, false, true);
+  }
+});
 
 // ---------------- ADMIN: TRANSACTION BOARD ----------------
 function toggleTransactionForm() { socket.emit('admin-toggle-transaction-form', { groupId: activeGroupId }); }
+
+function sendFormToSelectedGroup() {
+  const sel = el('sendFormGroupSelect');
+  const targetGroupId = sel.value;
+  if (!targetGroupId) return toast('No group selected.', true);
+  const targetName = sel.selectedOptions[0]?.textContent || 'that group';
+  socket.emit('admin-toggle-transaction-form', { groupId: targetGroupId });
+  toast(`Transaction form toggled for ${targetName}.`);
+}
 function loadTransactionsList() { socket.emit('admin-get-transactions', { groupId: activeGroupId }); }
 socket.on('transactions-list', ({ transactions, formEnabled }) => {
   updateTxStatusBadge(!!formEnabled);
@@ -840,7 +869,10 @@ socket.on('transactions-list', ({ transactions, formEnabled }) => {
       <div class="tx-card-row"><b>${t.full_legal_name}</b><span>${new Date(t.submitted_at).toLocaleDateString()}</span></div>
       <div class="tx-card-row"><span>${t.role}</span><span>${t.country}</span></div>
       <div class="tx-card-row"><span>${t.asset_type}</span><span>${t.total_value || ''} ${t.payment_currency || ''}</span></div>
-      <span class="tx-delete-btn" onclick="deleteTransaction('${t.id}')"><i class="fa-solid fa-trash"></i> Delete</span>
+      <div class="tx-card-actions">
+        <a class="tx-pdf-btn" href="/api/transactions/pdf/${t.id}" target="_blank"><i class="fa-solid fa-file-pdf"></i> PDF</a>
+        <span class="tx-delete-btn" onclick="deleteTransaction('${t.id}')"><i class="fa-solid fa-trash"></i> Delete</span>
+      </div>
     </div>`).join('') : '<div style="color:var(--text-muted); font-size:0.85rem;">No submissions yet.</div>';
 });
 socket.on('transaction-submitted', () => { if (!el('tabTransactions').classList.contains('hidden')) loadTransactionsList(); toast('New transaction submitted.'); });

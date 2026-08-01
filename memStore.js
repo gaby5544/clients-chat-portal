@@ -238,6 +238,14 @@ class MemStore {
 
   async getTransactions(groupId) { return this.transactions.get(groupId) || []; }
 
+  async getTransactionById(txId) {
+    for (const [groupId, list] of this.transactions.entries()) {
+      const found = list.find(t => t.id === txId);
+      if (found) return { ...found, group_id: groupId };
+    }
+    return null;
+  }
+
   async deleteTransaction(groupId, txId) {
     const list = this.transactions.get(groupId) || [];
     this.transactions.set(groupId, list.filter(t => t.id !== txId));
