@@ -16,6 +16,7 @@ function makeDefaultGroup(id, name) {
     file_uploads_enabled: true,
     highlighted: false,
     transaction_form_enabled: false,
+    banner_url: null,
     created_at: nowIso()
   };
 }
@@ -31,11 +32,22 @@ class MemStore {
     this.notifications = new Map();  // sessionToken -> [notification]
     this.unread = new Map();         // sessionToken -> Map(groupId -> count)
     this.transactions = new Map();   // groupId -> [transaction]
+    this.announcements = new Map();  // groupId -> [announcement]
+    this.tasks = new Map();          // groupId -> [task]
+    this.messageReads = new Map();   // messageId -> Map(sessionToken -> {deliveredAt, readAt})
+    this.pushSubs = new Map();       // endpoint -> {sessionToken, endpoint, p256dh, auth}
+    this.branding = {
+      id: 1, logo_url: null, accent_color: '#38bdf8', accent_color_2: '#8b5cf6',
+      welcome_message: 'Welcome to Quantum Secure Transaction Desk.', background_url: null,
+      updated_at: nowIso()
+    };
 
     this.groups.set('default-group', makeDefaultGroup('default-group', 'General Transaction Group #1'));
     this.messages.set('default-group', []);
     this.pins.set('default-group', new Set());
     this.transactions.set('default-group', []);
+    this.announcements.set('default-group', []);
+    this.tasks.set('default-group', []);
   }
 
   async init() { /* nothing to do for memory backend */ }
@@ -48,6 +60,7 @@ class MemStore {
       display_name: u.displayName ?? existing.display_name,
       role: u.role ?? existing.role ?? 'PARTY A',
       is_admin: u.isAdmin ?? existing.is_admin ?? false,
+      admin_role: u.adminRole !== undefined ? u.adminRole : existing.admin_role ?? null,
       email: u.email !== undefined ? u.email : existing.email ?? null,
       country_code: u.countryCode !== undefined ? u.countryCode : existing.country_code ?? null,
       avatar_seed: existing.avatar_seed || u.sessionToken,
@@ -86,6 +99,8 @@ class MemStore {
       this.messages.set(groupId, []);
       this.pins.set(groupId, new Set());
       this.transactions.set(groupId, []);
+      this.announcements.set(groupId, []);
+      this.tasks.set(groupId, []);
     }
     return this.groups.get(groupId);
   }
@@ -105,6 +120,8 @@ class MemStore {
     this.messages.delete(groupId);
     this.pins.delete(groupId);
     this.transactions.delete(groupId);
+    this.announcements.delete(groupId);
+    this.tasks.delete(groupId);
   }
 
   // ---------- MESSAGES ----------
@@ -279,6 +296,126 @@ class MemStore {
       messagesToday,
       uploadsToday,
       transactionsSubmitted: await this.getAllTransactionsCount()
+    };
+  }
+
+  // ---------- ANNOUNCEMENTS ----------
+  async createAnnouncement(a) {
+    const record = { id: uuid(), group_id: a.groupId, message_id: a.messageId || null, text: a.text, created_by: a.createdBy || null, created_at: nowIso() };
+    if (!this.announcements.has(a.groupId)) this.announcements.set(a.groupId, []);
+    this.announcements.get(a.groupId).unshift(record);
+    return record;
+  }
+  async getAnnouncements(groupId) { return this.announcements.get(groupId) || []; }
+  async deleteAnnouncement(groupId, id) {
+    const list = this.announcements.get(groupId) || [];
+    this.announcements.set(groupId, list.filter(a => a.id !== id));
+  }
+
+  // ---------- TASKS ----------
+  async createTask(t) {
+    const record = {
+      id: uuid(), group_id: t.groupId, title: t.title, description: t.description || null,
+      status: 'Pending', created_by: t.createdBy || null, assigned_role: t.assignedRole || null,
+      created_at: nowIso(), updated_at: nowIso()
+    };
+    if (!this.tasks.has(t.groupId)) this.tasks.set(t.groupId, []);
+    this.tasks.get(t.groupId).unshift(record);
+    return record;
+  }
+  async getTasks(groupId) { return this.tasks.get(groupId) || []; }
+  async updateTaskStatus(groupId, taskId, status) {
+    const list = this.tasks.get(groupId) || [];
+    const task = list.find(t => t.id === taskId);
+    if (task) { task.status = status; task.updated_at = nowIso(); }
+    return task || null;
+  }
+  async deleteTask(groupId, taskId) {
+    const list = this.tasks.get(groupId) || [];
+    this.tasks.set(groupId, list.filter(t => t.id !== taskId));
+  }
+  async getPendingTasksCount() {
+    let count = 0;
+    for (const list of this.tasks.values()) count += list.filter(t => t.status === 'Pending').length;
+    return count;
+  }
+
+  // ---------- MESSAGE READS ----------
+  async markDelivered(messageId, sessionToken) {
+    if (!this.messageReads.has(messageId)) this.messageReads.set(messageId, new Map());
+    const m = this.messageReads.get(messageId);
+    if (!m.has(sessionToken)) m.set(sessionToken, { deliveredAt: nowIso(), readAt: null });
+    return this.getMessageStatus(messageId);
+  }
+  async markRead(messageId, sessionToken) {
+    if (!this.messageReads.has(messageId)) this.messageReads.set(messageId, new Map());
+    const m = this.messageReads.get(messageId);
+    const existing = m.get(sessionToken) || { deliveredAt: nowIso(), readAt: null };
+    existing.readAt = nowIso();
+    if (!existing.deliveredAt) existing.deliveredAt = existing.readAt;
+    m.set(sessionToken, existing);
+    return this.getMessageStatus(messageId);
+  }
+  async markGroupRead(groupId, sessionToken, excludeSenderToken) {
+    const list = this.messages.get(groupId) || [];
+    const updatedIds = [];
+    for (const msg of list) {
+      if (msg.sender_token === excludeSenderToken || !msg.sender_token) continue;
+      if (msg.sender_token === sessionToken) continue;
+      await this.markRead(msg.id, sessionToken);
+      updatedIds.push(msg.id);
+    }
+    return updatedIds;
+  }
+  async getMessageStatus(messageId) {
+    const m = this.messageReads.get(messageId);
+    if (!m || m.size === 0) return 'sent';
+    const entries = Array.from(m.values());
+    if (entries.some(e => e.readAt)) return 'read';
+    if (entries.some(e => e.deliveredAt)) return 'delivered';
+    return 'sent';
+  }
+
+  // ---------- PUSH SUBSCRIPTIONS ----------
+  async savePushSubscription(sessionToken, sub) {
+    this.pushSubs.set(sub.endpoint, { sessionToken, endpoint: sub.endpoint, p256dh: sub.keys.p256dh, auth: sub.keys.auth });
+  }
+  async removePushSubscription(endpoint) { this.pushSubs.delete(endpoint); }
+  async getPushSubscriptionsForUser(sessionToken) {
+    return Array.from(this.pushSubs.values()).filter(s => s.sessionToken === sessionToken);
+  }
+
+  // ---------- BRANDING ----------
+  async getBranding() { return this.branding; }
+  async updateBranding(fields) {
+    Object.assign(this.branding, fields, { updated_at: nowIso() });
+    return this.branding;
+  }
+
+  // ---------- DASHBOARD WIDGETS ----------
+  async getDashboardWidgets() {
+    const allUsers = Array.from(this.users.values());
+    const onlineUsers = allUsers.filter(u => u.is_online);
+
+    const allTx = [];
+    for (const [groupId, list] of this.transactions.entries()) {
+      for (const t of list) allTx.push({ ...t, group_id: groupId });
+    }
+    allTx.sort((a, b) => new Date(b.submitted_at) - new Date(a.submitted_at));
+
+    const allUploads = [];
+    for (const [groupId, list] of this.messages.entries()) {
+      for (const m of list) {
+        if (m.file_url && !m.is_deleted) allUploads.push({ ...m, group_id: groupId });
+      }
+    }
+    allUploads.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+    return {
+      onlineUsers: onlineUsers.map(u => ({ displayName: u.display_name, role: u.role, isAdmin: u.is_admin })),
+      recentTransactions: allTx.slice(0, 5),
+      recentUploads: allUploads.slice(0, 5).map(m => ({ id: m.id, fileName: m.file_name, fileType: m.file_type, sender: m.sender_name, groupId: m.group_id, createdAt: m.created_at })),
+      pendingReviews: await this.getPendingTasksCount()
     };
   }
 }

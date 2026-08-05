@@ -31,18 +31,19 @@ class PgStore {
   // ---------- USERS ----------
   async upsertUser(u) {
     const { rows } = await this.pool.query(
-      `INSERT INTO users (session_token, display_name, role, is_admin, email, country_code, avatar_seed, is_online, last_seen)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8, NOW())
+      `INSERT INTO users (session_token, display_name, role, is_admin, admin_role, email, country_code, avatar_seed, is_online, last_seen)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, NOW())
        ON CONFLICT (session_token) DO UPDATE SET
          display_name = COALESCE($2, users.display_name),
          role = COALESCE($3, users.role),
          is_admin = COALESCE($4, users.is_admin),
-         email = CASE WHEN $5 IS NOT NULL THEN $5 ELSE users.email END,
-         country_code = CASE WHEN $6 IS NOT NULL THEN $6 ELSE users.country_code END,
-         is_online = COALESCE($8, users.is_online),
+         admin_role = CASE WHEN $5 IS NOT NULL THEN $5 ELSE users.admin_role END,
+         email = CASE WHEN $6 IS NOT NULL THEN $6 ELSE users.email END,
+         country_code = CASE WHEN $7 IS NOT NULL THEN $7 ELSE users.country_code END,
+         is_online = COALESCE($9, users.is_online),
          last_seen = NOW()
        RETURNING *`,
-      [u.sessionToken, u.displayName, u.role || 'PARTY A', !!u.isAdmin, u.email || null, u.countryCode || null, u.sessionToken, u.isOnline ?? false]
+      [u.sessionToken, u.displayName, u.role || 'PARTY A', !!u.isAdmin, u.adminRole || null, u.email || null, u.countryCode || null, u.sessionToken, u.isOnline ?? false]
     );
     return rows[0];
   }
@@ -95,7 +96,7 @@ class PgStore {
     const map = {
       name: 'name', custom_name_a: 'custom_name_a', custom_name_b: 'custom_name_b',
       file_uploads_enabled: 'file_uploads_enabled', highlighted: 'highlighted',
-      transaction_form_enabled: 'transaction_form_enabled'
+      transaction_form_enabled: 'transaction_form_enabled', banner_url: 'banner_url'
     };
     const keys = Object.keys(fields).filter(k => map[k]);
     if (keys.length === 0) return this.getGroup(groupId);
@@ -328,6 +329,146 @@ class PgStore {
       messagesToday: mt[0].total,
       uploadsToday: ut[0].total,
       transactionsSubmitted: tx[0].total
+    };
+  }
+
+  // ---------- ANNOUNCEMENTS ----------
+  async createAnnouncement(a) {
+    const id = uuid();
+    const { rows } = await this.pool.query(
+      `INSERT INTO announcements (id, group_id, message_id, text, created_by) VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+      [id, a.groupId, a.messageId || null, a.text, a.createdBy || null]
+    );
+    return rows[0];
+  }
+  async getAnnouncements(groupId) {
+    const { rows } = await this.pool.query(`SELECT * FROM announcements WHERE group_id=$1 ORDER BY created_at DESC`, [groupId]);
+    return rows;
+  }
+  async deleteAnnouncement(groupId, id) {
+    await this.pool.query(`DELETE FROM announcements WHERE group_id=$1 AND id=$2`, [groupId, id]);
+  }
+
+  // ---------- TASKS ----------
+  async createTask(t) {
+    const id = uuid();
+    const { rows } = await this.pool.query(
+      `INSERT INTO tasks (id, group_id, title, description, status, created_by, assigned_role)
+       VALUES ($1,$2,$3,$4,'Pending',$5,$6) RETURNING *`,
+      [id, t.groupId, t.title, t.description || null, t.createdBy || null, t.assignedRole || null]
+    );
+    return rows[0];
+  }
+  async getTasks(groupId) {
+    const { rows } = await this.pool.query(`SELECT * FROM tasks WHERE group_id=$1 ORDER BY created_at DESC`, [groupId]);
+    return rows;
+  }
+  async updateTaskStatus(groupId, taskId, status) {
+    const { rows } = await this.pool.query(
+      `UPDATE tasks SET status=$3, updated_at=NOW() WHERE group_id=$1 AND id=$2 RETURNING *`,
+      [groupId, taskId, status]
+    );
+    return rows[0] || null;
+  }
+  async deleteTask(groupId, taskId) {
+    await this.pool.query(`DELETE FROM tasks WHERE group_id=$1 AND id=$2`, [groupId, taskId]);
+  }
+  async getPendingTasksCount() {
+    const { rows } = await this.pool.query(`SELECT COUNT(*)::int AS total FROM tasks WHERE status='Pending'`);
+    return rows[0].total;
+  }
+
+  // ---------- MESSAGE READS ----------
+  async markDelivered(messageId, sessionToken) {
+    await this.pool.query(
+      `INSERT INTO message_reads (message_id, session_token, delivered_at) VALUES ($1,$2,NOW())
+       ON CONFLICT (message_id, session_token) DO UPDATE SET delivered_at = COALESCE(message_reads.delivered_at, NOW())`,
+      [messageId, sessionToken]
+    );
+    return this.getMessageStatus(messageId);
+  }
+  async markRead(messageId, sessionToken) {
+    await this.pool.query(
+      `INSERT INTO message_reads (message_id, session_token, delivered_at, read_at) VALUES ($1,$2,NOW(),NOW())
+       ON CONFLICT (message_id, session_token) DO UPDATE SET
+         read_at = NOW(),
+         delivered_at = COALESCE(message_reads.delivered_at, NOW())`,
+      [messageId, sessionToken]
+    );
+    return this.getMessageStatus(messageId);
+  }
+  async markGroupRead(groupId, sessionToken, excludeSenderToken) {
+    const { rows } = await this.pool.query(
+      `SELECT id FROM messages WHERE group_id=$1 AND is_deleted=FALSE AND sender_token IS NOT NULL AND sender_token != $2`,
+      [groupId, sessionToken]
+    );
+    const ids = rows.map(r => r.id);
+    for (const id of ids) await this.markRead(id, sessionToken);
+    return ids;
+  }
+  async getMessageStatus(messageId) {
+    const { rows } = await this.pool.query(
+      `SELECT COUNT(*) FILTER (WHERE read_at IS NOT NULL)::int AS read_count,
+              COUNT(*) FILTER (WHERE delivered_at IS NOT NULL)::int AS delivered_count
+       FROM message_reads WHERE message_id=$1`,
+      [messageId]
+    );
+    const { read_count, delivered_count } = rows[0];
+    if (read_count > 0) return 'read';
+    if (delivered_count > 0) return 'delivered';
+    return 'sent';
+  }
+
+  // ---------- PUSH SUBSCRIPTIONS ----------
+  async savePushSubscription(sessionToken, sub) {
+    await this.pool.query(
+      `INSERT INTO push_subscriptions (session_token, endpoint, p256dh, auth) VALUES ($1,$2,$3,$4)
+       ON CONFLICT (endpoint) DO UPDATE SET session_token=$1, p256dh=$3, auth=$4`,
+      [sessionToken, sub.endpoint, sub.keys.p256dh, sub.keys.auth]
+    );
+  }
+  async removePushSubscription(endpoint) {
+    await this.pool.query(`DELETE FROM push_subscriptions WHERE endpoint=$1`, [endpoint]);
+  }
+  async getPushSubscriptionsForUser(sessionToken) {
+    const { rows } = await this.pool.query(`SELECT * FROM push_subscriptions WHERE session_token=$1`, [sessionToken]);
+    return rows;
+  }
+
+  // ---------- BRANDING ----------
+  async getBranding() {
+    const { rows } = await this.pool.query(`SELECT * FROM branding_settings WHERE id=1`);
+    if (rows[0]) return rows[0];
+    const { rows: inserted } = await this.pool.query(`INSERT INTO branding_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING RETURNING *`);
+    return inserted[0] || (await this.pool.query(`SELECT * FROM branding_settings WHERE id=1`)).rows[0];
+  }
+  async updateBranding(fields) {
+    const map = { logo_url: 'logo_url', accent_color: 'accent_color', accent_color_2: 'accent_color_2', welcome_message: 'welcome_message', background_url: 'background_url' };
+    const keys = Object.keys(fields).filter(k => map[k]);
+    if (keys.length === 0) return this.getBranding();
+    await this.getBranding(); // ensure row exists
+    const setClause = keys.map((k, i) => `${map[k]} = $${i + 1}`).join(', ');
+    const values = keys.map(k => fields[k]);
+    const { rows } = await this.pool.query(
+      `UPDATE branding_settings SET ${setClause}, updated_at=NOW() WHERE id=1 RETURNING *`,
+      values
+    );
+    return rows[0];
+  }
+
+  // ---------- DASHBOARD WIDGETS ----------
+  async getDashboardWidgets() {
+    const [{ rows: online }, { rows: recentTx }, { rows: recentUploads }, pendingReviews] = await Promise.all([
+      this.pool.query(`SELECT display_name, role, is_admin FROM users WHERE is_online=TRUE ORDER BY last_seen DESC`),
+      this.pool.query(`SELECT * FROM transactions ORDER BY submitted_at DESC LIMIT 5`),
+      this.pool.query(`SELECT id, file_name, file_type, sender_name, group_id, created_at FROM messages WHERE file_url IS NOT NULL AND is_deleted=FALSE ORDER BY created_at DESC LIMIT 5`),
+      this.getPendingTasksCount()
+    ]);
+    return {
+      onlineUsers: online.map(u => ({ displayName: u.display_name, role: u.role, isAdmin: u.is_admin })),
+      recentTransactions: recentTx,
+      recentUploads: recentUploads.map(m => ({ id: m.id, fileName: m.file_name, fileType: m.file_type, sender: m.sender_name, groupId: m.group_id, createdAt: m.created_at })),
+      pendingReviews
     };
   }
 }

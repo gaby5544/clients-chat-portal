@@ -7,11 +7,11 @@ const rateLimit = require('express-rate-limit');
 const { store } = require('./db');
 const { validateTransactionForm, escapeHtml } = require('./security');
 const { generateTransactionPdf } = require('./pdfReceipt');
+const { resolveAdminRole, hasMinRole } = require('./roles');
+const { getPublicKey } = require('./webpush');
 
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-
-const ADMIN_PASSKEY = process.env.ADMIN_PASSKEY || 'ADMIN123';
 
 const ALLOWED_MIME = new Set([
   'image/png', 'image/jpeg', 'image/gif', 'image/webp',
@@ -50,7 +50,8 @@ const pdfLimiter = rateLimit({ windowMs: 60 * 1000, max: 15, standardHeaders: tr
 
 function requireAdmin(req, res, next) {
   const key = req.headers['x-admin-key'] || req.query.adminKey;
-  if (key !== ADMIN_PASSKEY) return res.status(403).json({ error: 'Admin authorization required' });
+  const role = resolveAdminRole(key);
+  if (!hasMinRole(role, 'ADMIN')) return res.status(403).json({ error: 'Admin authorization required' });
   next();
 }
 
@@ -130,14 +131,50 @@ function buildRouter() {
     generateTransactionPdf(res, tx, group ? group.name : 'Unknown Group');
   });
 
+  // ---- Web Push: subscribe / unsubscribe ----
+  router.get('/api/push/vapid-public-key', (req, res) => res.json({ publicKey: getPublicKey() }));
+
+  router.post('/api/push/subscribe', formLimiter, async (req, res) => {
+    const { sessionToken, subscription } = req.body || {};
+    if (!sessionToken || !subscription || !subscription.endpoint || !subscription.keys) {
+      return res.status(400).json({ error: 'Invalid subscription payload' });
+    }
+    await store.savePushSubscription(sessionToken, subscription);
+    res.json({ success: true });
+  });
+
+  router.post('/api/push/unsubscribe', formLimiter, async (req, res) => {
+    const { endpoint } = req.body || {};
+    if (!endpoint) return res.status(400).json({ error: 'endpoint required' });
+    await store.removePushSubscription(endpoint);
+    res.json({ success: true });
+  });
+
+  // ---- Branding Center ----
+  // GET is public (every visitor needs the branding to render the page
+  // correctly); only SUPER_ADMIN can change it.
+  router.get('/api/branding', async (req, res) => {
+    const branding = await store.getBranding();
+    res.json(branding);
+  });
+
+  router.post('/api/branding', formLimiter, async (req, res) => {
+    const key = req.headers['x-admin-key'] || req.query.adminKey;
+    const role = resolveAdminRole(key);
+    if (!hasMinRole(role, 'SUPER_ADMIN')) return res.status(403).json({ error: 'Super Admin authorization required' });
+    const { logo_url, accent_color, accent_color_2, welcome_message, background_url } = req.body || {};
+    const updated = await store.updateBranding({ logo_url, accent_color, accent_color_2, welcome_message, background_url });
+    res.json(updated);
+  });
+
   router.get('/api/health', (req, res) => res.json({
     status: 'ok',
     time: new Date().toISOString(),
     version: require('./package.json').version,
-    build: 'create-group-fix-2026-07-30'
+    build: 'enterprise-features-2026-08'
   }));
 
   return router;
 }
 
-module.exports = { buildRouter, ADMIN_PASSKEY };
+module.exports = { buildRouter };

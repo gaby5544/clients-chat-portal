@@ -28,7 +28,10 @@ to a repo if you haven't already.
    | Key | Value |
    |---|---|
    | `DATABASE_URL` | the Internal Database URL from step 2 |
-   | `ADMIN_PASSKEY` | your own admin passkey (don't keep the default in production) |
+   | `SUPER_ADMIN_PASSKEY` | full control, including Branding Center (default `SUPERADMIN123` — change this) |
+   | `ADMIN_PASSKEY` | group/transaction/task management, no branding (default `ADMIN123` — change this) |
+   | `MODERATOR_PASSKEY` | message moderation only — edit/delete/pin (default `MODERATOR123` — change this) |
+   | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | for push notifications to persist across restarts — see note below |
    | `CORS_ORIGIN` | your Render URL once known, e.g. `https://your-app.onrender.com`, or `*` while testing |
    | `EMAIL_SERVICE` / `EMAIL_USER` / `EMAIL_PASS` | if using a named provider like Gmail (App Password required) |
    | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` | if using generic SMTP instead |
@@ -36,6 +39,22 @@ to a repo if you haven't already.
 
    `PORT` does not need to be set — Render injects it automatically and
    `server.js` reads `process.env.PORT`.
+
+   **About the three passkeys**: these are three *separate* login codes for
+   three access levels. Give the Super Admin one only to yourself/owners,
+   the Admin one to day-to-day staff who manage groups and transactions,
+   and the Moderator one to anyone who should only be able to moderate
+   messages (edit/delete/pin) without touching groups, transactions, or
+   branding. All three log in at the same hidden URL (`/?officer=1`) — the
+   passkey you type determines which access level you get.
+
+   **About VAPID keys**: if you don't set these, the server generates
+   temporary ones on every boot and prints them to the logs — meaning
+   everyone's push notification subscriptions break on every restart/
+   redeploy. Deploy once, check the logs for a message starting with
+   `[push] No VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY set`, copy the two keys
+   it printed into your environment variables, and redeploy once more.
+   After that they'll stay stable.
 
 4. Deploy. Watch the logs for:
    ```
@@ -64,8 +83,10 @@ counts are all in Postgres and survive restarts/redeploys regardless.
 ## 5. First login
 - Open the deployed URL. Regular users just pick a role (Buyer/Seller) and
   join.
-- Click the shield icon (bottom of the icon rail) to log in as Admin using
-  the `ADMIN_PASSKEY` you set.
+- To log in as Super Admin, Admin, or Moderator, go to
+  `https://your-app.onrender.com/?officer=1` once (bookmark it) — this
+  reveals a shield icon that stays hidden from regular users. Click it and
+  enter whichever passkey matches the access level you want.
 
 ## 6. Custom domain (optional)
 Render → your service → Settings → Custom Domains → follow the CNAME/A

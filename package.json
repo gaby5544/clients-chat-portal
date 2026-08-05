@@ -1,6 +1,6 @@
 {
   "name": "quantum-secure-desk",
-  "version": "2.2.0",
+  "version": "3.0.0",
   "description": "Quantum Secure Transaction Desk - Enterprise Chat Portal",
   "main": "server.js",
   "engines": {
@@ -19,6 +19,7 @@
     "pdfkit": "^0.19.1",
     "pg": "^8.11.5",
     "socket.io": "^4.7.5",
-    "uuid": "^9.0.1"
+    "uuid": "^9.0.1",
+    "web-push": "^3.6.7"
   }
 }

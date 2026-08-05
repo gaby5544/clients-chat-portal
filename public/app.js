@@ -36,6 +36,16 @@ let messagesById = new Map();
 let favorites = new Set(JSON.parse(localStorage.getItem('q_favorites') || '[]'));
 let selectModeActive = false;
 let translateBeforeSend = false;
+let currentAdminRole = null;
+let tasksCache = [];
+let brandingCache = null;
+let pushSubscribed = false;
+
+const ROLE_LEVEL = { MODERATOR: 1, ADMIN: 2, SUPER_ADMIN: 3 };
+function hasMinRoleClient(role, minRole) {
+  if (!role) return false;
+  return (ROLE_LEVEL[role] || 0) >= (ROLE_LEVEL[minRole] || 0);
+}
 
 // ---------------- GENERIC MODAL (replaces native prompt()/confirm()) ----------------
 function showPromptModal({ title, message = '', placeholder = '', defaultValue = '' }, onConfirm) {
@@ -136,6 +146,37 @@ function setAdminTab(tab) {
   document.querySelectorAll('.drawer-tab-panel').forEach(p => p.classList.add('hidden'));
   el('tab' + tab.charAt(0).toUpperCase() + tab.slice(1)).classList.remove('hidden');
   if (tab === 'transactions') loadTransactionsList();
+  if (tab === 'controls') renderAnnouncementGroupChecks();
+  if (tab === 'tasks') socket.emit('get-tasks', { groupId: activeGroupId });
+  if (tab === 'branding') loadBrandingIntoForm();
+}
+
+function updateRoleBadge() {
+  const badge = el('drawerRoleBadge');
+  if (!badge) return;
+  badge.className = 'role-badge';
+  if (currentAdminRole === 'SUPER_ADMIN') { badge.textContent = 'Super Admin'; badge.classList.add('super'); }
+  else if (currentAdminRole === 'MODERATOR') { badge.textContent = 'Moderator'; badge.classList.add('moderator'); }
+  else if (currentAdminRole === 'ADMIN') { badge.textContent = 'Admin'; }
+  else { badge.textContent = ''; }
+  el('moderatorNotice').style.display = currentAdminRole === 'MODERATOR' ? 'block' : 'none';
+}
+
+function applyGroupBanner(bannerUrl) {
+  const el2 = el('groupBannerImg');
+  if (bannerUrl) {
+    el2.style.backgroundImage = `url('${bannerUrl}')`;
+    el2.classList.add('has-image');
+    el2.classList.remove('hidden');
+  } else {
+    el2.classList.remove('has-image');
+    el2.classList.add('hidden');
+  }
+}
+
+function updateTasksDot() {
+  const pending = tasksCache.filter(t => t.status === 'Pending').length;
+  el('tasksDot').classList.toggle('hidden', pending === 0);
 }
 
 // ---------------- SESSION / JOIN ----------------
@@ -159,17 +200,22 @@ socket.on('error-msg', (msg) => toast(msg, true));
 // ---------------- INIT STATE ----------------
 socket.on('init-state', async (data) => {
   isAdminConfirmed = data.isAdminConfirmed;
+  currentAdminRole = data.adminRole || null;
   currentSocketId = data.socketId;
   activeGroupId = data.group.id;
   _myToken = data.sessionToken; // must be set before rendering messages below
   document.body.classList.toggle('is-admin', isAdminConfirmed);
+  document.body.classList.remove('role-admin', 'role-super_admin', 'role-moderator');
+  if (currentAdminRole) document.body.classList.add('role-' + currentAdminRole.toLowerCase());
   updateRailVisibility();
+  updateRoleBadge();
 
   el('currentGroupName').textContent = data.group.name;
   el('roleSelect').style.display = isAdminConfirmed ? 'none' : 'inline-block';
   fileUploadAllowed = data.group.fileUploadsEnabled;
   updateUploadUiState();
   updateTransactionBanner(data.group.transactionFormEnabled);
+  applyGroupBanner(data.group.bannerUrl);
 
   // Admin lands on the chat view (list panel starts closed on mobile);
   // regular users never have a list panel at all.
@@ -178,13 +224,22 @@ socket.on('init-state', async (data) => {
 
   el('messageContainer').innerHTML = '<div class="drop-overlay" id="dropOverlay"><i class="fa-solid fa-cloud-arrow-up"></i><span data-i18n="dropToUpload">Drop file to upload</span></div>';
   messagesById.clear();
-  data.messages.forEach(renderMessage);
+  if (data.messages.length === 0) {
+    el('messageContainer').insertAdjacentHTML('beforeend', `<div class="empty-state"><i class="fa-solid fa-comments"></i><span>No messages yet</span><small>Say hello to get the conversation started.</small></div>`);
+  } else {
+    data.messages.forEach(renderMessage);
+  }
 
   renderPinned(data.pinnedMessages);
+  tasksCache = data.tasks || [];
+  updateTasksDot();
   if (isAdminConfirmed) {
     loadAdminNotes();
     socket.emit('admin-get-stats');
     socket.emit('get-all-groups'); // server ignores this for non-admins anyway; only bother asking as admin
+    if (hasMinRoleClient(currentAdminRole, 'ADMIN')) socket.emit('admin-get-dashboard-widgets');
+  } else {
+    maybeShowOnboarding();
   }
 });
 
@@ -210,6 +265,16 @@ function renderMessage(data) {
 
   if (data.sender === 'SYSTEM') {
     wrapper.innerHTML = `<div class="message msg-system">${data.text}</div>`;
+    container.appendChild(wrapper);
+    container.scrollTop = container.scrollHeight;
+    return;
+  }
+
+  if (data.sender === 'ANNOUNCEMENT') {
+    wrapper.innerHTML = `<div class="message msg-announcement" id="msg-row-inner-${data.id}">
+      <i class="fa-solid fa-bullhorn ann-icon"></i>
+      <div class="ann-body"><div class="ann-label">Announcement · ${data.time}</div><div class="ann-text">${data.text}</div></div>
+    </div>`;
     container.appendChild(wrapper);
     container.scrollTop = container.scrollHeight;
     return;
@@ -248,6 +313,7 @@ function renderMessage(data) {
   const editedBadge = (isAdminConfirmed && data.isEdited) ? '<span style="font-size:0.65rem; color:var(--accent-amber); margin-left:6px;">(edited)</span>' : '';
   const forwardedTag = data.forwardedFrom ? `<div style="font-size:0.68rem; color:var(--text-faint); margin-bottom:4px;"><i class="fa-solid fa-share"></i> Forwarded</div>` : '';
   const translateLink = data.text ? `<div class="translate-link" onclick="event.stopPropagation(); translateMessage('${data.id}')" id="translate-link-${data.id}"><i class="fa-solid fa-language"></i> <span data-i18n="translate">Translate</span></div>` : '';
+  const statusTicks = mine ? `<span id="msg-status-${data.id}">${renderStatusTicks(data.status)}</span>` : '';
 
   msgDiv.innerHTML = `
     <div class="sender-tag">
@@ -261,7 +327,7 @@ function renderMessage(data) {
     <div class="msg-reactions" id="msg-reactions-${data.id}"></div>
     ${translateLink}
     <div id="translated-box-${data.id}"></div>
-    <div class="msg-time">${data.time}</div>
+    <div class="msg-time">${data.time}${statusTicks}</div>
   `;
 
   if (mine) { wrapper.appendChild(msgDiv); wrapper.appendChild(checkbox); }
@@ -276,6 +342,20 @@ function renderReactions(messageId, summary) {
   if (!box) return;
   box.innerHTML = Object.entries(summary).map(([emoji, count]) => `<span class="reaction-chip">${emoji} ${count}</span>`).join('');
 }
+
+function renderStatusTicks(status) {
+  if (status === 'read') return `<span class="msg-status-ticks read" title="Read"><i class="fa-solid fa-check-double"></i></span>`;
+  if (status === 'delivered') return `<span class="msg-status-ticks delivered" title="Delivered"><i class="fa-solid fa-check-double"></i></span>`;
+  return `<span class="msg-status-ticks sent" title="Sent"><i class="fa-solid fa-check"></i></span>`;
+}
+
+socket.on('message-status-bulk-update', ({ messageIds, status }) => {
+  messageIds.forEach(id => {
+    const el2 = el(`msg-status-${id}`);
+    if (el2) el2.innerHTML = renderStatusTicks(status);
+    if (messagesById.has(id)) messagesById.get(id).status = status;
+  });
+});
 
 socket.on('message', renderMessage);
 
@@ -887,6 +967,246 @@ function exportTransactions() {
   window.open(`/api/transactions/${encodeURIComponent(activeGroupId)}/export?adminKey=${encodeURIComponent(key)}`, '_blank');
 }
 
+// ---------------- TASKS & APPROVALS ----------------
+function openTasksModal() {
+  socket.emit('get-tasks', { groupId: activeGroupId });
+  el('tasksModal').classList.remove('hidden');
+}
+
+function renderTaskStatusButtons(task) {
+  const statuses = ['Pending', 'Completed', 'Rejected'];
+  return `<div class="task-status-row">${statuses.map(s =>
+    `<button class="task-status-btn ${task.status === s ? 'active ' + s.toLowerCase() : ''}" onclick="updateTaskStatusClient('${task.id}','${s}')">${s}</button>`
+  ).join('')}</div>`;
+}
+
+function renderUserTasksList(tasks) {
+  const container = el('userTasksListContainer');
+  if (!tasks.length) {
+    container.innerHTML = `<div class="empty-state"><i class="fa-solid fa-list-check"></i><span>No tasks yet</span><small>Your Desk Officer hasn't assigned any tasks.</small></div>`;
+    return;
+  }
+  container.innerHTML = tasks.map(t => `
+    <div class="task-card">
+      <div class="task-card-title">${t.title}</div>
+      ${t.description ? `<div class="task-card-desc">${t.description}</div>` : ''}
+      ${renderTaskStatusButtons(t)}
+      <div class="task-card-meta">${t.assignedRole ? `Assigned to ${t.assignedRole === 'PARTY A' ? 'Buyer' : 'Seller'}` : 'Assigned to both parties'} · ${new Date(t.createdAt).toLocaleDateString()}</div>
+    </div>`).join('');
+}
+
+function renderAdminTasksList(tasks) {
+  const container = el('adminTasksListContainer');
+  if (!container) return;
+  if (!tasks.length) {
+    container.innerHTML = `<div class="empty-state"><i class="fa-solid fa-clipboard-list"></i><span>No tasks yet</span></div>`;
+    return;
+  }
+  container.innerHTML = tasks.map(t => `
+    <div class="task-card">
+      <div class="task-card-title">${t.title}</div>
+      ${t.description ? `<div class="task-card-desc">${t.description}</div>` : ''}
+      ${renderTaskStatusButtons(t)}
+      <div class="task-card-meta">${t.assignedRole ? `Assigned to ${t.assignedRole === 'PARTY A' ? 'Buyer' : 'Seller'}` : 'Both parties'}
+        <span class="tx-delete-btn admin-plus-only" style="margin-left:10px;" onclick="deleteTaskClient('${t.id}')"><i class="fa-solid fa-trash"></i> Delete</span>
+      </div>
+    </div>`).join('');
+}
+
+socket.on('tasks-list', ({ tasks }) => {
+  tasksCache = tasks;
+  updateTasksDot();
+  renderUserTasksList(tasks);
+  renderAdminTasksList(tasks);
+});
+socket.on('task-created', (task) => {
+  if (!tasksCache.some(t => t.id === task.id)) tasksCache.unshift(task);
+  updateTasksDot();
+  renderUserTasksList(tasksCache);
+  renderAdminTasksList(tasksCache);
+  toast(`New task: ${task.title}`);
+});
+socket.on('task-updated', (task) => {
+  tasksCache = tasksCache.map(t => t.id === task.id ? task : t);
+  updateTasksDot();
+  renderUserTasksList(tasksCache);
+  renderAdminTasksList(tasksCache);
+});
+socket.on('task-deleted', ({ taskId }) => {
+  tasksCache = tasksCache.filter(t => t.id !== taskId);
+  updateTasksDot();
+  renderUserTasksList(tasksCache);
+  renderAdminTasksList(tasksCache);
+});
+
+function createTask() {
+  const title = el('taskTitleInput').value.trim();
+  if (!title) return toast('Task title is required.', true);
+  const description = el('taskDescInput').value.trim();
+  const assignedRole = el('taskAssignedRoleSelect').value;
+  socket.emit('create-task', { groupId: activeGroupId, title, description, assignedRole });
+  el('taskTitleInput').value = '';
+  el('taskDescInput').value = '';
+  toast('Task created.');
+}
+function updateTaskStatusClient(taskId, status) {
+  socket.emit('update-task-status', { groupId: activeGroupId, taskId, status });
+}
+function deleteTaskClient(taskId) {
+  showConfirmModal({ title: 'Delete Task', message: 'Delete this task? This cannot be undone.' }, () => {
+    socket.emit('delete-task', { groupId: activeGroupId, taskId });
+  });
+}
+
+// ---------------- ANNOUNCEMENTS ----------------
+function renderAnnouncementGroupChecks() {
+  const container = el('announcementGroupChecks');
+  if (!container) return;
+  if (!groupsCache.length) { container.innerHTML = `<span style="color:var(--text-muted); font-size:0.76rem;">Loading groups...</span>`; return; }
+  container.innerHTML = groupsCache.map(g =>
+    `<label><input type="checkbox" value="${g.id}" ${g.id === activeGroupId ? 'checked' : ''}> ${escapeHtml(g.name)}</label>`
+  ).join('');
+}
+function sendAnnouncement() {
+  const text = el('announcementText').value.trim();
+  if (!text) return toast('Announcement text is required.', true);
+  const groupIds = Array.from(document.querySelectorAll('#announcementGroupChecks input:checked')).map(i => i.value);
+  if (!groupIds.length) return toast('Select at least one group.', true);
+  socket.emit('create-announcement', { groupIds, text });
+  el('announcementText').value = '';
+  toast(`Announcement posted to ${groupIds.length} group(s).`);
+}
+socket.on('announcement-created', () => { /* the pinned message + chat bubble already reflect it live */ });
+
+// ---------------- LIVE DASHBOARD WIDGETS ----------------
+socket.on('dashboard-widgets-update', (w) => {
+  el('widgetOnlineUsers').innerHTML = w.onlineUsers.length
+    ? w.onlineUsers.map(u => `<div class="widget-item"><span class="widget-item-main">${escapeHtml(u.displayName)}</span><span class="widget-item-sub">${u.isAdmin ? 'Admin' : u.role}</span></div>`).join('')
+    : `<div class="empty-state" style="padding:16px;"><i class="fa-solid fa-user-slash"></i><span>No one online</span></div>`;
+
+  el('widgetRecentTx').innerHTML = w.recentTransactions.length
+    ? w.recentTransactions.map(t => `<div class="widget-item"><span class="widget-item-main">${escapeHtml(t.full_legal_name)}</span><span class="widget-item-sub">${t.total_value || ''} ${t.payment_currency || ''}</span></div>`).join('')
+    : `<div class="empty-state" style="padding:16px;"><i class="fa-solid fa-money-bill-trend-up"></i><span>No transactions yet</span></div>`;
+
+  el('widgetRecentUploads').innerHTML = w.recentUploads.length
+    ? w.recentUploads.map(u => `<div class="widget-item"><span class="widget-item-main">${escapeHtml(u.fileName || 'Attachment')}</span><span class="widget-item-sub">${escapeHtml(u.sender)}</span></div>`).join('')
+    : `<div class="empty-state" style="padding:16px;"><i class="fa-solid fa-cloud-arrow-up"></i><span>No uploads yet</span></div>`;
+
+  el('widgetPendingReviews').textContent = w.pendingReviews;
+});
+
+// ---------------- BRANDING CENTER ----------------
+async function loadBranding() {
+  try {
+    const res = await fetch('/api/branding');
+    brandingCache = await res.json();
+    applyBranding(brandingCache);
+  } catch (err) { /* branding is cosmetic — fail silently and keep defaults */ }
+}
+function applyBranding(b) {
+  if (!b) return;
+  const root = document.documentElement;
+  if (b.accent_color) root.style.setProperty('--accent-cyan', b.accent_color);
+  if (b.accent_color_2) root.style.setProperty('--accent-violet', b.accent_color_2);
+  if (b.welcome_message) el('onboardingWelcomeMessage').textContent = b.welcome_message;
+  if (b.logo_url) {
+    document.querySelectorAll('.vault-icon').forEach(v => { v.innerHTML = `<img src="${b.logo_url}" style="width:100%;height:100%;object-fit:cover;border-radius:13px;" />`; });
+  }
+  if (b.background_url) document.body.style.backgroundImage = `linear-gradient(rgba(5,7,13,0.85), rgba(5,7,13,0.9)), url('${b.background_url}')`;
+}
+function loadBrandingIntoForm() {
+  if (!brandingCache) return;
+  el('brandLogoUrl').value = brandingCache.logo_url || '';
+  el('brandAccentColor').value = brandingCache.accent_color || '#38bdf8';
+  el('brandAccentColor2').value = brandingCache.accent_color_2 || '#8b5cf6';
+  el('brandWelcomeMessage').value = brandingCache.welcome_message || '';
+  el('brandBackgroundUrl').value = brandingCache.background_url || '';
+}
+async function saveBranding() {
+  const payload = {
+    logo_url: el('brandLogoUrl').value.trim(),
+    accent_color: el('brandAccentColor').value,
+    accent_color_2: el('brandAccentColor2').value,
+    welcome_message: el('brandWelcomeMessage').value.trim(),
+    background_url: el('brandBackgroundUrl').value.trim()
+  };
+  try {
+    const res = await fetch('/api/branding', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-admin-key': adminPasskeyMemory || '' },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) { const e = await res.json(); return toast(e.error || 'Failed to save branding.', true); }
+    brandingCache = await res.json();
+    applyBranding(brandingCache);
+    toast('Branding updated for everyone.');
+  } catch (err) { toast('Failed to save branding.', true); }
+}
+function saveGroupBanner() {
+  const bannerUrl = el('groupBannerUrlInput').value.trim();
+  socket.emit('admin-set-group-banner', { groupId: activeGroupId, bannerUrl });
+  toast('Group banner updated.');
+}
+socket.on('group-banner-updated', ({ groupId, bannerUrl }) => {
+  if (groupId === activeGroupId) applyGroupBanner(bannerUrl);
+});
+
+// ---------------- ONBOARDING ----------------
+function maybeShowOnboarding() {
+  if (localStorage.getItem('q_onboarded') === '1') return;
+  el('onboardingOverlay').classList.remove('hidden');
+}
+function dismissOnboarding() {
+  localStorage.setItem('q_onboarded', '1');
+  el('onboardingOverlay').classList.add('hidden');
+}
+
+// ---------------- PUSH NOTIFICATIONS ----------------
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = window.atob(base64);
+  return Uint8Array.from([...rawData].map(c => c.charCodeAt(0)));
+}
+async function togglePushSubscription() {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+    return toast('Push notifications are not supported in this browser.', true);
+  }
+  try {
+    const reg = await navigator.serviceWorker.register('/sw.js');
+    const existing = await reg.pushManager.getSubscription();
+    if (existing) {
+      await fetch('/api/push/unsubscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ endpoint: existing.endpoint }) });
+      await existing.unsubscribe();
+      pushSubscribed = false;
+      el('notifyToggleBtn').classList.remove('subscribed');
+      return toast('Notifications disabled.');
+    }
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') return toast('Notification permission was not granted.', true);
+    const keyRes = await fetch('/api/push/vapid-public-key');
+    const { publicKey } = await keyRes.json();
+    const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(publicKey) });
+    await fetch('/api/push/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionToken, subscription: sub.toJSON() }) });
+    pushSubscribed = true;
+    el('notifyToggleBtn').classList.add('subscribed');
+    toast('Notifications enabled for this device.');
+  } catch (err) {
+    toast('Could not enable notifications on this device/browser.', true);
+  }
+}
+
 // ---------------- KICKOFF ----------------
 // (Initial view state is now handled inside the init-state handler once
 // admin status is known — see hideListPanelMobile()/exitSelectMode() there.)
+loadBranding();
+
+(async function checkExistingPushSubscription() {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+  try {
+    const reg = await navigator.serviceWorker.getRegistration('/sw.js');
+    if (!reg) return;
+    const sub = await reg.pushManager.getSubscription();
+    if (sub) { pushSubscribed = true; el('notifyToggleBtn').classList.add('subscribed'); }
+  } catch (err) { /* not fatal — button just shows the unsubscribed state */ }
+})();

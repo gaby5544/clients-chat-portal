@@ -104,3 +104,73 @@ CREATE TABLE IF NOT EXISTS transactions (
   submitted_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_transactions_group ON transactions(group_id);
+
+-- ============================================================
+-- Additions below are appended idempotently (safe to re-run
+-- against an already-deployed database without data loss).
+-- ============================================================
+
+-- Multi-admin role tiers: 'SUPER_ADMIN', 'ADMIN', 'MODERATOR', or NULL for
+-- a regular buyer/seller.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS admin_role TEXT;
+
+-- Per-group banner image for the Branding Center.
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS banner_url TEXT;
+
+-- Announcements: pinned automatically at the top of selected group(s).
+CREATE TABLE IF NOT EXISTS announcements (
+  id            TEXT PRIMARY KEY,
+  group_id      TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+  message_id    TEXT REFERENCES messages(id) ON DELETE SET NULL,
+  text          TEXT NOT NULL,
+  created_by    TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_announcements_group ON announcements(group_id, created_at);
+
+-- Tasks & Approvals.
+CREATE TABLE IF NOT EXISTS tasks (
+  id             TEXT PRIMARY KEY,
+  group_id       TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+  title          TEXT NOT NULL,
+  description    TEXT,
+  status         TEXT NOT NULL DEFAULT 'Pending', -- Pending | Completed | Rejected
+  created_by     TEXT,
+  assigned_role  TEXT, -- 'PARTY A' | 'PARTY B' | NULL (both)
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_tasks_group ON tasks(group_id, created_at);
+
+-- Message delivery/read receipts (WhatsApp-style single/double check).
+CREATE TABLE IF NOT EXISTS message_reads (
+  message_id     TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  session_token  TEXT NOT NULL,
+  delivered_at   TIMESTAMPTZ,
+  read_at        TIMESTAMPTZ,
+  PRIMARY KEY (message_id, session_token)
+);
+
+-- Web Push subscriptions (browser/Android push; iOS only works if the
+-- user has added the site to their Home Screen — see DEPLOY_RENDER.md).
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  id             SERIAL PRIMARY KEY,
+  session_token  TEXT NOT NULL,
+  endpoint       TEXT NOT NULL UNIQUE,
+  p256dh         TEXT NOT NULL,
+  auth           TEXT NOT NULL,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_push_subs_session ON push_subscriptions(session_token);
+
+-- Branding Center — single-row global config (id is always 1).
+CREATE TABLE IF NOT EXISTS branding_settings (
+  id                 INTEGER PRIMARY KEY DEFAULT 1,
+  logo_url           TEXT,
+  accent_color       TEXT DEFAULT '#38bdf8',
+  accent_color_2     TEXT DEFAULT '#8b5cf6',
+  welcome_message    TEXT DEFAULT 'Welcome to Quantum Secure Transaction Desk.',
+  background_url     TEXT,
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT branding_singleton CHECK (id = 1)
+);

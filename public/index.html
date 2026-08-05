@@ -68,6 +68,10 @@
         <button class="icon-btn" id="pinnedToggleBtn" onclick="togglePinnedBar()" title="Pinned Messages">
           <i class="fa-solid fa-thumbtack"></i><span class="badge-dot hidden" id="pinnedDot"></span>
         </button>
+        <button class="icon-btn" id="tasksToggleBtn" onclick="openTasksModal()" title="Tasks &amp; Approvals">
+          <i class="fa-solid fa-list-check"></i><span class="badge-dot hidden" id="tasksDot"></span>
+        </button>
+        <button class="icon-btn" id="notifyToggleBtn" onclick="togglePushSubscription()" title="Enable notifications"><i class="fa-solid fa-bell"></i></button>
         <button class="icon-btn admin-only" id="selectModeBtn" onclick="toggleSelectMode()" title="Select messages"><i class="fa-solid fa-square-check"></i></button>
         <button class="icon-btn admin-only" onclick="openAdminDrawerTab('transactions')" title="Transaction Board"><i class="fa-solid fa-file-invoice-dollar"></i></button>
         <div class="presence-badge">
@@ -80,6 +84,7 @@
         </div>
       </div>
     </header>
+    <div class="group-banner hidden" id="groupBannerImg"></div>
 
     <div class="pinned-bar hidden" id="pinnedBar">
       <div class="pinned-bar-title"><i class="fa-solid fa-thumbtack"></i> <span data-i18n="pinnedMessages">Pinned Messages</span></div>
@@ -160,7 +165,7 @@
   <!-- ADMIN DRAWER -->
   <aside class="admin-drawer admin-only" id="adminDrawer">
     <div class="drawer-header">
-      <span><i class="fa-solid fa-user-gear"></i> <span data-i18n="adminPanel">Admin Command Panel</span></span>
+      <span><i class="fa-solid fa-user-gear"></i> <span data-i18n="adminPanel">Admin Command Panel</span> <span class="role-badge" id="drawerRoleBadge">Admin</span></span>
       <div style="display:flex; gap:14px; align-items:center;">
         <i class="fa-solid fa-minus" onclick="minimizeAdminDrawer()" title="Minimize"></i>
         <i class="fa-solid fa-xmark" onclick="toggleAdminDrawer(false)" title="Close"></i>
@@ -169,11 +174,31 @@
     <div class="drawer-tabs">
       <button class="drawer-tab active" data-tab="dashboard" onclick="setAdminTab('dashboard')" data-i18n="dashboard">Dashboard</button>
       <button class="drawer-tab" data-tab="controls" onclick="setAdminTab('controls')" data-i18n="controls">Controls</button>
-      <button class="drawer-tab" data-tab="transactions" onclick="setAdminTab('transactions')" data-i18n="transactions">Transactions</button>
+      <button class="drawer-tab admin-plus-only" data-tab="transactions" onclick="setAdminTab('transactions')" data-i18n="transactions">Transactions</button>
+      <button class="drawer-tab" data-tab="tasks" onclick="setAdminTab('tasks')">Tasks</button>
+      <button class="drawer-tab super-admin-only hidden" data-tab="branding" onclick="setAdminTab('branding')">Branding</button>
     </div>
 
     <div class="drawer-tab-panel" id="tabDashboard">
       <div class="stats-grid" id="statsGrid"></div>
+
+      <div class="admin-section">
+        <span class="admin-section-label"><i class="fa-solid fa-users"></i> ONLINE USERS</span>
+        <div id="widgetOnlineUsers" class="widget-list"></div>
+      </div>
+      <div class="admin-section">
+        <span class="admin-section-label"><i class="fa-solid fa-money-bill-trend-up"></i> RECENT TRANSACTIONS</span>
+        <div id="widgetRecentTx" class="widget-list"></div>
+      </div>
+      <div class="admin-section">
+        <span class="admin-section-label"><i class="fa-solid fa-cloud-arrow-up"></i> RECENT UPLOADS</span>
+        <div id="widgetRecentUploads" class="widget-list"></div>
+      </div>
+      <div class="admin-section">
+        <span class="admin-section-label"><i class="fa-solid fa-clipboard-check"></i> PENDING REVIEWS</span>
+        <div id="widgetPendingReviews" class="widget-pending-count">0</div>
+      </div>
+
       <div class="admin-section">
         <span class="admin-section-label"><i class="fa-solid fa-eye"></i> <span data-i18n="liveDraft">LIVE SPECTATOR DRAFT</span></span>
         <div class="live-spectator-box" id="spectatorBox">No active typing detected...</div>
@@ -185,7 +210,7 @@
     </div>
 
     <div class="drawer-tab-panel hidden" id="tabControls">
-      <div class="admin-section">
+      <div class="admin-section admin-plus-only">
         <span class="admin-section-label" data-i18n="roomManagement">ACTIVE ROOM MANAGEMENT</span>
         <button class="admin-btn" onclick="createNewGroup()"><i class="fa-solid fa-plus"></i> <span data-i18n="newGroup">New Group</span></button>
         <button class="admin-btn admin-btn-danger" onclick="deleteCurrentGroup()"><i class="fa-solid fa-trash"></i> <span data-i18n="deleteGroup">Delete Active Group</span></button>
@@ -193,21 +218,31 @@
         <button class="admin-btn" onclick="copyInviteLink()"><i class="fa-solid fa-link"></i> <span data-i18n="inviteLink">Clean Invite Link</span></button>
         <button class="admin-btn" onclick="toggleHighlightGroup()"><i class="fa-solid fa-star"></i> <span data-i18n="toggleHighlight">Toggle Group Highlight</span></button>
       </div>
-      <div class="admin-section">
+      <div class="admin-section admin-plus-only">
         <span class="admin-section-label" data-i18n="permissions">PARTY RENAMING &amp; PERMISSIONS</span>
         <button class="admin-btn" onclick="renameParty('A')"><i class="fa-solid fa-pen"></i> <span data-i18n="renameBuyer">Rename Buyer (A)</span></button>
         <button class="admin-btn" onclick="renameParty('B')"><i class="fa-solid fa-pen"></i> <span data-i18n="renameSeller">Rename Seller (B)</span></button>
         <button class="admin-btn" onclick="toggleFileLock()" id="lockFileBtn"><i class="fa-solid fa-lock"></i> <span data-i18n="toggleUploads">Toggle File Upload Switch</span></button>
       </div>
-      <div class="admin-section">
+      <div class="admin-section admin-plus-only">
+        <span class="admin-section-label"><i class="fa-solid fa-bullhorn"></i> ANNOUNCEMENTS</span>
+        <div id="announcementGroupChecks" class="announcement-group-checks"></div>
+        <textarea class="admin-notes-area" id="announcementText" placeholder="Type an important announcement..." style="height:56px;"></textarea>
+        <button class="admin-btn" onclick="sendAnnouncement()"><i class="fa-solid fa-paper-plane"></i> Post Announcement (auto-pinned)</button>
+      </div>
+      <div class="admin-section admin-plus-only">
         <span class="admin-section-label"><i class="fa-solid fa-user-slash"></i> <span data-i18n="userManagement">USER MANAGEMENT</span></span>
         <select class="group-dropdown" id="kickUserSelect"></select>
         <button class="admin-btn admin-btn-danger" onclick="kickSelectedUser()"><i class="fa-solid fa-right-from-bracket"></i> <span data-i18n="kickUser">Disconnect User</span></button>
       </div>
-      <div class="admin-section">
+      <div class="admin-section admin-plus-only">
         <span class="admin-section-label"><i class="fa-solid fa-paper-plane"></i> <span data-i18n="directMessage">DIRECT MESSAGE USER</span></span>
         <select class="group-dropdown" id="activeUsersSelect"></select>
         <button class="admin-btn" onclick="initiateAdminDM()"><i class="fa-solid fa-bolt-lightning"></i> <span data-i18n="sendDM">Direct Message</span></button>
+      </div>
+      <div class="admin-section" id="moderatorNotice" style="display:none;">
+        <span class="admin-section-label"><i class="fa-solid fa-circle-info"></i> MODERATOR ACCESS</span>
+        <p style="font-size:0.78rem; color:var(--text-muted); margin:0;">You have message moderation permissions (edit, delete, pin, view edit history). Group management, transactions, and announcements require Admin or Super Admin access.</p>
       </div>
     </div>
 
@@ -225,6 +260,41 @@
         <button class="admin-btn" onclick="sendFormToSelectedGroup()"><i class="fa-solid fa-bolt"></i> Enable Form For This Group</button>
       </div>
       <div id="transactionsListContainer" class="transactions-list"></div>
+    </div>
+
+    <div class="drawer-tab-panel hidden" id="tabTasks">
+      <div class="admin-section admin-plus-only">
+        <span class="admin-section-label"><i class="fa-solid fa-list-check"></i> CREATE TASK (ACTIVE GROUP)</span>
+        <input type="text" class="message-input" id="taskTitleInput" placeholder="Task title, e.g. Submit Documentation" style="width:100%;">
+        <textarea class="admin-notes-area" id="taskDescInput" placeholder="Description (optional)" style="height:56px;"></textarea>
+        <select class="group-dropdown" id="taskAssignedRoleSelect">
+          <option value="">Assign to: Both parties</option>
+          <option value="PARTY A">Assign to: Buyer only</option>
+          <option value="PARTY B">Assign to: Seller only</option>
+        </select>
+        <button class="admin-btn" onclick="createTask()"><i class="fa-solid fa-plus"></i> Create Task</button>
+      </div>
+      <div class="admin-section">
+        <span class="admin-section-label"><i class="fa-solid fa-clipboard-list"></i> TASKS (ACTIVE GROUP)</span>
+        <div id="adminTasksListContainer" class="tasks-list"></div>
+      </div>
+    </div>
+
+    <div class="drawer-tab-panel hidden" id="tabBranding">
+      <div class="admin-section">
+        <span class="admin-section-label"><i class="fa-solid fa-palette"></i> BRANDING CENTER</span>
+        <label class="branding-field">Logo URL<input type="text" id="brandLogoUrl" placeholder="https://.../logo.png"></label>
+        <label class="branding-field">Primary Accent Color<input type="color" id="brandAccentColor" value="#38bdf8"></label>
+        <label class="branding-field">Secondary Accent Color<input type="color" id="brandAccentColor2" value="#8b5cf6"></label>
+        <label class="branding-field">Welcome Message<textarea id="brandWelcomeMessage" style="height:56px;"></textarea></label>
+        <label class="branding-field">Background Image URL<input type="text" id="brandBackgroundUrl" placeholder="https://.../background.jpg"></label>
+        <button class="admin-btn" onclick="saveBranding()"><i class="fa-solid fa-floppy-disk"></i> Save Branding (applies to everyone)</button>
+      </div>
+      <div class="admin-section">
+        <span class="admin-section-label"><i class="fa-solid fa-image"></i> GROUP BANNER (ACTIVE GROUP)</span>
+        <input type="text" class="message-input" id="groupBannerUrlInput" placeholder="https://.../banner.jpg" style="width:100%;">
+        <button class="admin-btn" onclick="saveGroupBanner()"><i class="fa-solid fa-floppy-disk"></i> Save Group Banner</button>
+      </div>
     </div>
   </aside>
 
@@ -342,6 +412,30 @@
         <button class="send-btn" id="genericModalConfirmBtn">Confirm</button>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- TASKS & APPROVALS (user-facing) -->
+<div class="modal-overlay hidden" id="tasksModal">
+  <div class="modal-box">
+    <div class="modal-header"><span><i class="fa-solid fa-list-check"></i> Tasks &amp; Approvals</span><i class="fa-solid fa-xmark" onclick="closeModal('tasksModal')"></i></div>
+    <div class="modal-body" id="userTasksListContainer"></div>
+  </div>
+</div>
+
+<!-- ONBOARDING -->
+<div class="onboarding-overlay hidden" id="onboardingOverlay">
+  <div class="onboarding-card">
+    <div class="onboarding-icon"><i class="fa-solid fa-shield-halved"></i></div>
+    <div class="onboarding-title">Welcome to the Portal</div>
+    <div class="onboarding-message" id="onboardingWelcomeMessage">Welcome to Quantum Secure Transaction Desk.</div>
+    <div class="onboarding-steps">
+      <div class="onboarding-step"><i class="fa-solid fa-comments"></i><div><b>Chat securely</b><span>Every message is encrypted in transit and logged for your protection.</span></div></div>
+      <div class="onboarding-step"><i class="fa-solid fa-language"></i><div><b>Translate instantly</b><span>Tap "Translate" on any message, or type in your own language.</span></div></div>
+      <div class="onboarding-step"><i class="fa-solid fa-file-signature"></i><div><b>Submit transactions</b><span>When enabled, fill the transaction form and get an instant PDF receipt.</span></div></div>
+      <div class="onboarding-step"><i class="fa-solid fa-bell"></i><div><b>Stay notified</b><span>Enable notifications so you never miss an update, even with the portal closed.</span></div></div>
+    </div>
+    <button class="tx-submit-elite" onclick="dismissOnboarding()" style="margin-top:6px;"><i class="fa-solid fa-rocket"></i> Get Started</button>
   </div>
 </div>
 

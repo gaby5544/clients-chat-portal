@@ -1,11 +1,43 @@
-# Quantum Secure Transaction Desk — v2.0
+# Quantum Secure Transaction Desk — v3.0
 
-Rebuilt chat portal: enterprise dark-glass UI, fixed Socket.IO event contract,
-PostgreSQL persistence (with in-memory dev fallback), transaction board,
-reactions/replies/pins/forwarding, drag-and-drop uploads, admin dashboard,
-email notifications, and hardened input handling.
+Enterprise chat portal: dark-glass UI, PostgreSQL persistence (with
+in-memory dev fallback), transaction board with PDF receipts, multi-admin
+role tiers, announcements, tasks & approvals, live dashboard widgets, push
+notifications, message read receipts, a Branding Center, onboarding, and
+hardened input handling throughout.
 
-## What changed from the original repo
+## v3.0 additions
+- **Announcements** — Admin+ can post to any combination of groups; each one
+  is inserted as a chat message and automatically pinned.
+- **Tasks & Approvals** — Admin+ creates tasks (e.g. "Submit Documentation");
+  any participant in that group can mark their own task Pending/Completed/
+  Rejected. A live pending-count badge shows on the header Tasks icon and the
+  admin dashboard.
+- **Live Dashboard Widgets** — Online Users, Recent Transactions, Recent
+  Uploads, and Pending Reviews, all pushed live to the admin panel as the
+  underlying data changes (not just on refresh).
+- **Push Notifications** — real Web Push (VAPID-based, no third-party
+  service) with a service worker, working even with the browser fully closed
+  on desktop and Android. **iOS honest caveat**: Apple only allows web push
+  for sites added to the Home Screen (iOS 16.4+) — that's a platform
+  restriction, not something this or any web app can work around.
+- **Message status ticks** — Sent (single check) → Delivered (double check)
+  → Read (bright double check), tracked server-side per recipient.
+- **Multi-admin roles** — Super Admin (full control), Admin (group/
+  transaction/task management), Moderator (message moderation only), each
+  with their own passkey. See `DEPLOY_RENDER.md` for the three env vars.
+- **Branding Center** — Super Admin only: logo, two accent colors, welcome
+  message, background image, and per-group banners — applied live for every
+  visitor via CSS custom properties, no code changes needed.
+- **Onboarding** — first-time regular users see a welcome modal with a short
+  guided tour; shown once per browser.
+- **PDF transaction receipts** — every submission generates a branded,
+  professionally laid-out PDF, downloaded automatically by the submitter and
+  available to admins from the Transactions tab.
+- **Enterprise polish** — message fade-in animations, empty states, glowing
+  redesigned send button, skeleton-ready structure, consistent spacing.
+
+## What changed in the original rebuild
 
 **Fixed event mismatches** (frontend and backend were using different event
 names, so these features silently did nothing):
