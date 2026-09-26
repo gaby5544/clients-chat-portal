@@ -1,176 +1,180 @@
--- Quantum Secure Transaction Desk - PostgreSQL Schema
--- Run once against your Postgres database before first boot.
--- The server also auto-runs this on startup (see src/db.js), so manual
--- execution is optional but recommended for review.
+const express = require('express');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+const crypto = require('crypto');
+const rateLimit = require('express-rate-limit');
+const { store } = require('./db');
+const { validateTransactionForm, escapeHtml } = require('./security');
+const { generateTransactionPdf } = require('./pdfReceipt');
+const { resolveAdminRole, hasMinRole } = require('./roles');
+const { getPublicKey } = require('./webpush');
 
-CREATE TABLE IF NOT EXISTS users (
-  session_token   TEXT PRIMARY KEY,
-  display_name    TEXT NOT NULL,
-  role            TEXT NOT NULL DEFAULT 'PARTY A',
-  is_admin        BOOLEAN NOT NULL DEFAULT FALSE,
-  email           TEXT,
-  country_code    TEXT,
-  avatar_seed     TEXT,
-  is_online       BOOLEAN NOT NULL DEFAULT FALSE,
-  first_seen      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  last_seen       TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+const UPLOAD_DIR = path.join(__dirname, 'uploads');
+if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
-CREATE TABLE IF NOT EXISTS groups (
-  id                        TEXT PRIMARY KEY,
-  name                      TEXT NOT NULL,
-  custom_name_a             TEXT NOT NULL DEFAULT 'Buyer (Party A)',
-  custom_name_b             TEXT NOT NULL DEFAULT 'Seller (Party B)',
-  file_uploads_enabled      BOOLEAN NOT NULL DEFAULT TRUE,
-  highlighted               BOOLEAN NOT NULL DEFAULT FALSE,
-  transaction_form_enabled  BOOLEAN NOT NULL DEFAULT FALSE,
-  created_at                TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+const ALLOWED_MIME = new Set([
+  'image/png', 'image/jpeg', 'image/gif', 'image/webp',
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'text/plain', 'text/csv'
+]);
+const MAX_FILE_BYTES = 15 * 1024 * 1024; // 15MB
 
-CREATE TABLE IF NOT EXISTS messages (
-  id                TEXT PRIMARY KEY,
-  group_id          TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
-  sender_token      TEXT,
-  sender_name       TEXT NOT NULL,
-  sender_role       TEXT,
-  text              TEXT NOT NULL,
-  file_url          TEXT,
-  file_type         TEXT,
-  file_name         TEXT,
-  reply_to_id       TEXT,
-  forwarded_from    TEXT,
-  target_lang       TEXT DEFAULT 'en',
-  is_edited         BOOLEAN NOT NULL DEFAULT FALSE,
-  is_deleted        BOOLEAN NOT NULL DEFAULT FALSE,
-  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_messages_group ON messages(group_id, created_at);
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, UPLOAD_DIR),
+  filename: (req, file, cb) => {
+    const safeExt = path.extname(file.originalname).slice(0, 10).replace(/[^a-zA-Z0-9.]/g, '');
+    const randomName = crypto.randomBytes(16).toString('hex');
+    cb(null, `${randomName}${safeExt}`);
+  }
+});
 
-CREATE TABLE IF NOT EXISTS message_edits (
-  id            SERIAL PRIMARY KEY,
-  message_id    TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
-  old_text      TEXT NOT NULL,
-  edited_by     TEXT NOT NULL,
-  edited_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+const upload = multer({
+  storage,
+  limits: { fileSize: MAX_FILE_BYTES },
+  fileFilter: (req, file, cb) => {
+    if (!ALLOWED_MIME.has(file.mimetype)) {
+      return cb(new Error('File type not allowed'));
+    }
+    cb(null, true);
+  }
+});
 
-CREATE TABLE IF NOT EXISTS message_reactions (
-  message_id    TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
-  session_token TEXT NOT NULL,
-  emoji         TEXT NOT NULL,
-  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  PRIMARY KEY (message_id, session_token, emoji)
-);
+// Rate limiters — protect against abuse of upload/export/form endpoints.
+const uploadLimiter = rateLimit({ windowMs: 60 * 1000, max: 20, standardHeaders: true, legacyHeaders: false });
+const formLimiter = rateLimit({ windowMs: 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false });
+const exportLimiter = rateLimit({ windowMs: 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false });
+const pdfLimiter = rateLimit({ windowMs: 60 * 1000, max: 15, standardHeaders: true, legacyHeaders: false });
 
-CREATE TABLE IF NOT EXISTS pinned_messages (
-  group_id      TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
-  message_id    TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
-  pinned_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  PRIMARY KEY (group_id, message_id)
-);
+function requireAdmin(req, res, next) {
+  const key = req.headers['x-admin-key'] || req.query.adminKey;
+  const role = resolveAdminRole(key);
+  if (!hasMinRole(role, 'ADMIN')) return res.status(403).json({ error: 'Admin authorization required' });
+  next();
+}
 
-CREATE TABLE IF NOT EXISTS notifications (
-  id            SERIAL PRIMARY KEY,
-  session_token TEXT NOT NULL,
-  type          TEXT NOT NULL,
-  payload       JSONB,
-  is_read       BOOLEAN NOT NULL DEFAULT FALSE,
-  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+function buildRouter() {
+  const router = express.Router();
 
-CREATE TABLE IF NOT EXISTS unread_counts (
-  session_token TEXT NOT NULL,
-  group_id      TEXT NOT NULL,
-  count         INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (session_token, group_id)
-);
+  router.use('/uploads', express.static(UPLOAD_DIR, { maxAge: '7d' }));
 
-CREATE TABLE IF NOT EXISTS transactions (
-  id                  TEXT PRIMARY KEY,
-  group_id            TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
-  full_legal_name     TEXT NOT NULL,
-  country             TEXT NOT NULL,
-  role                TEXT NOT NULL,
-  asset_type          TEXT NOT NULL,
-  asset_description   TEXT,
-  quantity            TEXT,
-  unit_price          TEXT,
-  total_value         TEXT,
-  payment_currency    TEXT,
-  payment_method      TEXT,
-  payment_terms       TEXT,
-  notes               TEXT,
-  submitted_by        TEXT,
-  submitted_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_transactions_group ON transactions(group_id);
+  // ---- File upload (drag-and-drop / attachment) ----
+  router.post('/api/upload', uploadLimiter, (req, res) => {
+    upload.single('file')(req, res, (err) => {
+      if (err) return res.status(400).json({ error: err.message || 'Upload failed' });
+      if (!req.file) return res.status(400).json({ error: 'No file provided' });
+      const isImage = req.file.mimetype.startsWith('image/');
+      res.json({
+        fileUrl: `/uploads/${req.file.filename}`,
+        fileType: isImage ? 'image' : 'file',
+        fileName: escapeHtml(req.file.originalname),
+        fileSize: req.file.size
+      });
+    });
+  });
 
--- ============================================================
--- Additions below are appended idempotently (safe to re-run
--- against an already-deployed database without data loss).
--- ============================================================
+  // ---- Transaction submission (also available over socket; REST kept for form-post fallback) ----
+  router.post('/api/transactions/:groupId', formLimiter, async (req, res) => {
+    const { valid, errors } = validateTransactionForm(req.body);
+    if (!valid) return res.status(400).json({ error: errors.join(', ') });
+    const group = await store.getGroup(req.params.groupId);
+    if (!group) return res.status(404).json({ error: 'Group not found' });
+    if (!group.transaction_form_enabled) return res.status(403).json({ error: 'Transaction form is disabled for this group' });
 
--- Multi-admin role tiers: 'SUPER_ADMIN', 'ADMIN', 'MODERATOR', or NULL for
--- a regular buyer/seller.
-ALTER TABLE users ADD COLUMN IF NOT EXISTS admin_role TEXT;
+    const tx = await store.insertTransaction({
+      group_id: req.params.groupId,
+      full_legal_name: escapeHtml(req.body.full_legal_name),
+      country: escapeHtml(req.body.country),
+      role: escapeHtml(req.body.role),
+      asset_type: escapeHtml(req.body.asset_type),
+      asset_description: escapeHtml(req.body.asset_description || ''),
+      quantity: escapeHtml(req.body.quantity || ''),
+      unit_price: escapeHtml(req.body.unit_price || ''),
+      total_value: escapeHtml(req.body.total_value || ''),
+      payment_currency: escapeHtml(req.body.payment_currency || ''),
+      payment_method: escapeHtml(req.body.payment_method || ''),
+      payment_terms: escapeHtml(req.body.payment_terms || ''),
+      notes: escapeHtml(req.body.notes || ''),
+      submitted_by: escapeHtml(req.body.submitted_by || 'Unknown')
+    });
+    res.json({ success: true, transaction: tx });
+  });
 
--- Per-group banner image for the Branding Center.
-ALTER TABLE groups ADD COLUMN IF NOT EXISTS banner_url TEXT;
+  // ---- Admin: export transactions as CSV ----
+  router.get('/api/transactions/:groupId/export', exportLimiter, requireAdmin, async (req, res) => {
+    const rows = await store.getTransactions(req.params.groupId);
+    const headers = [
+      'id', 'full_legal_name', 'country', 'role', 'asset_type', 'asset_description',
+      'quantity', 'unit_price', 'total_value', 'payment_currency', 'payment_method',
+      'payment_terms', 'notes', 'submitted_by', 'submitted_at'
+    ];
+    const csvEscape = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const lines = [headers.join(',')];
+    rows.forEach(r => lines.push(headers.map(h => csvEscape(r[h])).join(',')));
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="transactions-${req.params.groupId}.csv"`);
+    res.send(lines.join('\n'));
+  });
 
--- Announcements: pinned automatically at the top of selected group(s).
-CREATE TABLE IF NOT EXISTS announcements (
-  id            TEXT PRIMARY KEY,
-  group_id      TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
-  message_id    TEXT REFERENCES messages(id) ON DELETE SET NULL,
-  text          TEXT NOT NULL,
-  created_by    TEXT,
-  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_announcements_group ON announcements(group_id, created_at);
+  // ---- PDF receipt download ----
+  // Accessible via the transaction's UUID alone (same "unguessable link"
+  // pattern as e.g. a payment receipt link) — this lets the person who just
+  // submitted the form download their own receipt immediately without an
+  // admin login, while remaining effectively private since UUIDs aren't
+  // enumerable.
+  router.get('/api/transactions/pdf/:txId', pdfLimiter, async (req, res) => {
+    const tx = await store.getTransactionById(req.params.txId);
+    if (!tx) return res.status(404).json({ error: 'Receipt not found' });
+    const group = await store.getGroup(tx.group_id);
+    generateTransactionPdf(res, tx, group ? group.name : 'Unknown Group');
+  });
 
--- Tasks & Approvals.
-CREATE TABLE IF NOT EXISTS tasks (
-  id             TEXT PRIMARY KEY,
-  group_id       TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
-  title          TEXT NOT NULL,
-  description    TEXT,
-  status         TEXT NOT NULL DEFAULT 'Pending', -- Pending | Completed | Rejected
-  created_by     TEXT,
-  assigned_role  TEXT, -- 'PARTY A' | 'PARTY B' | NULL (both)
-  created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_tasks_group ON tasks(group_id, created_at);
+  // ---- Web Push: subscribe / unsubscribe ----
+  router.get('/api/push/vapid-public-key', (req, res) => res.json({ publicKey: getPublicKey() }));
 
--- Message delivery/read receipts (WhatsApp-style single/double check).
-CREATE TABLE IF NOT EXISTS message_reads (
-  message_id     TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
-  session_token  TEXT NOT NULL,
-  delivered_at   TIMESTAMPTZ,
-  read_at        TIMESTAMPTZ,
-  PRIMARY KEY (message_id, session_token)
-);
+  router.post('/api/push/subscribe', formLimiter, async (req, res) => {
+    const { sessionToken, subscription } = req.body || {};
+    if (!sessionToken || !subscription || !subscription.endpoint || !subscription.keys) {
+      return res.status(400).json({ error: 'Invalid subscription payload' });
+    }
+    await store.savePushSubscription(sessionToken, subscription);
+    res.json({ success: true });
+  });
 
--- Web Push subscriptions (browser/Android push; iOS only works if the
--- user has added the site to their Home Screen — see DEPLOY_RENDER.md).
-CREATE TABLE IF NOT EXISTS push_subscriptions (
-  id             SERIAL PRIMARY KEY,
-  session_token  TEXT NOT NULL,
-  endpoint       TEXT NOT NULL UNIQUE,
-  p256dh         TEXT NOT NULL,
-  auth           TEXT NOT NULL,
-  created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_push_subs_session ON push_subscriptions(session_token);
+  router.post('/api/push/unsubscribe', formLimiter, async (req, res) => {
+    const { endpoint } = req.body || {};
+    if (!endpoint) return res.status(400).json({ error: 'endpoint required' });
+    await store.removePushSubscription(endpoint);
+    res.json({ success: true });
+  });
 
--- Branding Center — single-row global config (id is always 1).
-CREATE TABLE IF NOT EXISTS branding_settings (
-  id                 INTEGER PRIMARY KEY DEFAULT 1,
-  logo_url           TEXT,
-  accent_color       TEXT DEFAULT '#38bdf8',
-  accent_color_2     TEXT DEFAULT '#8b5cf6',
-  welcome_message    TEXT DEFAULT 'Welcome to Quantum Secure Transaction Desk.',
-  background_url     TEXT,
-  updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  CONSTRAINT branding_singleton CHECK (id = 1)
-);
+  // ---- Branding Center ----
+  // GET is public (every visitor needs the branding to render the page
+  // correctly); only SUPER_ADMIN can change it.
+  router.get('/api/branding', async (req, res) => {
+    const branding = await store.getBranding();
+    res.json(branding);
+  });
+
+  router.post('/api/branding', formLimiter, async (req, res) => {
+    const key = req.headers['x-admin-key'] || req.query.adminKey;
+    const role = resolveAdminRole(key);
+    if (!hasMinRole(role, 'SUPER_ADMIN')) return res.status(403).json({ error: 'Super Admin authorization required' });
+    const { logo_url, accent_color, accent_color_2, welcome_message, background_url } = req.body || {};
+    const updated = await store.updateBranding({ logo_url, accent_color, accent_color_2, welcome_message, background_url });
+    res.json(updated);
+  });
+
+  router.get('/api/health', (req, res) => res.json({
+    status: 'ok',
+    time: new Date().toISOString(),
+    version: require('./package.json').version,
+    build: 'enterprise-features-2026-08'
+  }));
+
+  return router;
+}
+
+module.exports = { buildRouter };

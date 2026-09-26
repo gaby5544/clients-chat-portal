@@ -1,476 +1,103 @@
-// PostgreSQL-backed implementation of the data store interface.
-// Activated automatically when process.env.DATABASE_URL is set.
-// Provides real persistence across host restarts/redeploys.
+// Generates a polished, branded PDF receipt for a single transaction
+// submission. Pure-JS (pdfkit), no native dependencies, streams directly
+// to an HTTP response.
 
-const { Pool } = require('pg');
-const fs = require('fs');
-const path = require('path');
-const { v4: uuid } = require('uuid');
+const PDFDocument = require('pdfkit');
 
-class PgStore {
-  constructor(connectionString) {
-    this.pool = new Pool({
-      connectionString,
-      ssl: connectionString.includes('localhost') ? false : { rejectUnauthorized: false }
-    });
-  }
+const NAVY = '#0d1119';
+const CYAN = '#38bdf8';
+const VIOLET = '#8b5cf6';
+const TEXT_MAIN = '#1a1f2b';
+const TEXT_MUTED = '#5b6577';
+const BORDER = '#e2e8f0';
 
-  async init() {
-    const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
-    await this.pool.query(schema);
-    // Seed default group if empty
-    const { rows } = await this.pool.query('SELECT id FROM groups LIMIT 1');
-    if (rows.length === 0) {
-      await this.pool.query(
-        `INSERT INTO groups (id, name) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING`,
-        ['default-group', 'General Transaction Group #1']
-      );
-    }
-  }
-
-  // ---------- USERS ----------
-  async upsertUser(u) {
-    const { rows } = await this.pool.query(
-      `INSERT INTO users (session_token, display_name, role, is_admin, admin_role, email, country_code, avatar_seed, is_online, last_seen)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, NOW())
-       ON CONFLICT (session_token) DO UPDATE SET
-         display_name = COALESCE($2, users.display_name),
-         role = COALESCE($3, users.role),
-         is_admin = COALESCE($4, users.is_admin),
-         admin_role = CASE WHEN $5 IS NOT NULL THEN $5 ELSE users.admin_role END,
-         email = CASE WHEN $6 IS NOT NULL THEN $6 ELSE users.email END,
-         country_code = CASE WHEN $7 IS NOT NULL THEN $7 ELSE users.country_code END,
-         is_online = COALESCE($9, users.is_online),
-         last_seen = NOW()
-       RETURNING *`,
-      [u.sessionToken, u.displayName, u.role || 'PARTY A', !!u.isAdmin, u.adminRole || null, u.email || null, u.countryCode || null, u.sessionToken, u.isOnline ?? false]
-    );
-    return rows[0];
-  }
-
-  async setUserOnline(sessionToken, isOnline) {
-    await this.pool.query(`UPDATE users SET is_online=$2, last_seen=NOW() WHERE session_token=$1`, [sessionToken, isOnline]);
-  }
-
-  async getUser(sessionToken) {
-    const { rows } = await this.pool.query(`SELECT * FROM users WHERE session_token=$1`, [sessionToken]);
-    return rows[0] || null;
-  }
-
-  async getAllUsers() {
-    const { rows } = await this.pool.query(`SELECT * FROM users ORDER BY last_seen DESC`);
-    return rows;
-  }
-
-  async deleteUser(sessionToken) {
-    await this.pool.query(`DELETE FROM users WHERE session_token=$1`, [sessionToken]);
-  }
-
-  async clearOfflineUsers() {
-    const { rowCount } = await this.pool.query(`DELETE FROM users WHERE is_online=FALSE`);
-    return rowCount;
-  }
-
-  // ---------- GROUPS ----------
-  async createGroupIfMissing(groupId, name) {
-    const { rows } = await this.pool.query(
-      `INSERT INTO groups (id, name) VALUES ($1,$2)
-       ON CONFLICT (id) DO UPDATE SET id = groups.id
-       RETURNING *`,
-      [groupId, name]
-    );
-    return rows[0];
-  }
-
-  async getGroup(groupId) {
-    const { rows } = await this.pool.query(`SELECT * FROM groups WHERE id=$1`, [groupId]);
-    return rows[0] || null;
-  }
-
-  async getAllGroups() {
-    const { rows } = await this.pool.query(`SELECT * FROM groups ORDER BY created_at ASC`);
-    return rows;
-  }
-
-  async updateGroup(groupId, fields) {
-    const map = {
-      name: 'name', custom_name_a: 'custom_name_a', custom_name_b: 'custom_name_b',
-      file_uploads_enabled: 'file_uploads_enabled', highlighted: 'highlighted',
-      transaction_form_enabled: 'transaction_form_enabled', banner_url: 'banner_url'
-    };
-    const keys = Object.keys(fields).filter(k => map[k]);
-    if (keys.length === 0) return this.getGroup(groupId);
-    const setClause = keys.map((k, i) => `${map[k]} = $${i + 2}`).join(', ');
-    const values = keys.map(k => fields[k]);
-    const { rows } = await this.pool.query(
-      `UPDATE groups SET ${setClause} WHERE id=$1 RETURNING *`,
-      [groupId, ...values]
-    );
-    return rows[0] || null;
-  }
-
-  async deleteGroup(groupId) {
-    await this.pool.query(`DELETE FROM groups WHERE id=$1`, [groupId]);
-  }
-
-  // ---------- MESSAGES ----------
-  async insertMessage(msg) {
-    const { rows } = await this.pool.query(
-      `INSERT INTO messages (id, group_id, sender_token, sender_name, sender_role, text, file_url, file_type, file_name, reply_to_id, forwarded_from, target_lang)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
-      [msg.id, msg.groupId, msg.senderToken || null, msg.senderName, msg.senderRole || null, msg.text,
-       msg.fileUrl || null, msg.fileType || null, msg.fileName || null, msg.replyToId || null, msg.forwardedFrom || null, msg.targetLang || 'en']
-    );
-    return rows[0];
-  }
-
-  async getMessagesForGroup(groupId, limit = 500) {
-    // Take the N most recent rows (DESC), then re-sort ascending for display —
-    // a plain "ORDER BY created_at ASC LIMIT n" would return the OLDEST n
-    // messages instead, which is wrong for both full-history loads and
-    // last-message-preview lookups (limit=1).
-    const { rows } = await this.pool.query(
-      `SELECT * FROM (
-         SELECT * FROM messages WHERE group_id=$1 AND is_deleted=FALSE
-         ORDER BY created_at DESC LIMIT $2
-       ) recent ORDER BY created_at ASC`,
-      [groupId, limit]
-    );
-    return rows;
-  }
-
-  async getMessageById(messageId) {
-    const { rows } = await this.pool.query(`SELECT * FROM messages WHERE id=$1`, [messageId]);
-    return rows[0] || null;
-  }
-
-  async editMessage(messageId, newText, editedBy) {
-    const existing = await this.getMessageById(messageId);
-    if (!existing) return null;
-    await this.pool.query(
-      `INSERT INTO message_edits (message_id, old_text, edited_by) VALUES ($1,$2,$3)`,
-      [messageId, existing.text, editedBy]
-    );
-    const { rows } = await this.pool.query(
-      `UPDATE messages SET text=$2, is_edited=TRUE WHERE id=$1 RETURNING *`,
-      [messageId, newText]
-    );
-    return rows[0];
-  }
-
-  async getMessageEditHistory(messageId) {
-    const { rows } = await this.pool.query(
-      `SELECT old_text AS "oldText", edited_by AS "editedBy", edited_at AS "editedAt"
-       FROM message_edits WHERE message_id=$1 ORDER BY edited_at ASC`,
-      [messageId]
-    );
-    return rows;
-  }
-
-  async deleteMessages(groupId, messageIds) {
-    if (!messageIds.length) return;
-    await this.pool.query(
-      `UPDATE messages SET is_deleted=TRUE WHERE group_id=$1 AND id = ANY($2::text[])`,
-      [groupId, messageIds]
-    );
-    await this.pool.query(
-      `DELETE FROM pinned_messages WHERE group_id=$1 AND message_id = ANY($2::text[])`,
-      [groupId, messageIds]
-    );
-  }
-
-  // ---------- PINS ----------
-  async togglePin(groupId, messageId) {
-    const { rows } = await this.pool.query(
-      `SELECT 1 FROM pinned_messages WHERE group_id=$1 AND message_id=$2`,
-      [groupId, messageId]
-    );
-    if (rows.length) {
-      await this.pool.query(`DELETE FROM pinned_messages WHERE group_id=$1 AND message_id=$2`, [groupId, messageId]);
-    } else {
-      await this.pool.query(`INSERT INTO pinned_messages (group_id, message_id) VALUES ($1,$2)`, [groupId, messageId]);
-    }
-    return this.getPinnedMessages(groupId);
-  }
-
-  async getPinnedMessages(groupId) {
-    const { rows } = await this.pool.query(
-      `SELECT m.* FROM messages m
-       JOIN pinned_messages p ON p.message_id = m.id
-       WHERE p.group_id=$1 AND m.is_deleted=FALSE
-       ORDER BY p.pinned_at ASC`,
-      [groupId]
-    );
-    return rows;
-  }
-
-  // ---------- REACTIONS ----------
-  async toggleReaction(messageId, sessionToken, emoji) {
-    const { rows } = await this.pool.query(
-      `SELECT 1 FROM message_reactions WHERE message_id=$1 AND session_token=$2 AND emoji=$3`,
-      [messageId, sessionToken, emoji]
-    );
-    if (rows.length) {
-      await this.pool.query(
-        `DELETE FROM message_reactions WHERE message_id=$1 AND session_token=$2 AND emoji=$3`,
-        [messageId, sessionToken, emoji]
-      );
-    } else {
-      await this.pool.query(
-        `INSERT INTO message_reactions (message_id, session_token, emoji) VALUES ($1,$2,$3)`,
-        [messageId, sessionToken, emoji]
-      );
-    }
-    return this.getReactionSummary(messageId);
-  }
-
-  async getReactionSummary(messageId) {
-    const { rows } = await this.pool.query(
-      `SELECT emoji, COUNT(*)::int AS count FROM message_reactions WHERE message_id=$1 GROUP BY emoji`,
-      [messageId]
-    );
-    const summary = {};
-    rows.forEach(r => { summary[r.emoji] = r.count; });
-    return summary;
-  }
-
-  // ---------- UNREAD / NOTIFICATIONS ----------
-  async incrementUnread(sessionToken, groupId) {
-    await this.pool.query(
-      `INSERT INTO unread_counts (session_token, group_id, count) VALUES ($1,$2,1)
-       ON CONFLICT (session_token, group_id) DO UPDATE SET count = unread_counts.count + 1`,
-      [sessionToken, groupId]
-    );
-  }
-
-  async clearUnread(sessionToken, groupId) {
-    await this.pool.query(
-      `INSERT INTO unread_counts (session_token, group_id, count) VALUES ($1,$2,0)
-       ON CONFLICT (session_token, group_id) DO UPDATE SET count = 0`,
-      [sessionToken, groupId]
-    );
-  }
-
-  async getUnreadCounts(sessionToken) {
-    const { rows } = await this.pool.query(
-      `SELECT group_id, count FROM unread_counts WHERE session_token=$1`,
-      [sessionToken]
-    );
-    const out = {};
-    rows.forEach(r => { out[r.group_id] = r.count; });
-    return out;
-  }
-
-  async addNotification(sessionToken, type, payload) {
-    const { rows } = await this.pool.query(
-      `INSERT INTO notifications (session_token, type, payload) VALUES ($1,$2,$3) RETURNING *`,
-      [sessionToken, type, JSON.stringify(payload)]
-    );
-    return rows[0];
-  }
-
-  async getNotifications(sessionToken) {
-    const { rows } = await this.pool.query(
-      `SELECT * FROM notifications WHERE session_token=$1 ORDER BY created_at DESC LIMIT 50`,
-      [sessionToken]
-    );
-    return rows;
-  }
-
-  async markNotificationsRead(sessionToken) {
-    await this.pool.query(`UPDATE notifications SET is_read=TRUE WHERE session_token=$1`, [sessionToken]);
-  }
-
-  // ---------- TRANSACTIONS ----------
-  async insertTransaction(tx) {
-    const id = uuid();
-    const { rows } = await this.pool.query(
-      `INSERT INTO transactions (id, group_id, full_legal_name, country, role, asset_type, asset_description,
-         quantity, unit_price, total_value, payment_currency, payment_method, payment_terms, notes, submitted_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
-      [id, tx.group_id, tx.full_legal_name, tx.country, tx.role, tx.asset_type, tx.asset_description,
-       tx.quantity, tx.unit_price, tx.total_value, tx.payment_currency, tx.payment_method, tx.payment_terms, tx.notes, tx.submitted_by]
-    );
-    return rows[0];
-  }
-
-  async getTransactions(groupId) {
-    const { rows } = await this.pool.query(
-      `SELECT * FROM transactions WHERE group_id=$1 ORDER BY submitted_at DESC`,
-      [groupId]
-    );
-    return rows;
-  }
-
-  async getTransactionById(txId) {
-    const { rows } = await this.pool.query(`SELECT * FROM transactions WHERE id=$1`, [txId]);
-    return rows[0] || null;
-  }
-
-  async deleteTransaction(groupId, txId) {
-    await this.pool.query(`DELETE FROM transactions WHERE group_id=$1 AND id=$2`, [groupId, txId]);
-  }
-
-  // ---------- STATS ----------
-  async getStats() {
-    const [{ rows: u }, { rows: g }, { rows: mt }, { rows: ut }, { rows: tx }] = await Promise.all([
-      this.pool.query(`SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE is_online)::int AS online FROM users`),
-      this.pool.query(`SELECT COUNT(*)::int AS total FROM groups`),
-      this.pool.query(`SELECT COUNT(*)::int AS total FROM messages WHERE is_deleted=FALSE AND created_at >= date_trunc('day', NOW())`),
-      this.pool.query(`SELECT COUNT(*)::int AS total FROM messages WHERE is_deleted=FALSE AND file_url IS NOT NULL AND created_at >= date_trunc('day', NOW())`),
-      this.pool.query(`SELECT COUNT(*)::int AS total FROM transactions`)
-    ].map(p => p.then(r => ({ rows: r.rows }))));
-
-    return {
-      totalUsers: u[0].total,
-      onlineUsers: u[0].online,
-      offlineUsers: u[0].total - u[0].online,
-      totalGroups: g[0].total,
-      messagesToday: mt[0].total,
-      uploadsToday: ut[0].total,
-      transactionsSubmitted: tx[0].total
-    };
-  }
-
-  // ---------- ANNOUNCEMENTS ----------
-  async createAnnouncement(a) {
-    const id = uuid();
-    const { rows } = await this.pool.query(
-      `INSERT INTO announcements (id, group_id, message_id, text, created_by) VALUES ($1,$2,$3,$4,$5) RETURNING *`,
-      [id, a.groupId, a.messageId || null, a.text, a.createdBy || null]
-    );
-    return rows[0];
-  }
-  async getAnnouncements(groupId) {
-    const { rows } = await this.pool.query(`SELECT * FROM announcements WHERE group_id=$1 ORDER BY created_at DESC`, [groupId]);
-    return rows;
-  }
-  async deleteAnnouncement(groupId, id) {
-    await this.pool.query(`DELETE FROM announcements WHERE group_id=$1 AND id=$2`, [groupId, id]);
-  }
-
-  // ---------- TASKS ----------
-  async createTask(t) {
-    const id = uuid();
-    const { rows } = await this.pool.query(
-      `INSERT INTO tasks (id, group_id, title, description, status, created_by, assigned_role)
-       VALUES ($1,$2,$3,$4,'Pending',$5,$6) RETURNING *`,
-      [id, t.groupId, t.title, t.description || null, t.createdBy || null, t.assignedRole || null]
-    );
-    return rows[0];
-  }
-  async getTasks(groupId) {
-    const { rows } = await this.pool.query(`SELECT * FROM tasks WHERE group_id=$1 ORDER BY created_at DESC`, [groupId]);
-    return rows;
-  }
-  async updateTaskStatus(groupId, taskId, status) {
-    const { rows } = await this.pool.query(
-      `UPDATE tasks SET status=$3, updated_at=NOW() WHERE group_id=$1 AND id=$2 RETURNING *`,
-      [groupId, taskId, status]
-    );
-    return rows[0] || null;
-  }
-  async deleteTask(groupId, taskId) {
-    await this.pool.query(`DELETE FROM tasks WHERE group_id=$1 AND id=$2`, [groupId, taskId]);
-  }
-  async getPendingTasksCount() {
-    const { rows } = await this.pool.query(`SELECT COUNT(*)::int AS total FROM tasks WHERE status='Pending'`);
-    return rows[0].total;
-  }
-
-  // ---------- MESSAGE READS ----------
-  async markDelivered(messageId, sessionToken) {
-    await this.pool.query(
-      `INSERT INTO message_reads (message_id, session_token, delivered_at) VALUES ($1,$2,NOW())
-       ON CONFLICT (message_id, session_token) DO UPDATE SET delivered_at = COALESCE(message_reads.delivered_at, NOW())`,
-      [messageId, sessionToken]
-    );
-    return this.getMessageStatus(messageId);
-  }
-  async markRead(messageId, sessionToken) {
-    await this.pool.query(
-      `INSERT INTO message_reads (message_id, session_token, delivered_at, read_at) VALUES ($1,$2,NOW(),NOW())
-       ON CONFLICT (message_id, session_token) DO UPDATE SET
-         read_at = NOW(),
-         delivered_at = COALESCE(message_reads.delivered_at, NOW())`,
-      [messageId, sessionToken]
-    );
-    return this.getMessageStatus(messageId);
-  }
-  async markGroupRead(groupId, sessionToken, excludeSenderToken) {
-    const { rows } = await this.pool.query(
-      `SELECT id FROM messages WHERE group_id=$1 AND is_deleted=FALSE AND sender_token IS NOT NULL AND sender_token != $2`,
-      [groupId, sessionToken]
-    );
-    const ids = rows.map(r => r.id);
-    for (const id of ids) await this.markRead(id, sessionToken);
-    return ids;
-  }
-  async getMessageStatus(messageId) {
-    const { rows } = await this.pool.query(
-      `SELECT COUNT(*) FILTER (WHERE read_at IS NOT NULL)::int AS read_count,
-              COUNT(*) FILTER (WHERE delivered_at IS NOT NULL)::int AS delivered_count
-       FROM message_reads WHERE message_id=$1`,
-      [messageId]
-    );
-    const { read_count, delivered_count } = rows[0];
-    if (read_count > 0) return 'read';
-    if (delivered_count > 0) return 'delivered';
-    return 'sent';
-  }
-
-  // ---------- PUSH SUBSCRIPTIONS ----------
-  async savePushSubscription(sessionToken, sub) {
-    await this.pool.query(
-      `INSERT INTO push_subscriptions (session_token, endpoint, p256dh, auth) VALUES ($1,$2,$3,$4)
-       ON CONFLICT (endpoint) DO UPDATE SET session_token=$1, p256dh=$3, auth=$4`,
-      [sessionToken, sub.endpoint, sub.keys.p256dh, sub.keys.auth]
-    );
-  }
-  async removePushSubscription(endpoint) {
-    await this.pool.query(`DELETE FROM push_subscriptions WHERE endpoint=$1`, [endpoint]);
-  }
-  async getPushSubscriptionsForUser(sessionToken) {
-    const { rows } = await this.pool.query(`SELECT * FROM push_subscriptions WHERE session_token=$1`, [sessionToken]);
-    return rows;
-  }
-
-  // ---------- BRANDING ----------
-  async getBranding() {
-    const { rows } = await this.pool.query(`SELECT * FROM branding_settings WHERE id=1`);
-    if (rows[0]) return rows[0];
-    const { rows: inserted } = await this.pool.query(`INSERT INTO branding_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING RETURNING *`);
-    return inserted[0] || (await this.pool.query(`SELECT * FROM branding_settings WHERE id=1`)).rows[0];
-  }
-  async updateBranding(fields) {
-    const map = { logo_url: 'logo_url', accent_color: 'accent_color', accent_color_2: 'accent_color_2', welcome_message: 'welcome_message', background_url: 'background_url' };
-    const keys = Object.keys(fields).filter(k => map[k]);
-    if (keys.length === 0) return this.getBranding();
-    await this.getBranding(); // ensure row exists
-    const setClause = keys.map((k, i) => `${map[k]} = $${i + 1}`).join(', ');
-    const values = keys.map(k => fields[k]);
-    const { rows } = await this.pool.query(
-      `UPDATE branding_settings SET ${setClause}, updated_at=NOW() WHERE id=1 RETURNING *`,
-      values
-    );
-    return rows[0];
-  }
-
-  // ---------- DASHBOARD WIDGETS ----------
-  async getDashboardWidgets() {
-    const [{ rows: online }, { rows: recentTx }, { rows: recentUploads }, pendingReviews] = await Promise.all([
-      this.pool.query(`SELECT display_name, role, is_admin FROM users WHERE is_online=TRUE ORDER BY last_seen DESC`),
-      this.pool.query(`SELECT * FROM transactions ORDER BY submitted_at DESC LIMIT 5`),
-      this.pool.query(`SELECT id, file_name, file_type, sender_name, group_id, created_at FROM messages WHERE file_url IS NOT NULL AND is_deleted=FALSE ORDER BY created_at DESC LIMIT 5`),
-      this.getPendingTasksCount()
-    ]);
-    return {
-      onlineUsers: online.map(u => ({ displayName: u.display_name, role: u.role, isAdmin: u.is_admin })),
-      recentTransactions: recentTx,
-      recentUploads: recentUploads.map(m => ({ id: m.id, fileName: m.file_name, fileType: m.file_type, sender: m.sender_name, groupId: m.group_id, createdAt: m.created_at })),
-      pendingReviews
-    };
-  }
+function field(doc, x, y, width, label, value) {
+  doc.font('Helvetica-Bold').fontSize(8).fillColor(TEXT_MUTED)
+    .text(label.toUpperCase(), x, y, { width, characterSpacing: 0.5 });
+  doc.font('Helvetica').fontSize(11).fillColor(TEXT_MAIN)
+    .text(value && String(value).trim() ? value : '—', x, y + 13, { width });
 }
 
-module.exports = PgStore;
+function generateTransactionPdf(res, tx, groupName) {
+  const doc = new PDFDocument({ size: 'A4', margin: 0 });
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="transaction-receipt-${tx.id}.pdf"`);
+  doc.pipe(res);
+
+  // ---- Header band ----
+  doc.rect(0, 0, doc.page.width, 110).fill(NAVY);
+  doc.save();
+  doc.rect(0, 0, doc.page.width, 4)
+    .fillColor(CYAN).fill();
+  doc.restore();
+
+  doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(20)
+    .text('QUANTUM SECURE TRANSACTION DESK', 50, 32);
+  doc.fillColor(CYAN).font('Helvetica-Bold').fontSize(11)
+    .text('OFFICIAL TRANSACTION RECEIPT', 50, 58);
+  doc.fillColor('#9aa5b8').font('Helvetica').fontSize(9)
+    .text(`Group: ${groupName}  •  Receipt ID: ${tx.id}`, 50, 76);
+  doc.fillColor('#9aa5b8').font('Helvetica').fontSize(9)
+    .text(`Issued: ${new Date(tx.submitted_at).toLocaleString()}`, 50, 90);
+
+  let y = 140;
+  const leftX = 50;
+  const rightX = 310;
+  const colWidth = 230;
+  const rowGap = 42;
+
+  doc.font('Helvetica-Bold').fontSize(13).fillColor(TEXT_MAIN)
+    .text('Party Information', leftX, y);
+  y += 22;
+  field(doc, leftX, y, colWidth, 'Full Legal Name', tx.full_legal_name);
+  field(doc, rightX, y, colWidth, 'Country / Region', tx.country);
+  y += rowGap;
+  field(doc, leftX, y, colWidth, 'Transaction Role', tx.role);
+  field(doc, rightX, y, colWidth, 'Submitted By', tx.submitted_by);
+  y += rowGap + 8;
+
+  doc.moveTo(leftX, y).lineTo(545, y).strokeColor(BORDER).lineWidth(1).stroke();
+  y += 20;
+
+  doc.font('Helvetica-Bold').fontSize(13).fillColor(TEXT_MAIN)
+    .text('Asset Details', leftX, y);
+  y += 22;
+  field(doc, leftX, y, colWidth, 'Asset / Item Type', tx.asset_type);
+  field(doc, rightX, y, colWidth, 'Quantity / Amount', tx.quantity);
+  y += rowGap;
+  field(doc, leftX, y, 490, 'Asset Description', tx.asset_description);
+  y += rowGap + 8;
+
+  doc.moveTo(leftX, y).lineTo(545, y).strokeColor(BORDER).lineWidth(1).stroke();
+  y += 20;
+
+  doc.font('Helvetica-Bold').fontSize(13).fillColor(TEXT_MAIN)
+    .text('Payment Terms', leftX, y);
+  y += 22;
+  field(doc, leftX, y, colWidth, 'Agreed Unit Price', tx.unit_price);
+  field(doc, rightX, y, colWidth, 'Total Transaction Value', `${tx.total_value || ''} ${tx.payment_currency || ''}`.trim());
+  y += rowGap;
+  field(doc, leftX, y, colWidth, 'Payment Method', tx.payment_method);
+  field(doc, rightX, y, colWidth, 'Payment Terms', tx.payment_terms);
+  y += rowGap;
+  field(doc, leftX, y, 490, 'Additional Notes', tx.notes);
+  y += rowGap + 20;
+
+  // ---- Highlighted total value banner ----
+  doc.roundedRect(leftX, y, 495, 56, 8).fillColor('#f0f9ff').fill();
+  doc.roundedRect(leftX, y, 495, 56, 8).strokeColor(CYAN).lineWidth(1.5).stroke();
+  doc.font('Helvetica-Bold').fontSize(10).fillColor(TEXT_MUTED)
+    .text('TOTAL TRANSACTION VALUE', leftX + 20, y + 14);
+  doc.font('Helvetica-Bold').fontSize(20).fillColor(VIOLET)
+    .text(`${tx.total_value || 'N/A'} ${tx.payment_currency || ''}`.trim(), leftX + 20, y + 28);
+
+  // ---- Footer ----
+  const footerY = doc.page.height - 60;
+  doc.moveTo(leftX, footerY).lineTo(545, footerY).strokeColor(BORDER).lineWidth(1).stroke();
+  doc.font('Helvetica').fontSize(8).fillColor(TEXT_MUTED)
+    .text('This receipt was generated automatically by Quantum Secure Transaction Desk and reflects the information as submitted. It does not constitute a binding contract on its own.', leftX, footerY + 10, { width: 495 });
+
+  doc.end();
+}
+
+module.exports = { generateTransactionPdf };

@@ -1,135 +1,476 @@
-# Quantum Secure Transaction Desk — v3.0
+// PostgreSQL-backed implementation of the data store interface.
+// Activated automatically when process.env.DATABASE_URL is set.
+// Provides real persistence across host restarts/redeploys.
 
-Enterprise chat portal: dark-glass UI, PostgreSQL persistence (with
-in-memory dev fallback), transaction board with PDF receipts, multi-admin
-role tiers, announcements, tasks & approvals, live dashboard widgets, push
-notifications, message read receipts, a Branding Center, onboarding, and
-hardened input handling throughout.
+const { Pool } = require('pg');
+const fs = require('fs');
+const path = require('path');
+const { v4: uuid } = require('uuid');
 
-## v3.0 additions
-- **Announcements** — Admin+ can post to any combination of groups; each one
-  is inserted as a chat message and automatically pinned.
-- **Tasks & Approvals** — Admin+ creates tasks (e.g. "Submit Documentation");
-  any participant in that group can mark their own task Pending/Completed/
-  Rejected. A live pending-count badge shows on the header Tasks icon and the
-  admin dashboard.
-- **Live Dashboard Widgets** — Online Users, Recent Transactions, Recent
-  Uploads, and Pending Reviews, all pushed live to the admin panel as the
-  underlying data changes (not just on refresh).
-- **Push Notifications** — real Web Push (VAPID-based, no third-party
-  service) with a service worker, working even with the browser fully closed
-  on desktop and Android. **iOS honest caveat**: Apple only allows web push
-  for sites added to the Home Screen (iOS 16.4+) — that's a platform
-  restriction, not something this or any web app can work around.
-- **Message status ticks** — Sent (single check) → Delivered (double check)
-  → Read (bright double check), tracked server-side per recipient.
-- **Multi-admin roles** — Super Admin (full control), Admin (group/
-  transaction/task management), Moderator (message moderation only), each
-  with their own passkey. See `DEPLOY.md` for the three env vars.
-- **Branding Center** — Super Admin only: logo, two accent colors, welcome
-  message, background image, and per-group banners — applied live for every
-  visitor via CSS custom properties, no code changes needed.
-- **Onboarding** — first-time regular users see a welcome modal with a short
-  guided tour; shown once per browser.
-- **PDF transaction receipts** — every submission generates a branded,
-  professionally laid-out PDF, downloaded automatically by the submitter and
-  available to admins from the Transactions tab.
-- **Enterprise polish** — message fade-in animations, empty states, glowing
-  redesigned send button, skeleton-ready structure, consistent spacing.
+class PgStore {
+  constructor(connectionString) {
+    this.pool = new Pool({
+      connectionString,
+      ssl: connectionString.includes('localhost') ? false : { rejectUnauthorized: false }
+    });
+  }
 
-## What changed in the original rebuild
+  async init() {
+    const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
+    await this.pool.query(schema);
+    // Seed default group if empty
+    const { rows } = await this.pool.query('SELECT id FROM groups LIMIT 1');
+    if (rows.length === 0) {
+      await this.pool.query(
+        `INSERT INTO groups (id, name) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING`,
+        ['default-group', 'General Transaction Group #1']
+      );
+    }
+  }
 
-**Fixed event mismatches** (frontend and backend were using different event
-names, so these features silently did nothing):
-- Upload toggle now consistently uses `admin-toggle-upload-permission` /
-  `upload-permission-changed` on both sides.
-- Pin toggle now consistently uses `admin-toggle-pin-message` /
-  `pinned-messages-updated` on both sides.
+  // ---------- USERS ----------
+  async upsertUser(u) {
+    const { rows } = await this.pool.query(
+      `INSERT INTO users (session_token, display_name, role, is_admin, admin_role, email, country_code, avatar_seed, is_online, last_seen)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, NOW())
+       ON CONFLICT (session_token) DO UPDATE SET
+         display_name = COALESCE($2, users.display_name),
+         role = COALESCE($3, users.role),
+         is_admin = COALESCE($4, users.is_admin),
+         admin_role = CASE WHEN $5 IS NOT NULL THEN $5 ELSE users.admin_role END,
+         email = CASE WHEN $6 IS NOT NULL THEN $6 ELSE users.email END,
+         country_code = CASE WHEN $7 IS NOT NULL THEN $7 ELSE users.country_code END,
+         is_online = COALESCE($9, users.is_online),
+         last_seen = NOW()
+       RETURNING *`,
+      [u.sessionToken, u.displayName, u.role || 'PARTY A', !!u.isAdmin, u.adminRole || null, u.email || null, u.countryCode || null, u.sessionToken, u.isOnline ?? false]
+    );
+    return rows[0];
+  }
 
-**Edit visibility**: regular users only ever receive the latest message text
-(`message-edited` carries no edited flag to them). Edit history — the
-previous versions of a message — is retrievable only via the admin-only
-`admin-get-edit-history` event, verified server-side by admin session, not
-just hidden in the UI.
+  async setUserOnline(sessionToken, isOnline) {
+    await this.pool.query(`UPDATE users SET is_online=$2, last_seen=NOW() WHERE session_token=$1`, [sessionToken, isOnline]);
+  }
 
-**Security**: all user-generated text is HTML-escaped server-side before
-storage (the original code injected raw text via `innerHTML`, which was an
-open XSS hole); rate limiting on messages, uploads, form submissions, and
-exports; file upload type/size validation; parameterized SQL everywhere (no
-string-built queries).
+  async getUser(sessionToken) {
+    const { rows } = await this.pool.query(`SELECT * FROM users WHERE session_token=$1`, [sessionToken]);
+    return rows[0] || null;
+  }
 
-**New features**: German/Italian/Turkish added to both the interface
-language selector and the message-translation selector; user directory with
-buyer/seller/admin grouping and automatic country flags (IP-based, works
-for any country via Unicode regional indicators — no hardcoded flag list);
-transaction board with per-group enable/disable, CSV export, and the full
-requested form field set; message reactions, replies, forwarding, and a
-long-press/right-click context menu; drag-and-drop uploads with image
-previews; admin dashboard with live stats; offline message delivery via
-unread counters + email notification.
+  async getAllUsers() {
+    const { rows } = await this.pool.query(`SELECT * FROM users ORDER BY last_seen DESC`);
+    return rows;
+  }
 
-## Structure
-Everything sits directly in the repo root except `public/` (the web-servable
-frontend) — deliberately flattened to a single folder so uploading to GitHub
-can't silently drop a nested subfolder the way it did with the previous
-multi-level layout.
-```
-server.js              Entry point
-db.js                   Picks Postgres or in-memory backend
-pgStore.js              Postgres implementation
-memStore.js             In-memory fallback (dev only)
-socketHandlers.js       All Socket.IO event logic
-routes.js               REST: file upload, CSV export, PDF receipt, push, branding, health check
-roles.js                Multi-admin role tiers (Super Admin/Admin/Moderator)
-security.js             Escaping, sanitization, validation, rate limiting
-email.js                Nodemailer wrapper
-webpush.js              Web Push (VAPID) wrapper
-pdfReceipt.js           Branded PDF transaction receipts
-public/
-  index.html, style.css, app.js, i18n.js, sw.js, icon-192.png
-schema.sql              Postgres schema (auto-applied on boot)
-DEPLOY.md               Host-agnostic deployment guide — read this first
-DEPLOY_NORTHFLANK.md    Step-by-step walkthrough for Northflank (free, always-on, custom name)
-DEPLOY_RENDER.md        Step-by-step Render deployment guide
-.env.example            All configuration options
-```
+  async deleteUser(sessionToken) {
+    await this.pool.query(`DELETE FROM users WHERE session_token=$1`, [sessionToken]);
+  }
 
-## Testing performed in this environment
-- All backend modules pass `node -c` syntax checks.
-- Server boots cleanly and serves HTTP/health/static/Socket.IO handshake.
-- A Socket.IO integration test (real client, real server, no mocks) covers:
-  join flow for regular users and admin, XSS-escaping, pin/upload toggle
-  events end-to-end, transaction submission → admin notification, task
-  creation, and announcement creation (auto-pinned). All assertions pass.
-- Every store method called from `socketHandlers.js`/`routes.js` was
-  cross-checked against both `pgStore.js` and `memStore.js` — no missing
-  methods, no event-name mismatches between `public/app.js` and
-  `socketHandlers.js`.
-- The Postgres code path is syntax- and query-reviewed but **not** run
-  against a live database in this sandbox (no external DB reachable here) —
-  test it against your real Postgres instance before relying on it in
-  production.
-- UI was not exercised in an actual browser from this environment; verify
-  the visual layer once deployed.
+  async clearOfflineUsers() {
+    const { rowCount } = await this.pool.query(`DELETE FROM users WHERE is_online=FALSE`);
+    return rowCount;
+  }
 
-## A note on this copy of the repo
-The zip this was rebuilt from had several files saved under the wrong
-names — cosmetic packaging mistakes, not code bugs. `env.example` (missing
-its leading dot) contained an old draft of `socketHandlers.js`, and there
-were a `app.js` (actually CSS), a `style.css` (actually HTML), and two
-generically-named `download` files (one an exact duplicate of `email.js`,
-one an outdated draft of `routes.js`) sitting in the repo root. All of
-those have been removed, and `.env.example` has been rebuilt as an actual
-environment-variable template. Nothing in the real application code needed
-fixing — see "Testing performed" above.
+  // ---------- GROUPS ----------
+  async createGroupIfMissing(groupId, name) {
+    const { rows } = await this.pool.query(
+      `INSERT INTO groups (id, name) VALUES ($1,$2)
+       ON CONFLICT (id) DO UPDATE SET id = groups.id
+       RETURNING *`,
+      [groupId, name]
+    );
+    return rows[0];
+  }
 
-## Quick start
-```bash
-cp .env.example .env
-npm install
-npm start
-```
-Then open `http://localhost:3000`. For deploying somewhere it'll stay
-online, start with `DEPLOY.md` (works on any host) or `DEPLOY_NORTHFLANK.md`
-(step-by-step for a free, always-on host with a custom name). Render
-instructions are still in `DEPLOY_RENDER.md` if you want them.
+  async getGroup(groupId) {
+    const { rows } = await this.pool.query(`SELECT * FROM groups WHERE id=$1`, [groupId]);
+    return rows[0] || null;
+  }
+
+  async getAllGroups() {
+    const { rows } = await this.pool.query(`SELECT * FROM groups ORDER BY created_at ASC`);
+    return rows;
+  }
+
+  async updateGroup(groupId, fields) {
+    const map = {
+      name: 'name', custom_name_a: 'custom_name_a', custom_name_b: 'custom_name_b',
+      file_uploads_enabled: 'file_uploads_enabled', highlighted: 'highlighted',
+      transaction_form_enabled: 'transaction_form_enabled', banner_url: 'banner_url'
+    };
+    const keys = Object.keys(fields).filter(k => map[k]);
+    if (keys.length === 0) return this.getGroup(groupId);
+    const setClause = keys.map((k, i) => `${map[k]} = $${i + 2}`).join(', ');
+    const values = keys.map(k => fields[k]);
+    const { rows } = await this.pool.query(
+      `UPDATE groups SET ${setClause} WHERE id=$1 RETURNING *`,
+      [groupId, ...values]
+    );
+    return rows[0] || null;
+  }
+
+  async deleteGroup(groupId) {
+    await this.pool.query(`DELETE FROM groups WHERE id=$1`, [groupId]);
+  }
+
+  // ---------- MESSAGES ----------
+  async insertMessage(msg) {
+    const { rows } = await this.pool.query(
+      `INSERT INTO messages (id, group_id, sender_token, sender_name, sender_role, text, file_url, file_type, file_name, reply_to_id, forwarded_from, target_lang)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+      [msg.id, msg.groupId, msg.senderToken || null, msg.senderName, msg.senderRole || null, msg.text,
+       msg.fileUrl || null, msg.fileType || null, msg.fileName || null, msg.replyToId || null, msg.forwardedFrom || null, msg.targetLang || 'en']
+    );
+    return rows[0];
+  }
+
+  async getMessagesForGroup(groupId, limit = 500) {
+    // Take the N most recent rows (DESC), then re-sort ascending for display —
+    // a plain "ORDER BY created_at ASC LIMIT n" would return the OLDEST n
+    // messages instead, which is wrong for both full-history loads and
+    // last-message-preview lookups (limit=1).
+    const { rows } = await this.pool.query(
+      `SELECT * FROM (
+         SELECT * FROM messages WHERE group_id=$1 AND is_deleted=FALSE
+         ORDER BY created_at DESC LIMIT $2
+       ) recent ORDER BY created_at ASC`,
+      [groupId, limit]
+    );
+    return rows;
+  }
+
+  async getMessageById(messageId) {
+    const { rows } = await this.pool.query(`SELECT * FROM messages WHERE id=$1`, [messageId]);
+    return rows[0] || null;
+  }
+
+  async editMessage(messageId, newText, editedBy) {
+    const existing = await this.getMessageById(messageId);
+    if (!existing) return null;
+    await this.pool.query(
+      `INSERT INTO message_edits (message_id, old_text, edited_by) VALUES ($1,$2,$3)`,
+      [messageId, existing.text, editedBy]
+    );
+    const { rows } = await this.pool.query(
+      `UPDATE messages SET text=$2, is_edited=TRUE WHERE id=$1 RETURNING *`,
+      [messageId, newText]
+    );
+    return rows[0];
+  }
+
+  async getMessageEditHistory(messageId) {
+    const { rows } = await this.pool.query(
+      `SELECT old_text AS "oldText", edited_by AS "editedBy", edited_at AS "editedAt"
+       FROM message_edits WHERE message_id=$1 ORDER BY edited_at ASC`,
+      [messageId]
+    );
+    return rows;
+  }
+
+  async deleteMessages(groupId, messageIds) {
+    if (!messageIds.length) return;
+    await this.pool.query(
+      `UPDATE messages SET is_deleted=TRUE WHERE group_id=$1 AND id = ANY($2::text[])`,
+      [groupId, messageIds]
+    );
+    await this.pool.query(
+      `DELETE FROM pinned_messages WHERE group_id=$1 AND message_id = ANY($2::text[])`,
+      [groupId, messageIds]
+    );
+  }
+
+  // ---------- PINS ----------
+  async togglePin(groupId, messageId) {
+    const { rows } = await this.pool.query(
+      `SELECT 1 FROM pinned_messages WHERE group_id=$1 AND message_id=$2`,
+      [groupId, messageId]
+    );
+    if (rows.length) {
+      await this.pool.query(`DELETE FROM pinned_messages WHERE group_id=$1 AND message_id=$2`, [groupId, messageId]);
+    } else {
+      await this.pool.query(`INSERT INTO pinned_messages (group_id, message_id) VALUES ($1,$2)`, [groupId, messageId]);
+    }
+    return this.getPinnedMessages(groupId);
+  }
+
+  async getPinnedMessages(groupId) {
+    const { rows } = await this.pool.query(
+      `SELECT m.* FROM messages m
+       JOIN pinned_messages p ON p.message_id = m.id
+       WHERE p.group_id=$1 AND m.is_deleted=FALSE
+       ORDER BY p.pinned_at ASC`,
+      [groupId]
+    );
+    return rows;
+  }
+
+  // ---------- REACTIONS ----------
+  async toggleReaction(messageId, sessionToken, emoji) {
+    const { rows } = await this.pool.query(
+      `SELECT 1 FROM message_reactions WHERE message_id=$1 AND session_token=$2 AND emoji=$3`,
+      [messageId, sessionToken, emoji]
+    );
+    if (rows.length) {
+      await this.pool.query(
+        `DELETE FROM message_reactions WHERE message_id=$1 AND session_token=$2 AND emoji=$3`,
+        [messageId, sessionToken, emoji]
+      );
+    } else {
+      await this.pool.query(
+        `INSERT INTO message_reactions (message_id, session_token, emoji) VALUES ($1,$2,$3)`,
+        [messageId, sessionToken, emoji]
+      );
+    }
+    return this.getReactionSummary(messageId);
+  }
+
+  async getReactionSummary(messageId) {
+    const { rows } = await this.pool.query(
+      `SELECT emoji, COUNT(*)::int AS count FROM message_reactions WHERE message_id=$1 GROUP BY emoji`,
+      [messageId]
+    );
+    const summary = {};
+    rows.forEach(r => { summary[r.emoji] = r.count; });
+    return summary;
+  }
+
+  // ---------- UNREAD / NOTIFICATIONS ----------
+  async incrementUnread(sessionToken, groupId) {
+    await this.pool.query(
+      `INSERT INTO unread_counts (session_token, group_id, count) VALUES ($1,$2,1)
+       ON CONFLICT (session_token, group_id) DO UPDATE SET count = unread_counts.count + 1`,
+      [sessionToken, groupId]
+    );
+  }
+
+  async clearUnread(sessionToken, groupId) {
+    await this.pool.query(
+      `INSERT INTO unread_counts (session_token, group_id, count) VALUES ($1,$2,0)
+       ON CONFLICT (session_token, group_id) DO UPDATE SET count = 0`,
+      [sessionToken, groupId]
+    );
+  }
+
+  async getUnreadCounts(sessionToken) {
+    const { rows } = await this.pool.query(
+      `SELECT group_id, count FROM unread_counts WHERE session_token=$1`,
+      [sessionToken]
+    );
+    const out = {};
+    rows.forEach(r => { out[r.group_id] = r.count; });
+    return out;
+  }
+
+  async addNotification(sessionToken, type, payload) {
+    const { rows } = await this.pool.query(
+      `INSERT INTO notifications (session_token, type, payload) VALUES ($1,$2,$3) RETURNING *`,
+      [sessionToken, type, JSON.stringify(payload)]
+    );
+    return rows[0];
+  }
+
+  async getNotifications(sessionToken) {
+    const { rows } = await this.pool.query(
+      `SELECT * FROM notifications WHERE session_token=$1 ORDER BY created_at DESC LIMIT 50`,
+      [sessionToken]
+    );
+    return rows;
+  }
+
+  async markNotificationsRead(sessionToken) {
+    await this.pool.query(`UPDATE notifications SET is_read=TRUE WHERE session_token=$1`, [sessionToken]);
+  }
+
+  // ---------- TRANSACTIONS ----------
+  async insertTransaction(tx) {
+    const id = uuid();
+    const { rows } = await this.pool.query(
+      `INSERT INTO transactions (id, group_id, full_legal_name, country, role, asset_type, asset_description,
+         quantity, unit_price, total_value, payment_currency, payment_method, payment_terms, notes, submitted_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
+      [id, tx.group_id, tx.full_legal_name, tx.country, tx.role, tx.asset_type, tx.asset_description,
+       tx.quantity, tx.unit_price, tx.total_value, tx.payment_currency, tx.payment_method, tx.payment_terms, tx.notes, tx.submitted_by]
+    );
+    return rows[0];
+  }
+
+  async getTransactions(groupId) {
+    const { rows } = await this.pool.query(
+      `SELECT * FROM transactions WHERE group_id=$1 ORDER BY submitted_at DESC`,
+      [groupId]
+    );
+    return rows;
+  }
+
+  async getTransactionById(txId) {
+    const { rows } = await this.pool.query(`SELECT * FROM transactions WHERE id=$1`, [txId]);
+    return rows[0] || null;
+  }
+
+  async deleteTransaction(groupId, txId) {
+    await this.pool.query(`DELETE FROM transactions WHERE group_id=$1 AND id=$2`, [groupId, txId]);
+  }
+
+  // ---------- STATS ----------
+  async getStats() {
+    const [{ rows: u }, { rows: g }, { rows: mt }, { rows: ut }, { rows: tx }] = await Promise.all([
+      this.pool.query(`SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE is_online)::int AS online FROM users`),
+      this.pool.query(`SELECT COUNT(*)::int AS total FROM groups`),
+      this.pool.query(`SELECT COUNT(*)::int AS total FROM messages WHERE is_deleted=FALSE AND created_at >= date_trunc('day', NOW())`),
+      this.pool.query(`SELECT COUNT(*)::int AS total FROM messages WHERE is_deleted=FALSE AND file_url IS NOT NULL AND created_at >= date_trunc('day', NOW())`),
+      this.pool.query(`SELECT COUNT(*)::int AS total FROM transactions`)
+    ].map(p => p.then(r => ({ rows: r.rows }))));
+
+    return {
+      totalUsers: u[0].total,
+      onlineUsers: u[0].online,
+      offlineUsers: u[0].total - u[0].online,
+      totalGroups: g[0].total,
+      messagesToday: mt[0].total,
+      uploadsToday: ut[0].total,
+      transactionsSubmitted: tx[0].total
+    };
+  }
+
+  // ---------- ANNOUNCEMENTS ----------
+  async createAnnouncement(a) {
+    const id = uuid();
+    const { rows } = await this.pool.query(
+      `INSERT INTO announcements (id, group_id, message_id, text, created_by) VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+      [id, a.groupId, a.messageId || null, a.text, a.createdBy || null]
+    );
+    return rows[0];
+  }
+  async getAnnouncements(groupId) {
+    const { rows } = await this.pool.query(`SELECT * FROM announcements WHERE group_id=$1 ORDER BY created_at DESC`, [groupId]);
+    return rows;
+  }
+  async deleteAnnouncement(groupId, id) {
+    await this.pool.query(`DELETE FROM announcements WHERE group_id=$1 AND id=$2`, [groupId, id]);
+  }
+
+  // ---------- TASKS ----------
+  async createTask(t) {
+    const id = uuid();
+    const { rows } = await this.pool.query(
+      `INSERT INTO tasks (id, group_id, title, description, status, created_by, assigned_role)
+       VALUES ($1,$2,$3,$4,'Pending',$5,$6) RETURNING *`,
+      [id, t.groupId, t.title, t.description || null, t.createdBy || null, t.assignedRole || null]
+    );
+    return rows[0];
+  }
+  async getTasks(groupId) {
+    const { rows } = await this.pool.query(`SELECT * FROM tasks WHERE group_id=$1 ORDER BY created_at DESC`, [groupId]);
+    return rows;
+  }
+  async updateTaskStatus(groupId, taskId, status) {
+    const { rows } = await this.pool.query(
+      `UPDATE tasks SET status=$3, updated_at=NOW() WHERE group_id=$1 AND id=$2 RETURNING *`,
+      [groupId, taskId, status]
+    );
+    return rows[0] || null;
+  }
+  async deleteTask(groupId, taskId) {
+    await this.pool.query(`DELETE FROM tasks WHERE group_id=$1 AND id=$2`, [groupId, taskId]);
+  }
+  async getPendingTasksCount() {
+    const { rows } = await this.pool.query(`SELECT COUNT(*)::int AS total FROM tasks WHERE status='Pending'`);
+    return rows[0].total;
+  }
+
+  // ---------- MESSAGE READS ----------
+  async markDelivered(messageId, sessionToken) {
+    await this.pool.query(
+      `INSERT INTO message_reads (message_id, session_token, delivered_at) VALUES ($1,$2,NOW())
+       ON CONFLICT (message_id, session_token) DO UPDATE SET delivered_at = COALESCE(message_reads.delivered_at, NOW())`,
+      [messageId, sessionToken]
+    );
+    return this.getMessageStatus(messageId);
+  }
+  async markRead(messageId, sessionToken) {
+    await this.pool.query(
+      `INSERT INTO message_reads (message_id, session_token, delivered_at, read_at) VALUES ($1,$2,NOW(),NOW())
+       ON CONFLICT (message_id, session_token) DO UPDATE SET
+         read_at = NOW(),
+         delivered_at = COALESCE(message_reads.delivered_at, NOW())`,
+      [messageId, sessionToken]
+    );
+    return this.getMessageStatus(messageId);
+  }
+  async markGroupRead(groupId, sessionToken, excludeSenderToken) {
+    const { rows } = await this.pool.query(
+      `SELECT id FROM messages WHERE group_id=$1 AND is_deleted=FALSE AND sender_token IS NOT NULL AND sender_token != $2`,
+      [groupId, sessionToken]
+    );
+    const ids = rows.map(r => r.id);
+    for (const id of ids) await this.markRead(id, sessionToken);
+    return ids;
+  }
+  async getMessageStatus(messageId) {
+    const { rows } = await this.pool.query(
+      `SELECT COUNT(*) FILTER (WHERE read_at IS NOT NULL)::int AS read_count,
+              COUNT(*) FILTER (WHERE delivered_at IS NOT NULL)::int AS delivered_count
+       FROM message_reads WHERE message_id=$1`,
+      [messageId]
+    );
+    const { read_count, delivered_count } = rows[0];
+    if (read_count > 0) return 'read';
+    if (delivered_count > 0) return 'delivered';
+    return 'sent';
+  }
+
+  // ---------- PUSH SUBSCRIPTIONS ----------
+  async savePushSubscription(sessionToken, sub) {
+    await this.pool.query(
+      `INSERT INTO push_subscriptions (session_token, endpoint, p256dh, auth) VALUES ($1,$2,$3,$4)
+       ON CONFLICT (endpoint) DO UPDATE SET session_token=$1, p256dh=$3, auth=$4`,
+      [sessionToken, sub.endpoint, sub.keys.p256dh, sub.keys.auth]
+    );
+  }
+  async removePushSubscription(endpoint) {
+    await this.pool.query(`DELETE FROM push_subscriptions WHERE endpoint=$1`, [endpoint]);
+  }
+  async getPushSubscriptionsForUser(sessionToken) {
+    const { rows } = await this.pool.query(`SELECT * FROM push_subscriptions WHERE session_token=$1`, [sessionToken]);
+    return rows;
+  }
+
+  // ---------- BRANDING ----------
+  async getBranding() {
+    const { rows } = await this.pool.query(`SELECT * FROM branding_settings WHERE id=1`);
+    if (rows[0]) return rows[0];
+    const { rows: inserted } = await this.pool.query(`INSERT INTO branding_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING RETURNING *`);
+    return inserted[0] || (await this.pool.query(`SELECT * FROM branding_settings WHERE id=1`)).rows[0];
+  }
+  async updateBranding(fields) {
+    const map = { logo_url: 'logo_url', accent_color: 'accent_color', accent_color_2: 'accent_color_2', welcome_message: 'welcome_message', background_url: 'background_url' };
+    const keys = Object.keys(fields).filter(k => map[k]);
+    if (keys.length === 0) return this.getBranding();
+    await this.getBranding(); // ensure row exists
+    const setClause = keys.map((k, i) => `${map[k]} = $${i + 1}`).join(', ');
+    const values = keys.map(k => fields[k]);
+    const { rows } = await this.pool.query(
+      `UPDATE branding_settings SET ${setClause}, updated_at=NOW() WHERE id=1 RETURNING *`,
+      values
+    );
+    return rows[0];
+  }
+
+  // ---------- DASHBOARD WIDGETS ----------
+  async getDashboardWidgets() {
+    const [{ rows: online }, { rows: recentTx }, { rows: recentUploads }, pendingReviews] = await Promise.all([
+      this.pool.query(`SELECT display_name, role, is_admin FROM users WHERE is_online=TRUE ORDER BY last_seen DESC`),
+      this.pool.query(`SELECT * FROM transactions ORDER BY submitted_at DESC LIMIT 5`),
+      this.pool.query(`SELECT id, file_name, file_type, sender_name, group_id, created_at FROM messages WHERE file_url IS NOT NULL AND is_deleted=FALSE ORDER BY created_at DESC LIMIT 5`),
+      this.getPendingTasksCount()
+    ]);
+    return {
+      onlineUsers: online.map(u => ({ displayName: u.display_name, role: u.role, isAdmin: u.is_admin })),
+      recentTransactions: recentTx,
+      recentUploads: recentUploads.map(m => ({ id: m.id, fileName: m.file_name, fileType: m.file_type, sender: m.sender_name, groupId: m.group_id, createdAt: m.created_at })),
+      pendingReviews
+    };
+  }
+}
+
+module.exports = PgStore;
