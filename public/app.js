@@ -7,6 +7,10 @@ sessionStorage.setItem('q_session_token', sessionToken);
 
 const urlParams = new URLSearchParams(window.location.search);
 let activeGroupId = urlParams.get('groupId') || 'default-group';
+// If the link itself says who the visitor is (?role=PARTY%20A or PARTY%20B),
+// lock them into that role so two people can never both land on "Party A"
+// just because they opened a shared link and forgot to change a dropdown.
+const urlLockedRole = ['PARTY A', 'PARTY B'].includes(urlParams.get('role')) ? urlParams.get('role') : null;
 
 let isAdminConfirmed = false;
 
@@ -188,7 +192,7 @@ function loginAsAdmin() {
 }
 
 function joinSession(adminKey = null) {
-  const selectedRole = adminKey ? 'ADMINISTRATOR' : el('roleSelect').value;
+  const selectedRole = adminKey ? 'ADMINISTRATOR' : (urlLockedRole || el('roleSelect').value);
   const email = localStorage.getItem('q_user_email') || undefined;
   socket.emit('join-room', { groupId: activeGroupId, role: selectedRole, adminKey, sessionToken, email });
 }
@@ -211,7 +215,10 @@ socket.on('init-state', async (data) => {
   updateRoleBadge();
 
   el('currentGroupName').textContent = data.group.name;
-  el('roleSelect').style.display = isAdminConfirmed ? 'none' : 'inline-block';
+  // Hide the picker entirely once a role is locked in by the link (or for admins) —
+  // there's nothing left for the visitor to choose.
+  el('roleSelect').style.display = (isAdminConfirmed || urlLockedRole) ? 'none' : 'inline-block';
+  if (urlLockedRole) el('roleSelect').disabled = true;
   fileUploadAllowed = data.group.fileUploadsEnabled;
   updateUploadUiState();
   updateTransactionBanner(data.group.transactionFormEnabled);
@@ -727,7 +734,17 @@ function switchGroup(groupId) {
   joinSession(adminPasskeyMemory);
 }
 
-socket.on('group-created-and-switch', ({ newGroupId }) => { activeGroupId = newGroupId; joinSession(adminPasskeyMemory); });
+socket.on('group-created-and-switch', ({ newGroupId }) => {
+  activeGroupId = newGroupId;
+  joinSession(adminPasskeyMemory);
+  if (pendingGroupNames) {
+    const { buyer, seller } = pendingGroupNames;
+    if (buyer) socket.emit('rename-party', { groupId: newGroupId, party: 'A', newName: buyer });
+    if (seller) socket.emit('rename-party', { groupId: newGroupId, party: 'B', newName: seller });
+    showInviteLinksModal(newGroupId, buyer || 'Buyer', seller || 'Seller');
+    pendingGroupNames = null;
+  }
+});
 socket.on('force-room-switch', ({ newGroupId }) => { activeGroupId = newGroupId; joinSession(adminPasskeyMemory); });
 
 // Renaming a party relabels new messages going forward; it deliberately does
@@ -738,10 +755,38 @@ socket.on('party-renamed', ({ party }) => {
   socket.emit('get-all-groups');
 });
 
+let pendingGroupNames = null; // { buyer, seller } — carried across the create-group round trip
+let generatedLinks = { buyer: '', seller: '' };
+
 function createNewGroup() {
-  showPromptModal({ title: 'New Group', placeholder: 'Group name' }, (name) => {
-    socket.emit('create-group', { groupName: name });
-  });
+  el('newGroupNameInput').value = '';
+  el('newGroupBuyerNameInput').value = '';
+  el('newGroupSellerNameInput').value = '';
+  el('createGroupModal').classList.remove('hidden');
+  setTimeout(() => el('newGroupNameInput').focus(), 50);
+}
+function submitCreateGroup() {
+  const groupName = el('newGroupNameInput').value.trim();
+  const buyer = el('newGroupBuyerNameInput').value.trim();
+  const seller = el('newGroupSellerNameInput').value.trim();
+  pendingGroupNames = { buyer, seller };
+  closeModal('createGroupModal');
+  socket.emit('create-group', { groupName });
+}
+function showInviteLinksModal(groupId, buyerLabel, sellerLabel) {
+  generatedLinks.buyer = `${window.location.origin}/?groupId=${groupId}&role=PARTY%20A`;
+  generatedLinks.seller = `${window.location.origin}/?groupId=${groupId}&role=PARTY%20B`;
+  el('inviteLinksBuyerLabel').textContent = buyerLabel;
+  el('inviteLinksSellerLabel').textContent = sellerLabel;
+  el('inviteLinksModal').classList.remove('hidden');
+}
+function copyGeneratedLink(who) {
+  const link = generatedLinks[who];
+  if (!link) return;
+  navigator.clipboard.writeText(link).then(
+    () => toast(`Link copied:\n${link}`),
+    () => toast(`Copy this link manually: ${link}`, true)
+  );
 }
 function deleteCurrentGroup() {
   showConfirmModal({ title: 'Delete Group', message: 'Delete the active group? All its messages and transactions will be removed. This cannot be undone.' }, () => {
@@ -761,10 +806,15 @@ function renameParty(party) {
 }
 function toggleFileLock() { socket.emit('admin-toggle-upload-permission', { groupId: activeGroupId }); }
 function toggleHighlightGroup() { socket.emit('toggle-highlight-group', { groupId: activeGroupId }); toast('Group highlight toggled.'); }
-function copyInviteLink() {
-  const link = `${window.location.origin}/?groupId=${activeGroupId}`;
+function copyInviteLink(party) {
+  // party: 'A' -> locks visitor into PARTY A, 'B' -> locks into PARTY B,
+  // undefined -> old unlocked link (kept for backwards compatibility, not shown in UI anymore).
+  const roleParam = party === 'A' ? '&role=PARTY%20A' : party === 'B' ? '&role=PARTY%20B' : '';
+  const activeGroup = groupsCache.find(g => g.id === activeGroupId);
+  const label = party === 'A' ? (activeGroup?.customNames?.A || 'Buyer') : party === 'B' ? (activeGroup?.customNames?.B || 'Seller') : 'Invite';
+  const link = `${window.location.origin}/?groupId=${activeGroupId}${roleParam}`;
   navigator.clipboard.writeText(link).then(
-    () => toast(`Invite link copied:\n${link}`),
+    () => toast(`${label} link copied:\n${link}`),
     () => toast(`Copy this link manually: ${link}`, true)
   );
 }
@@ -836,11 +886,18 @@ function clearOfflineUsers() {
 socket.on('directory-cleared', ({ removed }) => toast(`Removed ${removed} offline user(s) from the directory.`));
 
 // ---------------- PRESENCE ----------------
+// `users` is only ever the set of people currently connected to THIS group, so
+// its absence from the list is exactly "offline" — no chat-log spam needed.
 socket.on('presence-update', (users) => {
   const peer = users.find(u => u.sessionToken !== myToken() && !u.isAdmin);
   const dot = el('peerStatusDot'); const text = el('peerStatusText');
-  if (peer) { dot.className = `status-dot ${peer.isOnline ? 'online' : 'offline'}`; text.textContent = `${peer.displayName}: ${peer.isOnline ? 'Online' : 'Offline'}`; }
+  if (peer) { dot.className = 'status-dot online'; text.textContent = `${peer.displayName}: Online`; }
   else { dot.className = 'status-dot offline'; text.textContent = 'Counterparty: Offline'; }
+
+  const adminOnline = users.some(u => u.isAdmin);
+  const adminDot = el('adminStatusDot'); const adminText = el('adminStatusText');
+  adminDot.className = `status-dot ${adminOnline ? 'online' : 'offline'}`;
+  adminText.textContent = `Desk Officer: ${adminOnline ? 'Online' : 'Offline'}`;
 });
 
 // ---------------- ADMIN STATS ----------------

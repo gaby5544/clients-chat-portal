@@ -81,6 +81,9 @@ body {
 .rail-btn.active { background: linear-gradient(135deg, rgba(56,189,248,0.22), rgba(139,92,246,0.22)); color: #fff; border-color: var(--border-glow); }
 .admin-only { display: none !important; }
 body.is-admin .admin-only { display: flex !important; }
+/* Inverse of .admin-only — visible to Party A/B, hidden for the Desk Officer (who already has the full directory/dashboard for presence). */
+.party-only { display: none !important; }
+body:not(.is-admin) .party-only { display: inline-flex !important; }
 .icon-rail.fully-hidden { display: none; }
 
 /* ---------------- LIST PANEL ---------------- */
@@ -340,6 +343,9 @@ body.is-admin .admin-only { display: flex !important; }
 .modal-header { padding: 16px 18px; border-bottom: 1px solid var(--border-soft); display: flex; justify-content: space-between; align-items: center; font-weight: 800; font-size: 0.9rem; }
 .modal-header i { cursor: pointer; color: var(--text-muted); }
 .modal-body { padding: 18px; overflow-y: auto; }
+.field-label { display: block; font-size: 0.72rem; font-weight: 700; color: var(--text-muted); margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.4px; }
+.invite-link-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; margin-bottom: 10px; border: 1px solid var(--border-soft); border-radius: 10px; background: rgba(255,255,255,0.03); }
+.invite-link-label { font-size: 0.82rem; font-weight: 700; }
 
 /* ---- Elite Transaction Form ---- */
 .tx-modal-elite { width: 680px; max-height: 90vh; border: 1px solid rgba(56,189,248,0.4); box-shadow: 0 0 0 1px rgba(56,189,248,0.08), 0 50px 100px -20px rgba(0,0,0,0.9), 0 0 60px -10px rgba(56,189,248,0.15); }

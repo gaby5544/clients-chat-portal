@@ -74,11 +74,15 @@
         <button class="icon-btn" id="notifyToggleBtn" onclick="togglePushSubscription()" title="Enable notifications"><i class="fa-solid fa-bell"></i></button>
         <button class="icon-btn admin-only" id="selectModeBtn" onclick="toggleSelectMode()" title="Select messages"><i class="fa-solid fa-square-check"></i></button>
         <button class="icon-btn admin-only" onclick="openAdminDrawerTab('transactions')" title="Transaction Board"><i class="fa-solid fa-file-invoice-dollar"></i></button>
-        <div class="presence-badge">
+        <div class="presence-badge admin-only">
           <div class="status-dot online"></div>
           <span id="selfStatusText">You: Online</span>
         </div>
-        <div class="presence-badge" id="counterpartyPresence">
+        <div class="presence-badge party-only" id="deskOfficerPresence">
+          <div class="status-dot offline" id="adminStatusDot"></div>
+          <span id="adminStatusText">Desk Officer: Offline</span>
+        </div>
+        <div class="presence-badge party-only" id="counterpartyPresence">
           <div class="status-dot offline" id="peerStatusDot"></div>
           <span id="peerStatusText">Counterparty: Offline</span>
         </div>
@@ -121,8 +125,8 @@
 
     <div class="footer-controls-secondary" id="footerSecondary">
       <select class="role-dropdown" id="roleSelect" onchange="joinSession()">
-        <option value="PARTY A" data-i18n="roleBuyer">Role: Buyer (Party A)</option>
-        <option value="PARTY B" data-i18n="roleSeller">Role: Seller (Party B)</option>
+        <option value="PARTY A" data-i18n="roleBuyer">Role: Buyer</option>
+        <option value="PARTY B" data-i18n="roleSeller">Role: Seller</option>
       </select>
 
       <select class="lang-dropdown" id="uiLangSelect" onchange="setUiLanguage(this.value)" title="Interface Language">
@@ -215,7 +219,8 @@
         <button class="admin-btn" onclick="createNewGroup()"><i class="fa-solid fa-plus"></i> <span data-i18n="newGroup">New Group</span></button>
         <button class="admin-btn admin-btn-danger" onclick="deleteCurrentGroup()"><i class="fa-solid fa-trash"></i> <span data-i18n="deleteGroup">Delete Active Group</span></button>
         <button class="admin-btn admin-btn-danger" onclick="clearChatHistory()"><i class="fa-solid fa-broom"></i> <span data-i18n="clearChat">Clear Chat History</span></button>
-        <button class="admin-btn" onclick="copyInviteLink()"><i class="fa-solid fa-link"></i> <span data-i18n="inviteLink">Clean Invite Link</span></button>
+        <button class="admin-btn" onclick="copyInviteLink('A')"><i class="fa-solid fa-link"></i> <span data-i18n="inviteLinkA">Copy Party A Link (Buyer)</span></button>
+        <button class="admin-btn" onclick="copyInviteLink('B')"><i class="fa-solid fa-link"></i> <span data-i18n="inviteLinkB">Copy Party B Link (Seller)</span></button>
         <button class="admin-btn" onclick="toggleHighlightGroup()"><i class="fa-solid fa-star"></i> <span data-i18n="toggleHighlight">Toggle Group Highlight</span></button>
       </div>
       <div class="admin-section admin-plus-only">
@@ -410,6 +415,47 @@
       <div style="display:flex; gap:10px; justify-content:flex-end;">
         <button class="ghost-btn" onclick="closeGenericModal()">Cancel</button>
         <button class="send-btn" id="genericModalConfirmBtn">Confirm</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- CREATE GROUP MODAL (admin only) -->
+<div class="modal-overlay hidden" id="createGroupModal">
+  <div class="modal-box">
+    <div class="modal-header"><span><i class="fa-solid fa-layer-group"></i> New Transaction Group</span><i class="fa-solid fa-xmark" onclick="closeModal('createGroupModal')"></i></div>
+    <div class="modal-body">
+      <p style="color:var(--text-muted); font-size:0.8rem; margin:0 0 14px;">Every party gets their own private, role-locked link — neither will ever see the other's internal room label.</p>
+      <label class="field-label">Group Name (optional)</label>
+      <input type="text" id="newGroupNameInput" class="message-input" style="width:100%; margin-bottom:14px;" placeholder="e.g. Diaspora Real Estate Deal #4">
+      <label class="field-label" style="color:var(--accent-cyan);"><i class="fa-solid fa-user"></i> Buyer Display Name</label>
+      <input type="text" id="newGroupBuyerNameInput" class="message-input" style="width:100%; margin-bottom:14px;" placeholder="e.g. James A. — Buyer">
+      <label class="field-label" style="color:var(--accent-amber);"><i class="fa-solid fa-user"></i> Seller Display Name</label>
+      <input type="text" id="newGroupSellerNameInput" class="message-input" style="width:100%; margin-bottom:16px;" placeholder="e.g. Grace O. — Seller">
+      <div style="display:flex; gap:10px; justify-content:flex-end;">
+        <button class="ghost-btn" onclick="closeModal('createGroupModal')">Cancel</button>
+        <button class="send-btn" onclick="submitCreateGroup()"><i class="fa-solid fa-plus"></i> Create Group</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- INVITE LINKS MODAL (admin only) -->
+<div class="modal-overlay hidden" id="inviteLinksModal">
+  <div class="modal-box">
+    <div class="modal-header"><span><i class="fa-solid fa-link"></i> Invite Links Ready</span><i class="fa-solid fa-xmark" onclick="closeModal('inviteLinksModal')"></i></div>
+    <div class="modal-body">
+      <p style="color:var(--text-muted); font-size:0.8rem; margin:0 0 14px;">Share each link with the correct party — they'll only ever see their own role, never the other party's.</p>
+      <div class="invite-link-row">
+        <div class="invite-link-label"><i class="fa-solid fa-user" style="color:var(--accent-cyan);"></i> <span id="inviteLinksBuyerLabel">Buyer</span></div>
+        <button class="admin-btn" style="margin:0;" onclick="copyGeneratedLink('buyer')"><i class="fa-solid fa-copy"></i> Copy Link</button>
+      </div>
+      <div class="invite-link-row">
+        <div class="invite-link-label"><i class="fa-solid fa-user" style="color:var(--accent-amber);"></i> <span id="inviteLinksSellerLabel">Seller</span></div>
+        <button class="admin-btn" style="margin:0;" onclick="copyGeneratedLink('seller')"><i class="fa-solid fa-copy"></i> Copy Link</button>
+      </div>
+      <div style="display:flex; justify-content:flex-end; margin-top:6px;">
+        <button class="ghost-btn" onclick="closeModal('inviteLinksModal')">Done</button>
       </div>
     </div>
   </div>
