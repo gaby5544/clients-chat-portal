@@ -17,7 +17,7 @@ if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
     '[push] Every restart will invalidate existing push subscriptions until you set these permanently:\n' +
     `[push]   VAPID_PUBLIC_KEY=${vapidKeys.publicKey}\n` +
     `[push]   VAPID_PRIVATE_KEY=${vapidKeys.privateKey}\n` +
-    '[push] Copy both into your Render environment variables.'
+    '[push] Copy both into your host\'s environment variables.'
   );
 }
 

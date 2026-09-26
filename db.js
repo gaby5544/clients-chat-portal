@@ -22,7 +22,7 @@ async function initStore() {
     console.warn(
       '[storage] No DATABASE_URL set — running with in-memory storage. ' +
       'Data will NOT survive a restart or redeploy. Set DATABASE_URL to a ' +
-      'Postgres connection string (see DEPLOY_RENDER.md) for real persistence.'
+      'Postgres connection string (see DEPLOY.md) for real persistence.'
     );
   } else {
     console.log('[storage] Connected to PostgreSQL. Persistence enabled.');

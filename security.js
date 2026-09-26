@@ -59,7 +59,7 @@ function validateTransactionForm(body) {
 
 /**
  * Minimal in-memory sliding-window rate limiter for Socket.IO events.
- * Not distributed (fine for a single Render instance); swap for a
+ * Not distributed (fine for a single server instance); swap for a
  * Redis-backed limiter if you scale to multiple instances.
  */
 class RateLimiter {

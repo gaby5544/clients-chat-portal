@@ -1,6 +1,6 @@
 // PostgreSQL-backed implementation of the data store interface.
 // Activated automatically when process.env.DATABASE_URL is set.
-// Provides real persistence across Render restarts/redeploys.
+// Provides real persistence across host restarts/redeploys.
 
 const { Pool } = require('pg');
 const fs = require('fs');

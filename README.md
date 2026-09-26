@@ -25,7 +25,7 @@ hardened input handling throughout.
   → Read (bright double check), tracked server-side per recipient.
 - **Multi-admin roles** — Super Admin (full control), Admin (group/
   transaction/task management), Moderator (message moderation only), each
-  with their own passkey. See `DEPLOY_RENDER.md` for the three env vars.
+  with their own passkey. See `DEPLOY.md` for the three env vars.
 - **Branding Center** — Super Admin only: logo, two accent colors, welcome
   message, background image, and per-group banners — applied live for every
   visitor via CSS custom properties, no code changes needed.
@@ -79,12 +79,17 @@ db.js                   Picks Postgres or in-memory backend
 pgStore.js              Postgres implementation
 memStore.js             In-memory fallback (dev only)
 socketHandlers.js       All Socket.IO event logic
-routes.js               REST: file upload, CSV export, health check
+routes.js               REST: file upload, CSV export, PDF receipt, push, branding, health check
+roles.js                Multi-admin role tiers (Super Admin/Admin/Moderator)
 security.js             Escaping, sanitization, validation, rate limiting
 email.js                Nodemailer wrapper
+webpush.js              Web Push (VAPID) wrapper
+pdfReceipt.js           Branded PDF transaction receipts
 public/
-  index.html, style.css, app.js, i18n.js
+  index.html, style.css, app.js, i18n.js, sw.js, icon-192.png
 schema.sql              Postgres schema (auto-applied on boot)
+DEPLOY.md               Host-agnostic deployment guide — read this first
+DEPLOY_NORTHFLANK.md    Step-by-step walkthrough for Northflank (free, always-on, custom name)
 DEPLOY_RENDER.md        Step-by-step Render deployment guide
 .env.example            All configuration options
 ```
@@ -92,17 +97,31 @@ DEPLOY_RENDER.md        Step-by-step Render deployment guide
 ## Testing performed in this environment
 - All backend modules pass `node -c` syntax checks.
 - Server boots cleanly and serves HTTP/health/static/Socket.IO handshake.
-- A 20-assertion Socket.IO integration test (real client, real server, no
-  mocks) covers: join flow for regular users and admin, XSS-escaping,
-  both previously-broken events end-to-end, edit history admin-gating,
-  reactions, replies, transaction submission → admin notification → CSV
-  export with auth, and upload MIME-type rejection. All 20 pass.
+- A Socket.IO integration test (real client, real server, no mocks) covers:
+  join flow for regular users and admin, XSS-escaping, pin/upload toggle
+  events end-to-end, transaction submission → admin notification, task
+  creation, and announcement creation (auto-pinned). All assertions pass.
+- Every store method called from `socketHandlers.js`/`routes.js` was
+  cross-checked against both `pgStore.js` and `memStore.js` — no missing
+  methods, no event-name mismatches between `public/app.js` and
+  `socketHandlers.js`.
 - The Postgres code path is syntax- and query-reviewed but **not** run
   against a live database in this sandbox (no external DB reachable here) —
-  test it against your real Render Postgres instance before relying on it
-  in production.
+  test it against your real Postgres instance before relying on it in
+  production.
 - UI was not exercised in an actual browser from this environment; verify
   the visual layer once deployed.
+
+## A note on this copy of the repo
+The zip this was rebuilt from had several files saved under the wrong
+names — cosmetic packaging mistakes, not code bugs. `env.example` (missing
+its leading dot) contained an old draft of `socketHandlers.js`, and there
+were a `app.js` (actually CSS), a `style.css` (actually HTML), and two
+generically-named `download` files (one an exact duplicate of `email.js`,
+one an outdated draft of `routes.js`) sitting in the repo root. All of
+those have been removed, and `.env.example` has been rebuilt as an actual
+environment-variable template. Nothing in the real application code needed
+fixing — see "Testing performed" above.
 
 ## Quick start
 ```bash
@@ -110,5 +129,7 @@ cp .env.example .env
 npm install
 npm start
 ```
-Then open `http://localhost:3000`. See `DEPLOY_RENDER.md` for deploying to
-Render with real Postgres persistence.
+Then open `http://localhost:3000`. For deploying somewhere it'll stay
+online, start with `DEPLOY.md` (works on any host) or `DEPLOY_NORTHFLANK.md`
+(step-by-step for a free, always-on host with a custom name). Render
+instructions are still in `DEPLOY_RENDER.md` if you want them.

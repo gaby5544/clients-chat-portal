@@ -1,5 +1,5 @@
 -- Quantum Secure Transaction Desk - PostgreSQL Schema
--- Run once against your Render Postgres database before first boot.
+-- Run once against your Postgres database before first boot.
 -- The server also auto-runs this on startup (see src/db.js), so manual
 -- execution is optional but recommended for review.
 
