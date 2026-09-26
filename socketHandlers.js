@@ -393,6 +393,17 @@ function registerSocketHandlers(io, socket) {
     await broadcastStats();
     await broadcastDashboardWidgets();
 
+    // Let both parties in this group know a form was submitted (as a normal chat
+    // notice) without exposing the sensitive form details to them — only the
+    // admin panel (above) receives the full transaction data.
+    const noticeMsg = await store.insertMessage({
+      id: 'sys-' + Date.now() + Math.random().toString(36).slice(2, 6),
+      groupId,
+      senderName: 'SYSTEM',
+      text: `📄 Transaction form submitted by ${escapeHtml(tx.submitted_by)}. The Desk Officer has been notified.`
+    });
+    io.to(groupId).emit('message', await publicMessage(noticeMsg));
+
     const admins = (await store.getAllUsers()).filter(u => u.is_admin && u.email);
     for (const admin of admins) {
       await notifyTransactionSubmitted(admin.email, { submitterName: tx.submitted_by, groupName: group.name });

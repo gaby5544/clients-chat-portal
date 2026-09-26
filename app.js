@@ -1,405 +1,1223 @@
-:root {
-  --bg-void: #05070d;
-  --bg-panel: rgba(13, 17, 28, 0.92);
-  --bg-panel-2: rgba(9, 12, 20, 0.96);
-  --bg-raised: rgba(22, 27, 42, 0.78);
-  --accent-cyan: #38bdf8;
-  --accent-violet: #8b5cf6;
-  --accent-emerald: #22d3a5;
-  --accent-amber: #f5a524;
-  --accent-rose: #fb5479;
-  --border-soft: rgba(148, 163, 184, 0.12);
-  --border-glow: rgba(56, 189, 248, 0.28);
-  --text-main: #f1f5f9;
-  --text-muted: #8b96ad;
-  --text-faint: #5b6577;
-  --radius-lg: 20px;
-  --radius-md: 14px;
-  --radius-sm: 10px;
-  --shadow-deep: 0 40px 80px -20px rgba(0,0,0,0.85);
+/* Quantum Secure Transaction Desk — client application */
+const socket = io();
+
+// ---------------- STATE ----------------
+let sessionToken = sessionStorage.getItem('q_session_token') || ('token-' + Math.random().toString(36).slice(2, 15));
+sessionStorage.setItem('q_session_token', sessionToken);
+
+const urlParams = new URLSearchParams(window.location.search);
+let activeGroupId = urlParams.get('groupId') || 'default-group';
+// If the link itself says who the visitor is (?role=PARTY%20A or PARTY%20B),
+// lock them into that role so two people can never both land on "Party A"
+// just because they opened a shared link and forgot to change a dropdown.
+const urlLockedRole = ['PARTY A', 'PARTY B'].includes(urlParams.get('role')) ? urlParams.get('role') : null;
+
+let isAdminConfirmed = false;
+
+// Admin Login is hidden from regular users entirely — it only appears if
+// this exact URL parameter is present (bookmark it as ?officer=1), or was
+// already revealed earlier in this browser tab.
+const ADMIN_REVEAL_PARAM = 'officer';
+if (urlParams.has(ADMIN_REVEAL_PARAM)) sessionStorage.setItem('q_admin_reveal', '1');
+const adminLoginVisible = sessionStorage.getItem('q_admin_reveal') === '1';
+if (adminLoginVisible) el('railLogin').classList.remove('hidden');
+function updateRailVisibility() {
+  el('iconRail').classList.toggle('fully-hidden', !isAdminConfirmed && !adminLoginVisible);
+}
+updateRailVisibility();
+
+let currentSocketId = null;
+let adminPasskeyMemory = null; // kept only in memory, used for CSV export auth link
+let typingTimeout = null;
+let recognition = null;
+let selectedMsgIds = new Set();
+let currentTargetMsg = null;
+let replyTarget = null;
+let fileUploadAllowed = true;
+let groupsCache = [];
+let directoryCache = [];
+let messagesById = new Map();
+let favorites = new Set(JSON.parse(localStorage.getItem('q_favorites') || '[]'));
+let selectModeActive = false;
+let translateBeforeSend = false;
+let currentAdminRole = null;
+let tasksCache = [];
+let brandingCache = null;
+let pushSubscribed = false;
+
+const ROLE_LEVEL = { MODERATOR: 1, ADMIN: 2, SUPER_ADMIN: 3 };
+function hasMinRoleClient(role, minRole) {
+  if (!role) return false;
+  return (ROLE_LEVEL[role] || 0) >= (ROLE_LEVEL[minRole] || 0);
 }
 
-* { box-sizing: border-box; margin: 0; padding: 0; }
+// ---------------- GENERIC MODAL (replaces native prompt()/confirm()) ----------------
+function showPromptModal({ title, message = '', placeholder = '', defaultValue = '' }, onConfirm) {
+  el('genericModalTitle').textContent = title;
+  el('genericModalMessage').textContent = message;
+  el('genericModalMessage').style.display = message ? 'block' : 'none';
+  const input = el('genericModalInput');
+  input.style.display = 'block';
+  input.placeholder = placeholder;
+  input.value = defaultValue;
+  el('genericModal').classList.remove('hidden');
+  setTimeout(() => input.focus(), 50);
+  const btn = el('genericModalConfirmBtn');
+  const handler = () => {
+    const val = input.value.trim();
+    closeGenericModal();
+    if (val) onConfirm(val);
+  };
+  btn.onclick = handler;
+  input.onkeydown = (e) => { if (e.key === 'Enter') handler(); };
+}
+function showConfirmModal({ title, message }, onConfirm) {
+  el('genericModalTitle').textContent = title;
+  el('genericModalMessage').textContent = message;
+  el('genericModalMessage').style.display = 'block';
+  el('genericModalInput').style.display = 'none';
+  el('genericModal').classList.remove('hidden');
+  el('genericModalConfirmBtn').onclick = () => { closeGenericModal(); onConfirm(); };
+}
+function closeGenericModal() { el('genericModal').classList.add('hidden'); }
 
-body {
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
-  background:
-    radial-gradient(circle at 12% 8%, rgba(139, 92, 246, 0.16), transparent 45%),
-    radial-gradient(circle at 88% 92%, rgba(56, 189, 248, 0.14), transparent 45%),
-    radial-gradient(circle at 50% 50%, #0a0e18, #030409 100%);
-  color: var(--text-main);
-  min-height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 14px;
-  -webkit-font-smoothing: antialiased;
+// ---------------- UTIL ----------------
+function el(id) { return document.getElementById(id); }
+function escapeHtml(str) {
+  const d = document.createElement('div');
+  d.textContent = str ?? '';
+  return d.innerHTML;
+}
+function toast(msg, isError = false, allowHtml = false) {
+  const t = document.createElement('div');
+  t.className = 'toast' + (isError ? ' error' : '');
+  if (allowHtml) t.innerHTML = msg; else t.textContent = msg;
+  el('toastContainer').appendChild(t);
+  setTimeout(() => t.remove(), allowHtml ? 9000 : 4500);
+}
+function initialsOf(name) { return (name || '?').trim().charAt(0).toUpperCase(); }
+
+// ---------------- I18N ----------------
+function setUiLanguage(lang) { applyI18n(lang); }
+(function initLang() {
+  const saved = localStorage.getItem('q_ui_lang') || 'en';
+  el('uiLangSelect').value = saved;
+  applyI18n(saved);
+})();
+
+// ---------------- PANEL / NAV ----------------
+function switchPanel(name) {
+  if (!isAdminConfirmed) return; // defense in depth — regular users never get a group list
+  el('railChats').classList.toggle('active', name === 'groups');
+  el('railDirectory').classList.toggle('active', name === 'directory');
+  el('groupsPanel').classList.toggle('hidden', name !== 'groups');
+  el('directoryPanel').classList.toggle('hidden', name !== 'directory');
+  showListPanelMobile();
 }
 
-::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-thumb { background: rgba(148,163,184,0.18); border-radius: 8px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(148,163,184,0.32); }
-
-.app-shell {
-  width: 100%;
-  max-width: 1500px;
-  height: 900px;
-  display: flex;
-  background: var(--bg-panel);
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-deep);
-  backdrop-filter: blur(24px) saturate(140%);
-  overflow: hidden;
-  position: relative;
+function showListPanelMobile() {
+  document.querySelector('.list-panel').classList.add('mobile-open');
+}
+function hideListPanelMobile() {
+  document.querySelector('.list-panel').classList.remove('mobile-open');
 }
 
-/* ---------------- ICON RAIL ---------------- */
-.icon-rail {
-  width: 62px;
-  background: var(--bg-panel-2);
-  border-right: 1px solid var(--border-soft);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 18px 0;
-  gap: 10px;
-}
-.rail-spacer { flex: 1; }
-.rail-btn {
-  width: 42px; height: 42px;
-  border-radius: 13px;
-  background: transparent;
-  border: 1px solid transparent;
-  color: var(--text-muted);
-  font-size: 1.05rem;
-  cursor: pointer;
-  display: flex; align-items: center; justify-content: center;
-  transition: all .2s ease;
-}
-.rail-btn:hover { background: rgba(56,189,248,0.08); color: var(--accent-cyan); }
-.rail-btn.active { background: linear-gradient(135deg, rgba(56,189,248,0.22), rgba(139,92,246,0.22)); color: #fff; border-color: var(--border-glow); }
-.admin-only { display: none; }
-body.is-admin .admin-only { display: flex; }
-.icon-rail.fully-hidden { display: none; }
-
-/* ---------------- LIST PANEL ---------------- */
-.list-panel { width: 320px; background: #070a12; border-right: 1px solid var(--border-soft); display: flex; flex-direction: column; }
-.list-panel-inner { display: flex; flex-direction: column; height: 100%; }
-.list-panel-inner.hidden { display: none; }
-.panel-header { padding: 18px 18px 10px; display: flex; justify-content: space-between; align-items: center; }
-.panel-title { font-weight: 800; font-size: 0.95rem; letter-spacing: .3px; color: var(--text-main); }
-.panel-action-btn {
-  width: 30px; height: 30px; border-radius: 9px; border: 1px solid var(--border-soft);
-  background: rgba(56,189,248,0.08); color: var(--accent-cyan); cursor: pointer;
-}
-.search-box {
-  margin: 4px 16px 12px; padding: 9px 12px; display: flex; align-items: center; gap: 8px;
-  background: rgba(255,255,255,0.03); border: 1px solid var(--border-soft); border-radius: 11px;
-  color: var(--text-faint); font-size: 0.82rem;
-}
-.search-box input { flex: 1; background: transparent; border: none; outline: none; color: var(--text-main); font-size: 0.82rem; }
-
-.chat-items-container, .directory-container { flex: 1; overflow-y: auto; padding: 0 8px 12px; }
-
-.chat-item {
-  display: flex; align-items: center; gap: 12px; padding: 11px 10px; border-radius: 13px;
-  cursor: pointer; transition: background .15s; margin-bottom: 2px; position: relative;
-}
-.chat-item:hover { background: rgba(255,255,255,0.03); }
-.chat-item.active { background: linear-gradient(90deg, rgba(56,189,248,0.14), rgba(139,92,246,0.08)); }
-
-.avatar {
-  width: 44px; height: 44px; border-radius: 14px; flex-shrink: 0;
-  background: linear-gradient(135deg, var(--accent-violet), var(--accent-cyan));
-  display: flex; align-items: center; justify-content: center; font-weight: 800; color: #fff; font-size: 1rem;
-  position: relative;
-}
-.avatar .online-ring { position: absolute; bottom: -2px; right: -2px; width: 12px; height: 12px; border-radius: 50%; background: var(--accent-emerald); border: 2px solid #070a12; }
-.avatar .online-ring.off { background: var(--text-faint); }
-
-.chat-info { flex: 1; overflow: hidden; }
-.chat-name-row { display: flex; justify-content: space-between; align-items: center; gap: 6px; margin-bottom: 3px; }
-.chat-name { font-size: 0.86rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.chat-last-msg { font-size: 0.76rem; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.chat-item-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
-.unread-badge {
-  background: linear-gradient(135deg, var(--accent-cyan), var(--accent-violet)); color: #05070d;
-  font-size: 0.68rem; font-weight: 800; padding: 2px 7px; border-radius: 20px; min-width: 18px; text-align: center;
-}
-.star-icon { color: var(--accent-amber); font-size: 0.78rem; cursor: pointer; }
-.star-icon.inactive { color: var(--text-faint); }
-.online-count-pill { font-size: 0.65rem; color: var(--accent-emerald); font-weight: 700; }
-
-/* Directory */
-.directory-section-title { font-size: 0.7rem; font-weight: 800; letter-spacing: 1px; color: var(--text-faint); text-transform: uppercase; padding: 14px 10px 6px; }
-.directory-item { display: flex; align-items: center; gap: 12px; padding: 9px 10px; border-radius: 12px; }
-.directory-item:hover { background: rgba(255,255,255,0.03); }
-.directory-meta { flex: 1; }
-.directory-name { font-size: 0.84rem; font-weight: 700; display: flex; align-items: center; gap: 6px; }
-.directory-role { font-size: 0.72rem; color: var(--text-muted); }
-.flag-emoji { font-size: 0.95rem; }
-.role-chip { font-size: 0.62rem; font-weight: 800; padding: 2px 7px; border-radius: 20px; text-transform: uppercase; }
-.role-chip.buyer { background: rgba(34,211,165,0.15); color: var(--accent-emerald); }
-.role-chip.seller { background: rgba(139,92,246,0.15); color: var(--accent-violet); }
-.role-chip.admin { background: rgba(245,165,36,0.15); color: var(--accent-amber); }
-
-/* ---------------- CHAT MAIN ---------------- */
-.chat-main { flex: 1; display: flex; flex-direction: column; min-width: 0; position: relative; }
-
-.chat-header {
-  padding: 16px 26px; background: rgba(5,7,13,0.85); border-bottom: 1px solid var(--border-soft);
-  display: flex; justify-content: space-between; align-items: center; gap: 12px;
-}
-.brand-group { display: flex; align-items: center; gap: 14px; min-width: 0; }
-.vault-icon {
-  width: 44px; height: 44px; border-radius: 13px; background: rgba(56,189,248,0.1); border: 1px solid var(--border-glow);
-  display: flex; align-items: center; justify-content: center; color: var(--accent-cyan); font-size: 1.15rem; flex-shrink: 0;
-}
-.brand-title { font-family: 'Sora', sans-serif; font-size: 0.98rem; font-weight: 800; letter-spacing: 1.2px;
-  background: linear-gradient(135deg, #fff 20%, var(--accent-cyan) 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-.brand-subtitle { font-size: 0.76rem; color: var(--accent-amber); font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-
-.header-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
-.icon-btn {
-  width: 38px; height: 38px; border-radius: 11px; background: rgba(255,255,255,0.03); border: 1px solid var(--border-soft);
-  color: var(--accent-cyan); cursor: pointer; display: flex; align-items: center; justify-content: center; position: relative; font-size: 0.95rem;
-}
-.icon-btn:hover { border-color: var(--border-glow); background: rgba(56,189,248,0.08); }
-.badge-dot { position: absolute; top: -3px; right: -3px; width: 9px; height: 9px; border-radius: 50%; background: var(--accent-rose); }
-.hidden { display: none !important; }
-
-.presence-badge { display: inline-flex; align-items: center; gap: 7px; padding: 6px 12px; border-radius: 20px; background: rgba(255,255,255,0.03); border: 1px solid var(--border-soft); font-size: 0.74rem; font-weight: 600; white-space: nowrap; }
-.status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); }
-.status-dot.online { background: var(--accent-emerald); box-shadow: 0 0 8px var(--accent-emerald); }
-.status-dot.offline { background: var(--accent-rose); }
-
-/* Pinned bar */
-.pinned-bar { background: rgba(245,165,36,0.06); border-bottom: 1px solid rgba(245,165,36,0.2); padding: 10px 26px; }
-.pinned-bar-title { font-size: 0.72rem; font-weight: 800; color: var(--accent-amber); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 6px; }
-.pinned-list { display: flex; flex-direction: column; gap: 6px; max-height: 120px; overflow-y: auto; }
-.pinned-item { font-size: 0.8rem; color: var(--text-main); background: rgba(255,255,255,0.03); padding: 6px 10px; border-radius: 8px; display: flex; justify-content: space-between; gap: 10px; }
-.pinned-item b { color: var(--accent-cyan); }
-
-/* Messages */
-.chat-messages { flex: 1; padding: 22px 26px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; position: relative; }
-.drop-overlay {
-  position: absolute; inset: 10px; border: 2px dashed var(--accent-cyan); border-radius: var(--radius-md);
-  background: rgba(5,7,13,0.85); display: none; align-items: center; justify-content: center; flex-direction: column; gap: 10px;
-  color: var(--accent-cyan); font-weight: 700; z-index: 50; pointer-events: none;
-}
-.drop-overlay i { font-size: 2.2rem; }
-.chat-messages.drag-active .drop-overlay { display: flex; }
-
-.msg-wrapper { display: flex; align-items: flex-end; gap: 10px; width: 100%; }
-.msg-wrapper.msg-mine { justify-content: flex-end; }
-
-.msg-select-checkbox {
-  display: none; width: 22px; height: 22px; border-radius: 6px; border: 2px solid var(--border-glow);
-  align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; color: var(--accent-cyan); background: rgba(56,189,248,0.06);
-}
-.chat-messages.select-mode .msg-select-checkbox { display: flex; }
-.msg-select-checkbox.checked { background: var(--accent-cyan); color: #05070d; }
-
-.translate-link {
-  display: inline-flex; align-items: center; gap: 5px; font-size: 0.68rem; font-weight: 700; color: var(--accent-cyan);
-  cursor: pointer; margin-top: 6px; opacity: 0.85;
-}
-.translate-link:hover { opacity: 1; }
-.translated-text { margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--border-soft); font-style: italic; color: var(--text-muted); font-size: 0.85rem; }
-
-.message {
-  max-width: 72%; padding: 11px 15px; border-radius: 16px; font-size: 0.89rem; line-height: 1.45; position: relative; cursor: pointer;
-  border: 1px solid var(--border-soft); word-wrap: break-word;
-}
-.message.selected-msg { outline: 2px solid var(--accent-rose); background: rgba(251,84,121,0.1) !important; }
-.msg-system { align-self: center; background: rgba(56,189,248,0.05); border: 1px solid rgba(56,189,248,0.15); color: var(--text-muted); font-size: 0.74rem; text-align: center; border-radius: 30px; padding: 6px 16px; cursor: default; max-width: 90%; }
-.msg-admin { background: linear-gradient(160deg, rgba(56,189,248,0.1), rgba(56,189,248,0.03)); border-color: rgba(56,189,248,0.25); border-bottom-left-radius: 4px; }
-.msg-party { background: var(--bg-raised); border-bottom-right-radius: 4px; }
-.msg-other { background: rgba(30,35,52,0.7); border-bottom-left-radius: 4px; }
-
-.sender-tag { font-size: 0.7rem; font-weight: 800; margin-bottom: 5px; text-transform: uppercase; display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--accent-cyan); }
-.reply-quote { font-size: 0.75rem; color: var(--text-muted); border-left: 2px solid var(--accent-cyan); padding: 3px 8px; margin-bottom: 6px; background: rgba(255,255,255,0.03); border-radius: 4px; }
-.msg-time { font-size: 0.64rem; color: var(--text-faint); text-align: right; margin-top: 5px; }
-.msg-file { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: rgba(0,0,0,0.2); border-radius: 10px; margin-top: 4px; text-decoration: none; color: var(--text-main); }
-.msg-image { max-width: 260px; max-height: 220px; border-radius: 10px; margin-top: 6px; display: block; cursor: zoom-in; }
-.msg-reactions { display: flex; gap: 4px; margin-top: 6px; flex-wrap: wrap; }
-.reaction-chip { background: rgba(255,255,255,0.06); border: 1px solid var(--border-soft); border-radius: 20px; padding: 1px 7px; font-size: 0.72rem; }
-
-.bulk-delete-bar { display: none; background: rgba(251,84,121,0.12); border-top: 1px solid var(--accent-rose); padding: 10px 26px; font-size: 0.8rem; color: var(--accent-rose); justify-content: space-between; align-items: center; font-weight: 700; }
-.ghost-btn { background: transparent; border: 1px solid var(--border-soft); color: var(--text-muted); padding: 6px 12px; border-radius: 9px; cursor: pointer; font-size: 0.78rem; }
-
-.reply-preview-bar { padding: 8px 26px; background: rgba(255,255,255,0.03); border-top: 1px solid var(--border-soft); display: flex; justify-content: space-between; align-items: center; }
-.reply-preview-content { display: flex; gap: 10px; align-items: center; color: var(--accent-cyan); font-size: 0.8rem; }
-.reply-preview-sender { font-weight: 700; }
-.reply-preview-text { color: var(--text-muted); font-size: 0.78rem; }
-
-.typing-indicator-box { height: 20px; padding: 0 26px; font-size: 0.74rem; color: var(--accent-cyan); font-style: italic; }
-
-.transaction-banner { margin: 0 26px 8px; padding: 10px 16px; background: rgba(34,211,165,0.08); border: 1px solid rgba(34,211,165,0.25); border-radius: 12px; display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem; color: var(--accent-emerald); }
-
-.footer-controls-secondary { padding: 10px 26px 0; background: rgba(5,7,13,0.9); display: flex; gap: 9px; align-items: center; flex-wrap: wrap; }
-.footer-controls { padding: 16px 26px; background: rgba(5,7,13,0.9); border-top: 1px solid var(--border-soft); display: flex; gap: 9px; align-items: center; }
-.role-dropdown, .lang-dropdown, .group-dropdown {
-  background-color: #0d1119; color: #f1f5f9; border: 1px solid var(--border-soft);
-  padding: 10px 10px; border-radius: 11px; font-weight: 600; font-size: 0.78rem; outline: none; cursor: pointer;
-}
-.role-dropdown option, .lang-dropdown option, .group-dropdown option {
-  background-color: #0d1119; color: #f1f5f9;
-}
-.message-input { flex: 1; background: rgba(255,255,255,0.03); border: 1px solid var(--border-soft); color: #fff; padding: 12px 18px; border-radius: 13px; outline: none; font-size: 0.9rem; min-width: 0; }
-.message-input:focus { border-color: var(--border-glow); }
-.send-btn { background: linear-gradient(135deg, var(--accent-cyan), var(--accent-violet)); color: #05070d; border: none; padding: 12px 20px; border-radius: 13px; font-weight: 800; cursor: pointer; display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-.send-btn:hover { filter: brightness(1.08); }
-.file-input { display: none; }
-#translateToggleBtn.active { background: linear-gradient(135deg, var(--accent-cyan), var(--accent-violet)); color: #05070d; border-color: transparent; }
-.mobile-back-btn { display: none; }
-#moreOptionsBtn { display: none; }
-.mobile-only-btn { display: none; }
-
-/* ---------------- ADMIN DRAWER ---------------- */
-.admin-drawer { width: 0; overflow: hidden; background: #070a12; border-left: 1px solid var(--border-soft); display: flex; flex-direction: column; transition: width .25s ease; }
-.admin-drawer.open { width: 340px; }
-.drawer-header { padding: 16px 18px; border-bottom: 1px solid var(--border-soft); display: flex; justify-content: space-between; align-items: center; font-weight: 800; font-size: 0.85rem; color: var(--accent-amber); }
-.drawer-tabs { display: flex; border-bottom: 1px solid var(--border-soft); }
-.drawer-tab { flex: 1; background: transparent; border: none; color: var(--text-muted); padding: 11px 6px; font-size: 0.72rem; font-weight: 800; text-transform: uppercase; cursor: pointer; border-bottom: 2px solid transparent; }
-.drawer-tab.active { color: var(--accent-cyan); border-bottom-color: var(--accent-cyan); }
-.drawer-tab-panel { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 14px; }
-
-.stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.stat-card { background: rgba(255,255,255,0.03); border: 1px solid var(--border-soft); border-radius: 13px; padding: 12px; }
-.stat-value { font-size: 1.35rem; font-weight: 800; font-family: 'Sora', sans-serif; }
-.stat-label { font-size: 0.66rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: .4px; margin-top: 2px; }
-
-.admin-section { background: rgba(255,255,255,0.02); border: 1px solid var(--border-soft); border-radius: 13px; padding: 12px; display: flex; flex-direction: column; gap: 9px; }
-.admin-section-label { font-size: 0.7rem; font-weight: 800; color: var(--text-muted); letter-spacing: .4px; }
-.admin-btn { background: rgba(255,255,255,0.03); border: 1px solid var(--border-soft); color: var(--accent-cyan); padding: 9px 12px; border-radius: 10px; font-weight: 700; font-size: 0.78rem; cursor: pointer; text-align: left; display: flex; align-items: center; gap: 8px; }
-.admin-btn:hover { background: rgba(56,189,248,0.1); border-color: var(--border-glow); }
-.admin-btn-danger { color: var(--accent-rose); border-color: rgba(251,84,121,0.3); }
-.admin-btn-danger:hover { background: rgba(251,84,121,0.1); border-color: var(--accent-rose); }
-.admin-notes-area { width: 100%; height: 80px; background: rgba(0,0,0,0.3); border: 1px solid var(--border-soft); color: #fff; padding: 8px; border-radius: 8px; font-size: 0.78rem; resize: none; outline: none; }
-.live-spectator-box { font-size: 0.76rem; color: var(--accent-cyan); background: rgba(56,189,248,0.05); border: 1px dashed rgba(56,189,248,0.3); padding: 8px 12px; border-radius: 8px; min-height: 40px; }
-
-.transactions-list { display: flex; flex-direction: column; gap: 8px; }
-.tx-status-badge {
-  font-size: 0.72rem; font-weight: 800; padding: 8px 12px; border-radius: 9px; text-align: center;
-  background: rgba(148,163,184,0.08); color: var(--text-muted); border: 1px solid var(--border-soft);
-}
-.tx-status-badge.enabled { background: rgba(34,211,165,0.12); color: var(--accent-emerald); border-color: rgba(34,211,165,0.3); }
-.tx-status-badge.disabled { background: rgba(251,84,121,0.1); color: var(--accent-rose); border-color: rgba(251,84,121,0.25); }
-
-.admin-drawer-minimized {
-  position: absolute; bottom: 24px; right: 24px; z-index: 60;
-  width: 52px; height: 52px; border-radius: 50%; border: 1px solid var(--border-glow);
-  background: linear-gradient(135deg, var(--accent-cyan), var(--accent-violet)); color: #05070d;
-  font-size: 1.1rem; cursor: pointer; box-shadow: var(--shadow-deep); display: flex; align-items: center; justify-content: center;
+function toggleFooterSecondary() {
+  el('footerSecondary').classList.toggle('open');
 }
 
-.directory-delete-btn { color: var(--accent-rose); opacity: 0.6; cursor: pointer; font-size: 0.85rem; padding: 6px; flex-shrink: 0; }
-.directory-delete-btn:hover { opacity: 1; }
-.tx-card { background: rgba(255,255,255,0.03); border: 1px solid var(--border-soft); border-radius: 11px; padding: 10px; font-size: 0.76rem; }
-.tx-card-row { display: flex; justify-content: space-between; margin-bottom: 3px; color: var(--text-muted); }
-.tx-card-row b { color: var(--text-main); }
-.tx-delete-btn { color: var(--accent-rose); cursor: pointer; font-size: 0.72rem; margin-top: 6px; display: inline-block; }
+function toggleAdminDrawer(force) {
+  const drawer = el('adminDrawer');
+  const shouldOpen = force !== undefined ? force : !drawer.classList.contains('open');
+  drawer.classList.toggle('open', shouldOpen);
+  el('adminDrawerMinimized').classList.add('hidden'); // any explicit open/close cancels a minimized state
+  if (shouldOpen && isAdminConfirmed) socket.emit('admin-get-stats');
+}
+function openAdminDrawerTab(tab) { toggleAdminDrawer(true); setAdminTab(tab); }
 
-/* ---------------- CONTEXT MENU ---------------- */
-.custom-context-menu { position: fixed; background: #0e1320; border: 1px solid var(--border-glow); border-radius: 13px; box-shadow: var(--shadow-deep); display: none; flex-direction: column; z-index: 2000; overflow: hidden; min-width: 170px; }
-.context-menu-item { padding: 10px 16px; font-size: 0.8rem; color: var(--text-main); display: flex; align-items: center; gap: 10px; cursor: pointer; }
-.context-menu-item:hover { background: rgba(56,189,248,0.15); color: var(--accent-cyan); }
-.context-menu-item.danger:hover { background: rgba(251,84,121,0.15); color: var(--accent-rose); }
-
-.reaction-picker { position: fixed; background: #0e1320; border: 1px solid var(--border-glow); border-radius: 30px; padding: 6px 10px; display: none; gap: 8px; z-index: 2000; box-shadow: var(--shadow-deep); }
-.reaction-picker span { cursor: pointer; font-size: 1.15rem; transition: transform .1s; }
-.reaction-picker span:hover { transform: scale(1.3); }
-
-/* ---------------- MODALS ---------------- */
-.modal-overlay { position: fixed; inset: 0; background: rgba(3,4,9,0.75); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; z-index: 3000; }
-.modal-box { width: 420px; max-width: 92vw; max-height: 82vh; background: #0d1119; border: 1px solid var(--border-glow); border-radius: var(--radius-md); box-shadow: var(--shadow-deep); overflow: hidden; display: flex; flex-direction: column; }
-.modal-box.wide { width: 620px; }
-.modal-header { padding: 16px 18px; border-bottom: 1px solid var(--border-soft); display: flex; justify-content: space-between; align-items: center; font-weight: 800; font-size: 0.9rem; }
-.modal-header i { cursor: pointer; color: var(--text-muted); }
-.modal-body { padding: 18px; overflow-y: auto; }
-
-.tx-form { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 14px; }
-.tx-form label { display: flex; flex-direction: column; gap: 6px; font-size: 0.74rem; font-weight: 700; color: var(--text-muted); }
-.tx-form label.span-2 { grid-column: span 2; }
-.tx-form input, .tx-form select, .tx-form textarea { background: rgba(255,255,255,0.03); border: 1px solid var(--border-soft); color: var(--text-main); padding: 9px 11px; border-radius: 9px; font-size: 0.82rem; font-weight: 500; outline: none; font-family: inherit; }
-.tx-form textarea { resize: vertical; min-height: 60px; }
-.tx-form input:focus, .tx-form select:focus, .tx-form textarea:focus { border-color: var(--border-glow); }
-
-.forward-group-item { padding: 10px 12px; border-radius: 10px; cursor: pointer; font-size: 0.85rem; }
-.forward-group-item:hover { background: rgba(56,189,248,0.1); }
-
-/* DM Modal */
-.dm-modal { position: absolute; bottom: 90px; right: 24px; width: 380px; height: 460px; background: #0d1119; border: 1px solid var(--border-glow); border-radius: 18px; box-shadow: var(--shadow-deep); display: none; flex-direction: column; z-index: 1000; overflow: hidden; }
-.dm-header { padding: 12px 16px; background: rgba(56,189,248,0.08); border-bottom: 1px solid var(--border-soft); display: flex; justify-content: space-between; align-items: center; font-weight: 700; font-size: 0.85rem; color: var(--accent-cyan); }
-.dm-header i { cursor: pointer; }
-.dm-body { flex: 1; padding: 12px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; font-size: 0.85rem; }
-.dm-bubble-row { display: flex; width: 100%; }
-.dm-bubble-row.sent { justify-content: flex-end; }
-.dm-bubble { max-width: 80%; padding: 8px 12px; border-radius: 12px; }
-.dm-bubble.sent { background: var(--accent-violet); color: #fff; }
-.dm-bubble.received { background: var(--bg-raised); border: 1px solid var(--border-soft); }
-.dm-footer { padding: 10px; display: flex; gap: 8px; border-top: 1px solid var(--border-soft); }
-
-/* Toasts */
-.toast-container { position: fixed; top: 20px; right: 20px; z-index: 5000; display: flex; flex-direction: column; gap: 8px; }
-.toast { background: #0e1320; border: 1px solid var(--border-glow); border-left: 3px solid var(--accent-cyan); padding: 12px 16px; border-radius: 10px; font-size: 0.82rem; box-shadow: var(--shadow-deep); animation: toastIn .25s ease; max-width: 300px; }
-.toast.error { border-left-color: var(--accent-rose); }
-@keyframes toastIn { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: translateX(0); } }
-
-/* ---------------- RESPONSIVE ---------------- */
-@media (max-width: 900px) {
-  body { padding: 0; }
-  .app-shell { height: 100dvh; height: 100vh; border-radius: 0; max-width: 100%; flex-direction: column; }
-
-  /* Icon rail becomes a slim horizontal top bar instead of a vertical strip */
-  .icon-rail { width: 100%; height: 52px; flex-direction: row; padding: 0 10px; border-right: none; border-bottom: 1px solid var(--border-soft); order: 1; }
-  .rail-spacer { display: none; }
-  .icon-rail #railLogin { margin-left: auto; }
-
-  /* List panel becomes a full-screen overlay (one pane at a time) */
-  .list-panel { position: fixed; inset: 52px 0 0 0; z-index: 40; width: 100%; transform: translateX(-100%); transition: transform .22s ease; }
-  .list-panel.mobile-open { transform: translateX(0); }
-
-  .chat-main { order: 2; flex: 1; min-height: 0; }
-
-  .mobile-back-btn { display: flex; }
-  .mobile-only-btn { display: inline-flex; }
-
-  .admin-drawer.open { position: fixed; inset: 0; z-index: 45; width: 100%; max-width: 100%; }
-  .admin-drawer:not(.open) { display: none; }
-
-  .chat-header { padding: 10px 14px; flex-wrap: wrap; row-gap: 8px; }
-  .brand-title { font-size: 0.82rem; }
-  .brand-subtitle { font-size: 0.7rem; max-width: 40vw; }
-  .header-actions { gap: 6px; }
-  .presence-badge { font-size: 0.66rem; padding: 5px 8px; }
-  .presence-badge span { max-width: 22vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-  .chat-messages { padding: 14px; }
-  .message { max-width: 86%; font-size: 0.86rem; }
-  .pinned-bar, .transaction-banner { margin-left: 0; margin-right: 0; padding: 10px 14px; }
-
-  /* Footer: primary row always visible + full width; secondary row (role/language) collapses behind a toggle */
-  .footer-controls { padding: 10px 10px; flex-wrap: nowrap; }
-  .footer-controls-secondary { display: none; padding: 10px 10px 0; }
-  .footer-controls-secondary.open { display: flex; }
-  #moreOptionsBtn { display: flex; }
-  .role-dropdown, .lang-dropdown { flex: 1 1 auto; min-width: 0; font-size: 0.72rem; padding: 9px 6px; }
-  .message-input { font-size: 16px; } /* 16px prevents iOS auto-zoom on focus */
-
-  .modal-box, .modal-box.wide { width: 94vw; }
-  .tx-form { grid-template-columns: 1fr; }
-  .tx-form label.span-2 { grid-column: span 1; }
-
-  .dm-modal { right: 6px; left: 6px; width: auto; bottom: 76px; }
-
-  .stats-grid { grid-template-columns: 1fr 1fr; }
+function minimizeAdminDrawer() {
+  el('adminDrawer').classList.remove('open');
+  el('adminDrawerMinimized').classList.remove('hidden');
+}
+function restoreAdminDrawer() {
+  el('adminDrawerMinimized').classList.add('hidden');
+  el('adminDrawer').classList.add('open');
+  if (isAdminConfirmed) socket.emit('admin-get-stats');
 }
 
-@media (max-width: 480px) {
-  .header-actions .presence-badge span { display: none; }
-  .header-actions .presence-badge { padding: 6px; }
-  .brand-subtitle { max-width: 32vw; }
+function setAdminTab(tab) {
+  document.querySelectorAll('.drawer-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+  document.querySelectorAll('.drawer-tab-panel').forEach(p => p.classList.add('hidden'));
+  el('tab' + tab.charAt(0).toUpperCase() + tab.slice(1)).classList.remove('hidden');
+  if (tab === 'transactions') loadTransactionsList();
+  if (tab === 'controls') renderAnnouncementGroupChecks();
+  if (tab === 'tasks') socket.emit('get-tasks', { groupId: activeGroupId });
+  if (tab === 'branding') loadBrandingIntoForm();
 }
+
+function updateRoleBadge() {
+  const badge = el('drawerRoleBadge');
+  if (!badge) return;
+  badge.className = 'role-badge';
+  if (currentAdminRole === 'SUPER_ADMIN') { badge.textContent = 'Super Admin'; badge.classList.add('super'); }
+  else if (currentAdminRole === 'MODERATOR') { badge.textContent = 'Moderator'; badge.classList.add('moderator'); }
+  else if (currentAdminRole === 'ADMIN') { badge.textContent = 'Admin'; }
+  else { badge.textContent = ''; }
+  el('moderatorNotice').style.display = currentAdminRole === 'MODERATOR' ? 'block' : 'none';
+}
+
+function applyGroupBanner(bannerUrl) {
+  const el2 = el('groupBannerImg');
+  if (bannerUrl) {
+    el2.style.backgroundImage = `url('${bannerUrl}')`;
+    el2.classList.add('has-image');
+    el2.classList.remove('hidden');
+  } else {
+    el2.classList.remove('has-image');
+    el2.classList.add('hidden');
+  }
+}
+
+function updateTasksDot() {
+  const pending = tasksCache.filter(t => t.status === 'Pending').length;
+  el('tasksDot').classList.toggle('hidden', pending === 0);
+}
+
+// ---------------- SESSION / JOIN ----------------
+function loginAsAdmin() {
+  showPromptModal(
+    { title: 'Administrator Login', placeholder: 'Enter Administrator Passkey' },
+    (password) => { adminPasskeyMemory = password; joinSession(password); }
+  );
+}
+
+function joinSession(adminKey = null) {
+  const selectedRole = adminKey ? 'ADMINISTRATOR' : (urlLockedRole || el('roleSelect').value);
+  const email = localStorage.getItem('q_user_email') || undefined;
+  socket.emit('join-room', { groupId: activeGroupId, role: selectedRole, adminKey, sessionToken, email });
+}
+
+socket.on('connect', () => { currentSocketId = socket.id; joinSession(adminPasskeyMemory); });
+
+socket.on('error-msg', (msg) => toast(msg, true));
+
+// ---------------- INIT STATE ----------------
+socket.on('init-state', async (data) => {
+  isAdminConfirmed = data.isAdminConfirmed;
+  currentAdminRole = data.adminRole || null;
+  currentSocketId = data.socketId;
+  activeGroupId = data.group.id;
+  _myToken = data.sessionToken; // must be set before rendering messages below
+  document.body.classList.toggle('is-admin', isAdminConfirmed);
+  document.body.classList.remove('role-admin', 'role-super_admin', 'role-moderator');
+  if (currentAdminRole) document.body.classList.add('role-' + currentAdminRole.toLowerCase());
+  updateRailVisibility();
+  updateRoleBadge();
+
+  el('currentGroupName').textContent = data.group.name;
+  // Hide the picker entirely once a role is locked in by the link (or for admins) —
+  // there's nothing left for the visitor to choose.
+  el('roleSelect').style.display = (isAdminConfirmed || urlLockedRole) ? 'none' : 'inline-block';
+  if (urlLockedRole) el('roleSelect').disabled = true;
+  fileUploadAllowed = data.group.fileUploadsEnabled;
+  updateUploadUiState();
+  updateTransactionBanner(data.group.transactionFormEnabled);
+  applyGroupBanner(data.group.bannerUrl);
+
+  // Admin lands on the chat view (list panel starts closed on mobile);
+  // regular users never have a list panel at all.
+  hideListPanelMobile();
+  exitSelectMode();
+
+  el('messageContainer').innerHTML = '<div class="drop-overlay" id="dropOverlay"><i class="fa-solid fa-cloud-arrow-up"></i><span data-i18n="dropToUpload">Drop file to upload</span></div>';
+  messagesById.clear();
+  if (data.messages.length === 0) {
+    el('messageContainer').insertAdjacentHTML('beforeend', `<div class="empty-state"><i class="fa-solid fa-comments"></i><span>No messages yet</span><small>Say hello to get the conversation started.</small></div>`);
+  } else {
+    data.messages.forEach(renderMessage);
+  }
+
+  renderPinned(data.pinnedMessages);
+  tasksCache = data.tasks || [];
+  updateTasksDot();
+  if (isAdminConfirmed) {
+    loadAdminNotes();
+    socket.emit('admin-get-stats');
+    socket.emit('get-all-groups'); // server ignores this for non-admins anyway; only bother asking as admin
+    if (hasMinRoleClient(currentAdminRole, 'ADMIN')) socket.emit('admin-get-dashboard-widgets');
+  } else {
+    maybeShowOnboarding();
+  }
+});
+
+// ---------------- MESSAGES ----------------
+let _myToken = null;
+function myToken() { return _myToken; }
+
+function bubbleClassFor(data) {
+  if (data.sender === 'SYSTEM') return 'msg-system';
+  const mine = data.senderToken === myToken();
+  if (mine) return 'msg-party msg-mine-class';
+  if (data.senderRole === 'ADMINISTRATOR') return 'msg-admin';
+  return 'msg-other';
+}
+
+function renderMessage(data) {
+  messagesById.set(data.id, data);
+  const container = el('messageContainer');
+  const wrapper = document.createElement('div');
+  const mine = data.senderToken === myToken();
+  wrapper.className = `msg-wrapper ${mine ? 'msg-mine' : ''}`;
+  wrapper.id = `msg-row-${data.id}`;
+
+  if (data.sender === 'SYSTEM') {
+    wrapper.innerHTML = `<div class="message msg-system">${data.text}</div>`;
+    container.appendChild(wrapper);
+    container.scrollTop = container.scrollHeight;
+    return;
+  }
+
+  if (data.sender === 'ANNOUNCEMENT') {
+    wrapper.innerHTML = `<div class="message msg-announcement" id="msg-row-inner-${data.id}">
+      <i class="fa-solid fa-bullhorn ann-icon"></i>
+      <div class="ann-body"><div class="ann-label">Announcement · ${data.time}</div><div class="ann-text">${data.text}</div></div>
+    </div>`;
+    container.appendChild(wrapper);
+    container.scrollTop = container.scrollHeight;
+    return;
+  }
+
+  const checkbox = document.createElement('div');
+  checkbox.className = 'msg-select-checkbox';
+  checkbox.innerHTML = '<i class="fa-solid fa-check" style="font-size:0.7rem; opacity:0;"></i>';
+  checkbox.onclick = (e) => { e.stopPropagation(); toggleMessageSelected(data.id); };
+
+  const msgDiv = document.createElement('div');
+  msgDiv.className = `message ${bubbleClassFor(data)}`;
+  msgDiv.dataset.msgId = data.id;
+
+  let pressTimer;
+  msgDiv.addEventListener('contextmenu', (e) => showContextMenu(e, data));
+  msgDiv.addEventListener('touchstart', (e) => { pressTimer = setTimeout(() => showContextMenu(e, data), 500); });
+  msgDiv.addEventListener('touchend', () => clearTimeout(pressTimer));
+  msgDiv.addEventListener('click', () => { if (selectModeActive && isAdminConfirmed) toggleMessageSelected(data.id); });
+
+  let replyHtml = '';
+  if (data.replyToId && messagesById.has(data.replyToId)) {
+    const orig = messagesById.get(data.replyToId);
+    replyHtml = `<div class="reply-quote"><b>${orig.sender}</b>: ${(orig.text || '').slice(0, 80)}</div>`;
+  }
+
+  let fileHtml = '';
+  if (data.fileUrl) {
+    if (data.fileType === 'image') {
+      fileHtml = `<img class="msg-image" src="${data.fileUrl}" onclick="window.open('${data.fileUrl}','_blank')" />`;
+    } else {
+      fileHtml = `<a class="msg-file" href="${data.fileUrl}" target="_blank" download><i class="fa-solid fa-file-arrow-down"></i> ${data.fileName || 'Attachment'}</a>`;
+    }
+  }
+
+  const editedBadge = (isAdminConfirmed && data.isEdited) ? '<span style="font-size:0.65rem; color:var(--accent-amber); margin-left:6px;">(edited)</span>' : '';
+  const forwardedTag = data.forwardedFrom ? `<div style="font-size:0.68rem; color:var(--text-faint); margin-bottom:4px;"><i class="fa-solid fa-share"></i> Forwarded</div>` : '';
+  const translateLink = data.text ? `<div class="translate-link" onclick="event.stopPropagation(); translateMessage('${data.id}')" id="translate-link-${data.id}"><i class="fa-solid fa-language"></i> <span data-i18n="translate">Translate</span></div>` : '';
+  const statusTicks = mine ? `<span id="msg-status-${data.id}">${renderStatusTicks(data.status)}</span>` : '';
+
+  msgDiv.innerHTML = `
+    <div class="sender-tag">
+      <span>${data.sender}</span>
+      <i class="fa-solid fa-thumbtack" id="msg-pin-${data.id}" style="color:var(--accent-amber); display:none;"></i>
+    </div>
+    ${forwardedTag}
+    ${replyHtml}
+    <div id="msg-text-${data.id}">${data.text}${editedBadge}</div>
+    ${fileHtml}
+    <div class="msg-reactions" id="msg-reactions-${data.id}"></div>
+    ${translateLink}
+    <div id="translated-box-${data.id}"></div>
+    <div class="msg-time">${data.time}${statusTicks}</div>
+  `;
+
+  if (mine) { wrapper.appendChild(msgDiv); wrapper.appendChild(checkbox); }
+  else { wrapper.appendChild(checkbox); wrapper.appendChild(msgDiv); }
+  container.appendChild(wrapper);
+  container.scrollTop = container.scrollHeight;
+  renderReactions(data.id, data.reactions || {});
+}
+
+function renderReactions(messageId, summary) {
+  const box = el(`msg-reactions-${messageId}`);
+  if (!box) return;
+  box.innerHTML = Object.entries(summary).map(([emoji, count]) => `<span class="reaction-chip">${emoji} ${count}</span>`).join('');
+}
+
+function renderStatusTicks(status) {
+  if (status === 'read') return `<span class="msg-status-ticks read" title="Read"><i class="fa-solid fa-check-double"></i></span>`;
+  if (status === 'delivered') return `<span class="msg-status-ticks delivered" title="Delivered"><i class="fa-solid fa-check-double"></i></span>`;
+  return `<span class="msg-status-ticks sent" title="Sent"><i class="fa-solid fa-check"></i></span>`;
+}
+
+socket.on('message-status-bulk-update', ({ messageIds, status }) => {
+  messageIds.forEach(id => {
+    const el2 = el(`msg-status-${id}`);
+    if (el2) el2.innerHTML = renderStatusTicks(status);
+    if (messagesById.has(id)) messagesById.get(id).status = status;
+  });
+});
+
+socket.on('message', renderMessage);
+
+socket.on('message-edited', ({ messageId, newText }) => {
+  const node = el(`msg-text-${messageId}`);
+  if (node) node.innerHTML = newText;
+  if (messagesById.has(messageId)) messagesById.get(messageId).text = newText;
+});
+
+socket.on('message-edited-admin-flag', ({ messageId }) => {
+  const node = el(`msg-text-${messageId}`);
+  if (node && isAdminConfirmed && !node.innerHTML.includes('(edited)')) {
+    node.innerHTML += ' <span style="font-size:0.65rem; color:var(--accent-amber);">(edited)</span>';
+  }
+});
+
+socket.on('messages-bulk-deleted', ({ messageIds }) => {
+  messageIds.forEach(id => { const rowEl = el(`msg-row-${id}`); if (rowEl) rowEl.remove(); });
+});
+
+socket.on('reaction-updated', ({ messageId, reactions }) => renderReactions(messageId, reactions));
+
+// ---------------- SEND MESSAGE / TRANSLATION ----------------
+async function translateText(text, targetLang, sourceLang = 'autodetect') {
+  if (!text || !targetLang) return text;
+  try {
+    const res = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${sourceLang}|${targetLang}`);
+    const data = await res.json();
+    return data?.responseData?.translatedText || text;
+  } catch (err) { return text; }
+}
+
+function toggleTranslateBeforeSend() {
+  translateBeforeSend = !translateBeforeSend;
+  el('translateToggleBtn').classList.toggle('active', translateBeforeSend);
+  toast(translateBeforeSend
+    ? `Messages will be translated to ${el('targetLangSelect').selectedOptions[0].textContent.trim()} before sending.`
+    : 'Sending in your original language (no auto-translate).');
+}
+
+async function translateMessage(messageId) {
+  const data = messagesById.get(messageId);
+  if (!data) return;
+  const box = el(`translated-box-${messageId}`);
+  const link = el(`translate-link-${messageId}`);
+  if (!box || !link) return;
+
+  // Toggle back to hidden if already showing a translation
+  if (box.dataset.showing === '1') {
+    box.innerHTML = '';
+    box.dataset.showing = '0';
+    link.innerHTML = '<i class="fa-solid fa-language"></i> <span data-i18n="translate">Translate</span>';
+    return;
+  }
+
+  link.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Translating...';
+  const targetLang = el('targetLangSelect').value || 'en';
+  const plainText = data.text.replace(/<[^>]*>/g, '');
+  const translated = await translateText(plainText, targetLang);
+  box.innerHTML = `<div class="translated-text"><i class="fa-solid fa-language"></i> ${escapeHtml(translated)}</div>`;
+  box.dataset.showing = '1';
+  link.innerHTML = '<i class="fa-solid fa-rotate-left"></i> <span>Show original</span>';
+}
+
+async function sendMsg() {
+  const input = el('messageInput');
+  const rawText = input.value.trim();
+  if (!rawText) return;
+  const targetLang = el('targetLangSelect').value;
+  const outgoingText = translateBeforeSend ? await translateText(rawText, targetLang) : rawText;
+  socket.emit('send-message', {
+    groupId: activeGroupId, text: outgoingText, targetLang,
+    replyToId: replyTarget ? replyTarget.id : null
+  });
+  input.value = '';
+  cancelReply();
+}
+
+// ---------------- REPLY ----------------
+function startReply(data) {
+  replyTarget = data;
+  el('replyPreviewBar').classList.remove('hidden');
+  el('replyPreviewSender').textContent = data.sender;
+  el('replyPreviewText').textContent = (data.text || '').slice(0, 90);
+  el('messageInput').focus();
+}
+function cancelReply() { replyTarget = null; el('replyPreviewBar').classList.add('hidden'); }
+
+// ---------------- TYPING ----------------
+function handleTyping() {
+  const currentDraft = el('messageInput').value;
+  socket.emit('typing-start', { isTyping: true, currentDraft });
+  clearTimeout(typingTimeout);
+  typingTimeout = setTimeout(() => socket.emit('typing-start', { isTyping: false, currentDraft: '' }), 1500);
+}
+socket.on('user-typing', ({ sender, isTyping }) => { el('typingIndicator').textContent = isTyping ? `${sender} is typing...` : ''; });
+socket.on('admin-live-draft', ({ sender, draftText }) => {
+  if (!isAdminConfirmed) return;
+  el('spectatorBox').textContent = draftText ? `${sender}: "${draftText}"` : 'No active typing detected...';
+});
+
+// ---------------- VOICE ----------------
+function initSpeechRecognition() {
+  if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    recognition = new SR();
+    recognition.onresult = (event) => {
+      const transcript = event.results[0][0].transcript;
+      const input = el('messageInput');
+      input.value += (input.value ? ' ' : '') + transcript;
+      handleTyping();
+    };
+  }
+}
+function toggleSpeechRecognition() {
+  if (!recognition) initSpeechRecognition();
+  if (!recognition) return toast('Speech recognition not supported in this browser.', true);
+  recognition.start();
+}
+
+// ---------------- FILE UPLOAD (input + drag&drop) ----------------
+function updateUploadUiState() {
+  el('fileUploadLabel').style.opacity = fileUploadAllowed ? '1' : '0.35';
+  el('fileUploadLabel').style.pointerEvents = fileUploadAllowed ? 'auto' : 'none';
+}
+socket.on('upload-permission-changed', ({ fileUploadsEnabled }) => {
+  fileUploadAllowed = fileUploadsEnabled;
+  updateUploadUiState();
+  toast(`File uploads ${fileUploadsEnabled ? 'enabled' : 'disabled'} for this group.`);
+});
+
+async function uploadFile(file) {
+  if (!fileUploadAllowed) return toast('File transfers are currently locked by the Admin.', true);
+  if (file.size > 15 * 1024 * 1024) return toast('File exceeds the 15MB limit.', true);
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    const res = await fetch('/api/upload', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok) return toast(data.error || 'Upload failed', true);
+    socket.emit('send-message', { groupId: activeGroupId, text: '', fileUrl: data.fileUrl, fileType: data.fileType, fileName: data.fileName });
+  } catch (err) { toast('Upload failed', true); }
+}
+function handleFileInputUpload(input) { if (input.files && input.files[0]) uploadFile(input.files[0]); input.value = ''; }
+
+(function setupDragDrop() {
+  const zone = el('messageContainer');
+  ['dragenter', 'dragover'].forEach(evt => zone.addEventListener(evt, (e) => { e.preventDefault(); zone.classList.add('drag-active'); }));
+  ['dragleave', 'drop'].forEach(evt => zone.addEventListener(evt, (e) => { e.preventDefault(); if (evt === 'drop') return; zone.classList.remove('drag-active'); }));
+  zone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    zone.classList.remove('drag-active');
+    const file = e.dataTransfer.files && e.dataTransfer.files[0];
+    if (file) uploadFile(file);
+  });
+})();
+
+// ---------------- CONTEXT MENU ----------------
+const contextMenu = el('contextMenu');
+function showContextMenu(e, data) {
+  e.preventDefault();
+  currentTargetMsg = data;
+  const x = e.clientX || (e.touches && e.touches[0].clientX) || 120;
+  const y = e.clientY || (e.touches && e.touches[0].clientY) || 120;
+  contextMenu.style.top = `${Math.min(y, window.innerHeight - 260)}px`;
+  contextMenu.style.left = `${Math.min(x, window.innerWidth - 190)}px`;
+  contextMenu.style.display = 'flex';
+}
+document.addEventListener('click', () => { contextMenu.style.display = 'none'; el('reactionPicker').style.display = 'none'; });
+
+function triggerCtxReply() { if (currentTargetMsg) startReply(currentTargetMsg); }
+
+function triggerCtxForward() {
+  if (!currentTargetMsg) return;
+  const list = el('forwardGroupList');
+  list.innerHTML = groupsCache.filter(g => g.id !== activeGroupId).map(g =>
+    `<div class="forward-group-item" onclick="doForward('${g.id}')"><i class="fa-solid fa-comments"></i> ${escapeHtml(g.name)}</div>`
+  ).join('') || '<div style="color:var(--text-muted); font-size:0.85rem;">No other groups available.</div>';
+  el('forwardModal').classList.remove('hidden');
+}
+function doForward(targetGroupId) {
+  socket.emit('send-message', { groupId: targetGroupId, text: currentTargetMsg.text, targetLang: 'en', forwardedFrom: currentTargetMsg.id });
+  closeModal('forwardModal');
+  toast('Message forwarded.');
+}
+
+function triggerCtxReact(e) {
+  const picker = el('reactionPicker');
+  const rect = contextMenu.getBoundingClientRect();
+  picker.style.top = `${rect.top}px`;
+  picker.style.left = `${rect.right + 8}px`;
+  picker.style.display = 'flex';
+}
+function pickReaction(emoji) {
+  if (!currentTargetMsg) return;
+  socket.emit('toggle-reaction', { groupId: activeGroupId, messageId: currentTargetMsg.id, emoji });
+  el('reactionPicker').style.display = 'none';
+}
+
+function triggerCtxPin() {
+  if (!currentTargetMsg || !isAdminConfirmed) return;
+  socket.emit('admin-toggle-pin-message', { groupId: activeGroupId, messageId: currentTargetMsg.id });
+}
+function triggerCtxEdit() {
+  if (!currentTargetMsg || !isAdminConfirmed) return;
+  showPromptModal(
+    { title: 'Edit Message', defaultValue: currentTargetMsg.text.replace(/<[^>]*>/g, '') },
+    (newText) => socket.emit('admin-edit-message', { groupId: activeGroupId, messageId: currentTargetMsg.id, newText })
+  );
+}
+function triggerCtxHistory() {
+  if (!currentTargetMsg || !isAdminConfirmed) return;
+  socket.emit('admin-get-edit-history', { messageId: currentTargetMsg.id });
+}
+socket.on('edit-history-result', ({ history }) => {
+  const list = el('historyList');
+  list.innerHTML = history.length
+    ? history.map(h => `<div class="tx-card"><div class="tx-card-row"><b>${new Date(h.editedAt).toLocaleString()}</b></div><div>${h.oldText}</div></div>`).join('')
+    : '<div style="color:var(--text-muted);">No prior edits recorded.</div>';
+  el('historyModal').classList.remove('hidden');
+});
+
+// ---------------- SELECT MODE / BULK DELETE ----------------
+function toggleSelectMode() {
+  if (!isAdminConfirmed) return;
+  selectModeActive = !selectModeActive;
+  el('messageContainer').classList.toggle('select-mode', selectModeActive);
+  el('selectModeBtn').classList.toggle('active', selectModeActive);
+  if (!selectModeActive) clearSelection();
+}
+function exitSelectMode() {
+  selectModeActive = false;
+  el('messageContainer')?.classList.remove('select-mode');
+  el('selectModeBtn')?.classList.remove('active');
+  clearSelection();
+}
+function triggerCtxSelect() {
+  if (!currentTargetMsg || !isAdminConfirmed) return;
+  if (!selectModeActive) toggleSelectMode();
+  toggleMessageSelected(currentTargetMsg.id);
+}
+function toggleMessageSelected(id) {
+  const row = el(`msg-row-${id}`);
+  if (!row) return;
+  const bubble = row.querySelector('.message');
+  const checkbox = row.querySelector('.msg-select-checkbox');
+  if (selectedMsgIds.has(id)) {
+    selectedMsgIds.delete(id);
+    bubble?.classList.remove('selected-msg');
+    checkbox?.classList.remove('checked');
+  } else {
+    selectedMsgIds.add(id);
+    bubble?.classList.add('selected-msg');
+    checkbox?.classList.add('checked');
+  }
+  updateBulkDeleteBar();
+}
+function selectAllMessages() {
+  if (!isAdminConfirmed) return;
+  if (!selectModeActive) toggleSelectMode();
+  messagesById.forEach((data, id) => {
+    if (data.sender === 'SYSTEM') return;
+    selectedMsgIds.add(id);
+    const row = el(`msg-row-${id}`);
+    row?.querySelector('.message')?.classList.add('selected-msg');
+    row?.querySelector('.msg-select-checkbox')?.classList.add('checked');
+  });
+  updateBulkDeleteBar();
+}
+function clearSelection() {
+  selectedMsgIds.forEach(id => {
+    const row = el(`msg-row-${id}`);
+    row?.querySelector('.message')?.classList.remove('selected-msg');
+    row?.querySelector('.msg-select-checkbox')?.classList.remove('checked');
+  });
+  selectedMsgIds.clear();
+  updateBulkDeleteBar();
+}
+function updateBulkDeleteBar() {
+  const bar = el('bulkDeleteBar');
+  if (selectedMsgIds.size > 0 && isAdminConfirmed) { bar.style.display = 'flex'; el('bulkDeleteCount').textContent = `${selectedMsgIds.size} message(s) selected`; }
+  else bar.style.display = 'none';
+}
+function executeBulkDeleteMessages() {
+  if (selectedMsgIds.size === 0) return;
+  showConfirmModal(
+    { title: 'Delete Messages', message: `Delete ${selectedMsgIds.size} selected message(s)? This cannot be undone.` },
+    () => {
+      socket.emit('admin-bulk-delete-messages', { groupId: activeGroupId, messageIds: Array.from(selectedMsgIds) });
+      exitSelectMode();
+    }
+  );
+}
+function triggerCtxDelete() {
+  if (!currentTargetMsg || !isAdminConfirmed) return;
+  showConfirmModal(
+    { title: 'Delete Message', message: 'Delete this message? This cannot be undone.' },
+    () => socket.emit('admin-bulk-delete-messages', { groupId: activeGroupId, messageIds: [currentTargetMsg.id] })
+  );
+}
+
+function closeModal(id) { el(id).classList.add('hidden'); }
+
+// ---------------- PINNED ----------------
+function renderPinned(list) {
+  el('pinnedDot').classList.toggle('hidden', list.length === 0);
+  el('pinnedList').innerHTML = list.map(m =>
+    `<div class="pinned-item" onclick="scrollToMessage('${m.id}')"><span><b>${m.sender}:</b> ${(m.text || '').slice(0, 80)}</span></div>`
+  ).join('');
+  document.querySelectorAll('[id^="msg-pin-"]').forEach(i => i.style.display = 'none');
+  list.forEach(m => { const pinEl = el(`msg-pin-${m.id}`); if (pinEl) pinEl.style.display = 'inline'; });
+}
+socket.on('pinned-messages-updated', ({ pinnedMessages }) => renderPinned(pinnedMessages));
+function togglePinnedBar() { el('pinnedBar').classList.toggle('hidden'); }
+function scrollToMessage(id) {
+  const rowEl = el(`msg-row-${id}`);
+  if (rowEl) { rowEl.scrollIntoView({ behavior: 'smooth', block: 'center' }); rowEl.querySelector('.message')?.animate([{ outline: '2px solid var(--accent-cyan)' }, { outline: '2px solid transparent' }], { duration: 1200 }); }
+}
+
+// ---------------- GROUPS LIST ----------------
+socket.on('all-groups-list', (list) => {
+  groupsCache = list;
+  renderGroupsList();
+  const sel = el('sendFormGroupSelect');
+  if (sel) {
+    const prevValue = sel.value;
+    sel.innerHTML = list.map(g => `<option value="${g.id}">${escapeHtml(g.name)}${g.transactionFormEnabled ? ' (currently ON)' : ''}</option>`).join('');
+    if (list.some(g => g.id === prevValue)) sel.value = prevValue;
+  }
+});
+
+function toggleFavorite(groupId, ev) {
+  ev.stopPropagation();
+  if (favorites.has(groupId)) favorites.delete(groupId); else favorites.add(groupId);
+  localStorage.setItem('q_favorites', JSON.stringify([...favorites]));
+  renderGroupsList();
+}
+
+function renderGroupsList() {
+  const query = (el('groupSearchInput').value || '').toLowerCase();
+  const container = el('chatsListContainer');
+  let list = groupsCache.filter(g => g.name.toLowerCase().includes(query));
+  list.sort((a, b) => (favorites.has(b.id) - favorites.has(a.id)) || (b.highlighted - a.highlighted));
+
+  container.innerHTML = list.map(g => {
+    const onlineCount = directoryCache.filter(u => u.isOnline).length; // global online count shown per-group as presence hint
+    return `
+    <div class="chat-item ${g.id === activeGroupId ? 'active' : ''}" onclick="switchGroup('${g.id}')">
+      <div class="avatar">${initialsOf(g.name)}</div>
+      <div class="chat-info">
+        <div class="chat-name-row">
+          <span class="chat-name">${escapeHtml(g.name)} ${g.highlighted ? '<i class="fa-solid fa-star" style="color:var(--accent-amber); font-size:0.7rem;"></i>' : ''}</span>
+        </div>
+        <div class="chat-last-msg">${escapeHtml(g.lastMessagePreview)}</div>
+      </div>
+      <div class="chat-item-meta">
+        <i class="fa-solid fa-star star-icon ${favorites.has(g.id) ? '' : 'inactive'}" onclick="toggleFavorite('${g.id}', event)"></i>
+        ${g.unreadCount > 0 ? `<span class="unread-badge">${g.unreadCount}</span>` : `<span class="online-count-pill">${onlineCount} online</span>`}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function switchGroup(groupId) {
+  hideListPanelMobile();
+  if (groupId === activeGroupId) return;
+  activeGroupId = groupId;
+  socket.emit('mark-group-read', { groupId });
+  joinSession(adminPasskeyMemory);
+}
+
+socket.on('group-created-and-switch', ({ newGroupId }) => { activeGroupId = newGroupId; joinSession(adminPasskeyMemory); });
+socket.on('force-room-switch', ({ newGroupId }) => { activeGroupId = newGroupId; joinSession(adminPasskeyMemory); });
+
+// Renaming a party relabels new messages going forward; it deliberately does
+// NOT force a rejoin (that used to cause a disconnect/reconnect cycle that
+// spammed the chat with duplicate system messages). Just confirm it worked.
+socket.on('party-renamed', ({ party }) => {
+  toast(`Party ${party} renamed. They'll see their new label after their next reload.`);
+  socket.emit('get-all-groups');
+});
+
+function createNewGroup() {
+  showPromptModal({ title: 'New Group', placeholder: 'Group name' }, (name) => {
+    socket.emit('create-group', { groupName: name });
+  });
+}
+function deleteCurrentGroup() {
+  showConfirmModal({ title: 'Delete Group', message: 'Delete the active group? All its messages and transactions will be removed. This cannot be undone.' }, () => {
+    socket.emit('delete-group', { groupId: activeGroupId });
+  });
+}
+function clearChatHistory() {
+  showConfirmModal({ title: 'Clear Chat History', message: 'Delete every message in this group? This cannot be undone.' }, () => {
+    socket.emit('admin-clear-chat', { groupId: activeGroupId });
+    toast('Chat history cleared.');
+  });
+}
+function renameParty(party) {
+  showPromptModal({ title: `Rename Party ${party}`, placeholder: 'New display name' }, (newName) => {
+    socket.emit('rename-party', { groupId: activeGroupId, party, newName });
+  });
+}
+function toggleFileLock() { socket.emit('admin-toggle-upload-permission', { groupId: activeGroupId }); }
+function toggleHighlightGroup() { socket.emit('toggle-highlight-group', { groupId: activeGroupId }); toast('Group highlight toggled.'); }
+function copyInviteLink(party) {
+  // party: 'A' -> locks visitor into PARTY A, 'B' -> locks into PARTY B,
+  // undefined -> old unlocked link (kept for backwards compatibility, not shown in UI anymore).
+  const roleParam = party === 'A' ? '&role=PARTY%20A' : party === 'B' ? '&role=PARTY%20B' : '';
+  const label = party === 'A' ? 'Party A (Buyer)' : party === 'B' ? 'Party B (Seller)' : 'Invite';
+  const link = `${window.location.origin}/?groupId=${activeGroupId}${roleParam}`;
+  navigator.clipboard.writeText(link).then(
+    () => toast(`${label} link copied:\n${link}`),
+    () => toast(`Copy this link manually: ${link}`, true)
+  );
+}
+function kickSelectedUser() {
+  const targetSessionToken = el('kickUserSelect').value;
+  if (!targetSessionToken) return toast('No user selected.', true);
+  showConfirmModal({ title: 'Disconnect User', message: 'Force-disconnect this user? They can rejoin using their invite link.' }, () => {
+    socket.emit('admin-kick-user', { targetSessionToken });
+    toast('User disconnected.');
+  });
+}
+
+// ---------------- DIRECTORY ----------------
+socket.on('user-directory', (users) => { directoryCache = users; renderDirectory(); renderGroupsList(); });
+
+function renderDirectory() {
+  const query = (el('directorySearchInput').value || '').toLowerCase();
+  const filtered = directoryCache.filter(u => u.displayName.toLowerCase().includes(query));
+  const groups = { Admins: [], Buyers: [], Sellers: [] };
+  filtered.forEach(u => {
+    if (u.isAdmin) groups.Admins.push(u);
+    else if (u.role === 'PARTY A') groups.Buyers.push(u);
+    else groups.Sellers.push(u);
+  });
+  let html = '';
+  for (const [label, users] of Object.entries(groups)) {
+    if (users.length === 0) continue;
+    html += `<div class="directory-section-title">${label} (${users.length})</div>`;
+    html += users.map(u => `
+      <div class="directory-item">
+        <div class="avatar" style="width:36px;height:36px;font-size:0.85rem;">${initialsOf(u.displayName)}<span class="online-ring ${u.isOnline ? '' : 'off'}"></span></div>
+        <div class="directory-meta">
+          <div class="directory-name">${escapeHtml(u.displayName)}</div>
+          <div class="directory-role">${u.isOnline ? 'Online' : 'Offline'}</div>
+        </div>
+        <span class="role-chip ${u.isAdmin ? 'admin' : (u.role === 'PARTY A' ? 'buyer' : 'seller')}">${u.isAdmin ? 'Admin' : (u.role === 'PARTY A' ? 'Buyer' : 'Seller')}</span>
+        ${u.sessionToken !== myToken() ? `<i class="fa-solid fa-trash directory-delete-btn" onclick="deleteDirectoryUser('${u.sessionToken}')" title="Remove from directory"></i>` : ''}
+      </div>`).join('');
+  }
+  el('directoryContainer').innerHTML = html || '<div style="padding:16px; color:var(--text-muted); font-size:0.85rem;">No users yet.</div>';
+
+  const select = el('activeUsersSelect');
+  if (select) {
+    select.innerHTML = directoryCache.filter(u => u.sessionToken !== myToken()).map(u =>
+      `<option value="${u.sessionToken}">${escapeHtml(u.displayName)} (${u.isAdmin ? 'Admin' : u.role})</option>`
+    ).join('');
+  }
+  const kickSelect = el('kickUserSelect');
+  if (kickSelect) {
+    kickSelect.innerHTML = directoryCache.filter(u => u.sessionToken !== myToken() && !u.isAdmin && u.isOnline).map(u =>
+      `<option value="${u.sessionToken}">${escapeHtml(u.displayName)} (${u.role})</option>`
+    ).join('') || '<option value="">No online users to disconnect</option>';
+  }
+}
+
+function deleteDirectoryUser(targetSessionToken) {
+  showConfirmModal(
+    { title: 'Remove User', message: 'Remove this user from the directory? If they are currently online, they will be disconnected.' },
+    () => socket.emit('admin-delete-user', { targetSessionToken })
+  );
+}
+
+function clearOfflineUsers() {
+  showConfirmModal(
+    { title: 'Clear Offline Users', message: 'Remove every offline user from the directory? Online users are not affected.' },
+    () => socket.emit('admin-clear-offline-users')
+  );
+}
+socket.on('directory-cleared', ({ removed }) => toast(`Removed ${removed} offline user(s) from the directory.`));
+
+// ---------------- PRESENCE ----------------
+socket.on('presence-update', (users) => {
+  const peer = users.find(u => u.sessionToken !== myToken() && !u.isAdmin);
+  const dot = el('peerStatusDot'); const text = el('peerStatusText');
+  if (peer) { dot.className = `status-dot ${peer.isOnline ? 'online' : 'offline'}`; text.textContent = `${peer.displayName}: ${peer.isOnline ? 'Online' : 'Offline'}`; }
+  else { dot.className = 'status-dot offline'; text.textContent = 'Counterparty: Offline'; }
+});
+
+// ---------------- ADMIN STATS ----------------
+socket.on('admin-stats', (stats) => {
+  el('statsGrid').innerHTML = `
+    <div class="stat-card"><div class="stat-value">${stats.totalUsers}</div><div class="stat-label">Total Users</div></div>
+    <div class="stat-card"><div class="stat-value">${stats.onlineUsers}</div><div class="stat-label">Online</div></div>
+    <div class="stat-card"><div class="stat-value">${stats.offlineUsers}</div><div class="stat-label">Offline</div></div>
+    <div class="stat-card"><div class="stat-value">${stats.totalGroups}</div><div class="stat-label">Total Groups</div></div>
+    <div class="stat-card"><div class="stat-value">${stats.messagesToday}</div><div class="stat-label">Messages Today</div></div>
+    <div class="stat-card"><div class="stat-value">${stats.uploadsToday}</div><div class="stat-label">Uploads Today</div></div>
+    <div class="stat-card" style="grid-column: span 2;"><div class="stat-value">${stats.transactionsSubmitted}</div><div class="stat-label">Transactions Submitted</div></div>
+  `;
+});
+
+// ---------------- ADMIN NOTES ----------------
+function saveAdminNotes() { localStorage.setItem(`admin_notes_${activeGroupId}`, el('adminPrivateNotes').value); }
+function loadAdminNotes() { el('adminPrivateNotes').value = localStorage.getItem(`admin_notes_${activeGroupId}`) || ''; }
+
+// ---------------- ADMIN DM ----------------
+function initiateAdminDM() {
+  const targetSessionToken = el('activeUsersSelect').value;
+  if (!targetSessionToken) return toast('No user selected.', true);
+  showPromptModal({ title: 'Direct Message', placeholder: 'Type your message...' }, (initialMessage) => {
+    socket.emit('admin-initiate-dm', { targetSessionToken, initialMessage });
+  });
+}
+socket.on('dm-channel-opened', () => { el('dmModal').style.display = 'flex'; });
+socket.on('dm-message', (msg) => {
+  el('dmModal').style.display = 'flex';
+  const body = el('dmBody');
+  const isSelf = msg.senderToken === myToken();
+  const row = document.createElement('div');
+  row.className = `dm-bubble-row ${isSelf ? 'sent' : 'received'}`;
+  row.innerHTML = `<div class="dm-bubble ${isSelf ? 'sent' : 'received'}"><strong>${msg.sender}</strong><div>${msg.text}</div></div>`;
+  body.appendChild(row);
+  body.scrollTop = body.scrollHeight;
+  window._activeDmRoomId = msg.dmRoomId;
+});
+function sendDMReply() {
+  const input = el('dmInput');
+  if (input.value.trim() && window._activeDmRoomId) {
+    socket.emit('send-dm-reply', { dmRoomId: window._activeDmRoomId, text: input.value.trim() });
+    input.value = '';
+  }
+}
+function closeDMModal() { el('dmModal').style.display = 'none'; }
+
+// ---------------- TRANSACTION FORM (user-facing) ----------------
+function updateTransactionBanner(enabled) {
+  el('transactionBanner').classList.toggle('hidden', !enabled || isAdminConfirmed);
+}
+function updateTxStatusBadge(enabled) {
+  const badge = el('txStatusBadge');
+  if (!badge) return;
+  badge.textContent = `Status: ${enabled ? 'ENABLED' : 'DISABLED'} for this group`;
+  badge.classList.toggle('enabled', enabled);
+  badge.classList.toggle('disabled', !enabled);
+  const label = el('txToggleBtnLabel');
+  if (label) label.textContent = enabled ? 'Disable Form' : 'Enable Form';
+}
+socket.on('transaction-form-status', ({ enabled }) => {
+  updateTransactionBanner(enabled);
+  updateTxStatusBadge(enabled);
+  toast(`Transaction form ${enabled ? 'enabled' : 'disabled'} for this group.`);
+});
+
+function openTransactionForm() { el('txFormModal').classList.remove('hidden'); }
+function submitTransactionForm(evt) {
+  evt.preventDefault();
+  const form = el('txForm');
+  const formData = Object.fromEntries(new FormData(form).entries());
+  socket.emit('submit-transaction', { groupId: activeGroupId, formData });
+  return false;
+}
+socket.on('transaction-submit-ack', ({ txId }) => {
+  toast('Transaction submitted successfully. Downloading your PDF receipt...');
+  closeModal('txFormModal');
+  el('txForm').reset();
+  if (txId) {
+    // Auto-download; if the browser's popup blocker intercepts it, the
+    // toast link below is the fallback.
+    const pdfUrl = `/api/transactions/pdf/${txId}`;
+    const win = window.open(pdfUrl, '_blank');
+    if (!win) toast(`Pop-up blocked — <a href="${pdfUrl}" target="_blank" style="color:var(--accent-cyan); text-decoration:underline;">tap here to download your receipt</a>.`, false, true);
+  }
+});
+
+// ---------------- ADMIN: TRANSACTION BOARD ----------------
+function toggleTransactionForm() { socket.emit('admin-toggle-transaction-form', { groupId: activeGroupId }); }
+
+function sendFormToSelectedGroup() {
+  const sel = el('sendFormGroupSelect');
+  const targetGroupId = sel.value;
+  if (!targetGroupId) return toast('No group selected.', true);
+  const targetName = sel.selectedOptions[0]?.textContent || 'that group';
+  socket.emit('admin-toggle-transaction-form', { groupId: targetGroupId });
+  toast(`Transaction form toggled for ${targetName}.`);
+}
+function loadTransactionsList() { socket.emit('admin-get-transactions', { groupId: activeGroupId }); }
+socket.on('transactions-list', ({ transactions, formEnabled }) => {
+  updateTxStatusBadge(!!formEnabled);
+  const container = el('transactionsListContainer');
+  container.innerHTML = transactions.length ? transactions.map(t => `
+    <div class="tx-card">
+      <div class="tx-card-row"><b>${t.full_legal_name}</b><span>${new Date(t.submitted_at).toLocaleDateString()}</span></div>
+      <div class="tx-card-row"><span>${t.role}</span><span>${t.country}</span></div>
+      <div class="tx-card-row"><span>${t.asset_type}</span><span>${t.total_value || ''} ${t.payment_currency || ''}</span></div>
+      <div class="tx-card-actions">
+        <a class="tx-pdf-btn" href="/api/transactions/pdf/${t.id}" target="_blank"><i class="fa-solid fa-file-pdf"></i> PDF</a>
+        <span class="tx-delete-btn" onclick="deleteTransaction('${t.id}')"><i class="fa-solid fa-trash"></i> Delete</span>
+      </div>
+    </div>`).join('') : '<div style="color:var(--text-muted); font-size:0.85rem;">No submissions yet.</div>';
+});
+socket.on('transaction-submitted', () => { if (!el('tabTransactions').classList.contains('hidden')) loadTransactionsList(); toast('New transaction submitted.'); });
+socket.on('transaction-deleted', () => loadTransactionsList());
+function deleteTransaction(txId) {
+  showConfirmModal({ title: 'Delete Transaction', message: 'Delete this transaction submission? This cannot be undone.' }, () => {
+    socket.emit('admin-delete-transaction', { groupId: activeGroupId, txId });
+  });
+}
+function exportTransactions() {
+  const key = adminPasskeyMemory || '';
+  window.open(`/api/transactions/${encodeURIComponent(activeGroupId)}/export?adminKey=${encodeURIComponent(key)}`, '_blank');
+}
+
+// ---------------- TASKS & APPROVALS ----------------
+function openTasksModal() {
+  socket.emit('get-tasks', { groupId: activeGroupId });
+  el('tasksModal').classList.remove('hidden');
+}
+
+function renderTaskStatusButtons(task) {
+  const statuses = ['Pending', 'Completed', 'Rejected'];
+  return `<div class="task-status-row">${statuses.map(s =>
+    `<button class="task-status-btn ${task.status === s ? 'active ' + s.toLowerCase() : ''}" onclick="updateTaskStatusClient('${task.id}','${s}')">${s}</button>`
+  ).join('')}</div>`;
+}
+
+function renderUserTasksList(tasks) {
+  const container = el('userTasksListContainer');
+  if (!tasks.length) {
+    container.innerHTML = `<div class="empty-state"><i class="fa-solid fa-list-check"></i><span>No tasks yet</span><small>Your Desk Officer hasn't assigned any tasks.</small></div>`;
+    return;
+  }
+  container.innerHTML = tasks.map(t => `
+    <div class="task-card">
+      <div class="task-card-title">${t.title}</div>
+      ${t.description ? `<div class="task-card-desc">${t.description}</div>` : ''}
+      ${renderTaskStatusButtons(t)}
+      <div class="task-card-meta">${t.assignedRole ? `Assigned to ${t.assignedRole === 'PARTY A' ? 'Buyer' : 'Seller'}` : 'Assigned to both parties'} · ${new Date(t.createdAt).toLocaleDateString()}</div>
+    </div>`).join('');
+}
+
+function renderAdminTasksList(tasks) {
+  const container = el('adminTasksListContainer');
+  if (!container) return;
+  if (!tasks.length) {
+    container.innerHTML = `<div class="empty-state"><i class="fa-solid fa-clipboard-list"></i><span>No tasks yet</span></div>`;
+    return;
+  }
+  container.innerHTML = tasks.map(t => `
+    <div class="task-card">
+      <div class="task-card-title">${t.title}</div>
+      ${t.description ? `<div class="task-card-desc">${t.description}</div>` : ''}
+      ${renderTaskStatusButtons(t)}
+      <div class="task-card-meta">${t.assignedRole ? `Assigned to ${t.assignedRole === 'PARTY A' ? 'Buyer' : 'Seller'}` : 'Both parties'}
+        <span class="tx-delete-btn admin-plus-only" style="margin-left:10px;" onclick="deleteTaskClient('${t.id}')"><i class="fa-solid fa-trash"></i> Delete</span>
+      </div>
+    </div>`).join('');
+}
+
+socket.on('tasks-list', ({ tasks }) => {
+  tasksCache = tasks;
+  updateTasksDot();
+  renderUserTasksList(tasks);
+  renderAdminTasksList(tasks);
+});
+socket.on('task-created', (task) => {
+  if (!tasksCache.some(t => t.id === task.id)) tasksCache.unshift(task);
+  updateTasksDot();
+  renderUserTasksList(tasksCache);
+  renderAdminTasksList(tasksCache);
+  toast(`New task: ${task.title}`);
+});
+socket.on('task-updated', (task) => {
+  tasksCache = tasksCache.map(t => t.id === task.id ? task : t);
+  updateTasksDot();
+  renderUserTasksList(tasksCache);
+  renderAdminTasksList(tasksCache);
+});
+socket.on('task-deleted', ({ taskId }) => {
+  tasksCache = tasksCache.filter(t => t.id !== taskId);
+  updateTasksDot();
+  renderUserTasksList(tasksCache);
+  renderAdminTasksList(tasksCache);
+});
+
+function createTask() {
+  const title = el('taskTitleInput').value.trim();
+  if (!title) return toast('Task title is required.', true);
+  const description = el('taskDescInput').value.trim();
+  const assignedRole = el('taskAssignedRoleSelect').value;
+  socket.emit('create-task', { groupId: activeGroupId, title, description, assignedRole });
+  el('taskTitleInput').value = '';
+  el('taskDescInput').value = '';
+  toast('Task created.');
+}
+function updateTaskStatusClient(taskId, status) {
+  socket.emit('update-task-status', { groupId: activeGroupId, taskId, status });
+}
+function deleteTaskClient(taskId) {
+  showConfirmModal({ title: 'Delete Task', message: 'Delete this task? This cannot be undone.' }, () => {
+    socket.emit('delete-task', { groupId: activeGroupId, taskId });
+  });
+}
+
+// ---------------- ANNOUNCEMENTS ----------------
+function renderAnnouncementGroupChecks() {
+  const container = el('announcementGroupChecks');
+  if (!container) return;
+  if (!groupsCache.length) { container.innerHTML = `<span style="color:var(--text-muted); font-size:0.76rem;">Loading groups...</span>`; return; }
+  container.innerHTML = groupsCache.map(g =>
+    `<label><input type="checkbox" value="${g.id}" ${g.id === activeGroupId ? 'checked' : ''}> ${escapeHtml(g.name)}</label>`
+  ).join('');
+}
+function sendAnnouncement() {
+  const text = el('announcementText').value.trim();
+  if (!text) return toast('Announcement text is required.', true);
+  const groupIds = Array.from(document.querySelectorAll('#announcementGroupChecks input:checked')).map(i => i.value);
+  if (!groupIds.length) return toast('Select at least one group.', true);
+  socket.emit('create-announcement', { groupIds, text });
+  el('announcementText').value = '';
+  toast(`Announcement posted to ${groupIds.length} group(s).`);
+}
+socket.on('announcement-created', () => { /* the pinned message + chat bubble already reflect it live */ });
+
+// ---------------- LIVE DASHBOARD WIDGETS ----------------
+socket.on('dashboard-widgets-update', (w) => {
+  el('widgetOnlineUsers').innerHTML = w.onlineUsers.length
+    ? w.onlineUsers.map(u => `<div class="widget-item"><span class="widget-item-main">${escapeHtml(u.displayName)}</span><span class="widget-item-sub">${u.isAdmin ? 'Admin' : u.role}</span></div>`).join('')
+    : `<div class="empty-state" style="padding:16px;"><i class="fa-solid fa-user-slash"></i><span>No one online</span></div>`;
+
+  el('widgetRecentTx').innerHTML = w.recentTransactions.length
+    ? w.recentTransactions.map(t => `<div class="widget-item"><span class="widget-item-main">${escapeHtml(t.full_legal_name)}</span><span class="widget-item-sub">${t.total_value || ''} ${t.payment_currency || ''}</span></div>`).join('')
+    : `<div class="empty-state" style="padding:16px;"><i class="fa-solid fa-money-bill-trend-up"></i><span>No transactions yet</span></div>`;
+
+  el('widgetRecentUploads').innerHTML = w.recentUploads.length
+    ? w.recentUploads.map(u => `<div class="widget-item"><span class="widget-item-main">${escapeHtml(u.fileName || 'Attachment')}</span><span class="widget-item-sub">${escapeHtml(u.sender)}</span></div>`).join('')
+    : `<div class="empty-state" style="padding:16px;"><i class="fa-solid fa-cloud-arrow-up"></i><span>No uploads yet</span></div>`;
+
+  el('widgetPendingReviews').textContent = w.pendingReviews;
+});
+
+// ---------------- BRANDING CENTER ----------------
+async function loadBranding() {
+  try {
+    const res = await fetch('/api/branding');
+    brandingCache = await res.json();
+    applyBranding(brandingCache);
+  } catch (err) { /* branding is cosmetic — fail silently and keep defaults */ }
+}
+function applyBranding(b) {
+  if (!b) return;
+  const root = document.documentElement;
+  if (b.accent_color) root.style.setProperty('--accent-cyan', b.accent_color);
+  if (b.accent_color_2) root.style.setProperty('--accent-violet', b.accent_color_2);
+  if (b.welcome_message) el('onboardingWelcomeMessage').textContent = b.welcome_message;
+  if (b.logo_url) {
+    document.querySelectorAll('.vault-icon').forEach(v => { v.innerHTML = `<img src="${b.logo_url}" style="width:100%;height:100%;object-fit:cover;border-radius:13px;" />`; });
+  }
+  if (b.background_url) document.body.style.backgroundImage = `linear-gradient(rgba(5,7,13,0.85), rgba(5,7,13,0.9)), url('${b.background_url}')`;
+}
+function loadBrandingIntoForm() {
+  if (!brandingCache) return;
+  el('brandLogoUrl').value = brandingCache.logo_url || '';
+  el('brandAccentColor').value = brandingCache.accent_color || '#38bdf8';
+  el('brandAccentColor2').value = brandingCache.accent_color_2 || '#8b5cf6';
+  el('brandWelcomeMessage').value = brandingCache.welcome_message || '';
+  el('brandBackgroundUrl').value = brandingCache.background_url || '';
+}
+async function saveBranding() {
+  const payload = {
+    logo_url: el('brandLogoUrl').value.trim(),
+    accent_color: el('brandAccentColor').value,
+    accent_color_2: el('brandAccentColor2').value,
+    welcome_message: el('brandWelcomeMessage').value.trim(),
+    background_url: el('brandBackgroundUrl').value.trim()
+  };
+  try {
+    const res = await fetch('/api/branding', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-admin-key': adminPasskeyMemory || '' },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) { const e = await res.json(); return toast(e.error || 'Failed to save branding.', true); }
+    brandingCache = await res.json();
+    applyBranding(brandingCache);
+    toast('Branding updated for everyone.');
+  } catch (err) { toast('Failed to save branding.', true); }
+}
+function saveGroupBanner() {
+  const bannerUrl = el('groupBannerUrlInput').value.trim();
+  socket.emit('admin-set-group-banner', { groupId: activeGroupId, bannerUrl });
+  toast('Group banner updated.');
+}
+socket.on('group-banner-updated', ({ groupId, bannerUrl }) => {
+  if (groupId === activeGroupId) applyGroupBanner(bannerUrl);
+});
+
+// ---------------- ONBOARDING ----------------
+function maybeShowOnboarding() {
+  if (localStorage.getItem('q_onboarded') === '1') return;
+  el('onboardingOverlay').classList.remove('hidden');
+}
+function dismissOnboarding() {
+  localStorage.setItem('q_onboarded', '1');
+  el('onboardingOverlay').classList.add('hidden');
+}
+
+// ---------------- PUSH NOTIFICATIONS ----------------
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = window.atob(base64);
+  return Uint8Array.from([...rawData].map(c => c.charCodeAt(0)));
+}
+async function togglePushSubscription() {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+    return toast('Push notifications are not supported in this browser.', true);
+  }
+  try {
+    const reg = await navigator.serviceWorker.register('/sw.js');
+    const existing = await reg.pushManager.getSubscription();
+    if (existing) {
+      await fetch('/api/push/unsubscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ endpoint: existing.endpoint }) });
+      await existing.unsubscribe();
+      pushSubscribed = false;
+      el('notifyToggleBtn').classList.remove('subscribed');
+      return toast('Notifications disabled.');
+    }
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') return toast('Notification permission was not granted.', true);
+    const keyRes = await fetch('/api/push/vapid-public-key');
+    const { publicKey } = await keyRes.json();
+    const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(publicKey) });
+    await fetch('/api/push/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionToken, subscription: sub.toJSON() }) });
+    pushSubscribed = true;
+    el('notifyToggleBtn').classList.add('subscribed');
+    toast('Notifications enabled for this device.');
+  } catch (err) {
+    toast('Could not enable notifications on this device/browser.', true);
+  }
+}
+
+// ---------------- KICKOFF ----------------
+// (Initial view state is now handled inside the init-state handler once
+// admin status is known — see hideListPanelMobile()/exitSelectMode() there.)
+loadBranding();
+
+(async function checkExistingPushSubscription() {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+  try {
+    const reg = await navigator.serviceWorker.getRegistration('/sw.js');
+    if (!reg) return;
+    const sub = await reg.pushManager.getSubscription();
+    if (sub) { pushSubscribed = true; el('notifyToggleBtn').classList.add('subscribed'); }
+  } catch (err) { /* not fatal — button just shows the unsubscribed state */ }
+})();
