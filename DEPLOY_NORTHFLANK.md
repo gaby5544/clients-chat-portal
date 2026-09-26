@@ -1,76 +1,106 @@
-# Deploying this app anywhere (host-agnostic)
+# Deploying to Northflank (free, always-on, name it yourself)
 
-Nothing in this codebase is tied to Render or any other specific host. It's
-a plain Node.js + Express + Socket.IO app that reads its port from
-`process.env.PORT`, so it runs on any platform that can run a persistent
-Node process. That excludes pure static hosts (GitHub Pages, Netlify,
-Cloudflare Pages) and serverless-function-only platforms (Vercel Hobby,
-Netlify Functions) — those don't keep a socket connection open, and this
-app's real-time chat needs one.
+Why Northflank over most other free Node hosts: its free **Sandbox** tier
+is always-on (no sleeping/cold-starts, which matters for a live chat app),
+includes a free Postgres database in the same tier, and lets you pick your
+own service/project name, which becomes part of your app's URL. A card is
+required to verify the account, but the Sandbox tier itself doesn't charge
+you as long as you stay within its limits (2 services, 1 database, 2 cron
+jobs).
 
-For a step-by-step walkthrough on a strong free, always-on option, see
-`DEPLOY_NORTHFLANK.md`. This file covers what's true on *any* host.
+If you'd rather not add a card, **Koyeb** is the fallback: no card
+required, one free service, but it scales to zero after inactivity, so the
+first message after a quiet period will be slightly delayed while it wakes
+up. The env vars and steps below are almost identical there — Koyeb's
+equivalent settings live under Service → Environment Variables, and your
+custom name comes from the service name in `your-service.koyeb.app`.
 
-## What every host needs from you
-1. **The repo** — push this project to GitHub (or GitLab/Bitbucket).
-2. **Build command**: `npm install`
-3. **Start command**: `npm start` (runs `node server.js`)
-4. **A port** — leave `PORT` unset; almost every host injects it and
-   `server.js` already reads `process.env.PORT`, falling back to `3000`
-   only for local dev.
-5. **Environment variables** — set these in the host's dashboard (never
-   commit a real `.env` file):
+## 1. Push this repo to GitHub
+Northflank deploys from a Git repo. Create a repo (public or private —
+private is fine, Northflank supports GitHub App installs on private repos)
+and push this project to it.
 
-   | Key | Required? | Notes |
-   |---|---|---|
-   | `DATABASE_URL` | Strongly recommended | Postgres connection string. Without it the app falls back to in-memory storage and **loses all data on every restart**. Free Postgres: [Neon](https://neon.tech) or [Supabase](https://supabase.com) both work from any host. |
-   | `SUPER_ADMIN_PASSKEY` | Yes | Change from the default before going live. |
-   | `ADMIN_PASSKEY` | Yes | Change from the default. |
-   | `MODERATOR_PASSKEY` | Yes | Change from the default. |
-   | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | Optional | For push notifications to survive restarts. Generate once with `npx web-push generate-vapid-keys`. |
-   | `CORS_ORIGIN` | Optional | Set to your deployed URL once you know it; `*` is fine while testing. |
-   | `EMAIL_SERVICE` / `EMAIL_USER` / `EMAIL_PASS` **or** `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` | Optional | For offline-message and transaction email alerts. Leave unset and the app just logs emails to the console instead. |
-   | `EMAIL_FROM` | Optional | Display "from" name/address. |
+## 2. Create a Northflank project
+1. Sign up at [northflank.com](https://northflank.com) and create a new
+   **Project**. The project name becomes part of your services' URLs, so
+   pick something short and clean here, e.g. `quantum-desk`.
 
-   Full reference with comments: `.env.example`.
+## 3. Add the free Postgres database
+1. Inside your project: **Create new → Addon → Postgres**.
+2. Name it (e.g. `quantum-desk-db`) and create it on the free Sandbox
+   plan.
+3. Once provisioned, open it and copy its connection string
+   (`DATABASE_URL`-style, starts with `postgresql://`) — you'll paste this
+   into the app service's environment variables next.
 
-6. **Websocket support** — confirm the host proxies WebSocket/Upgrade
-   requests (every general-purpose Node host does; some pure "static +
-   serverless function" platforms do not).
+## 4. Create the app service
+1. **Create new → Service → Combined (build + deploy from Git)**.
+2. Connect the GitHub repo you pushed in step 1.
+3. **Name the service** — this is the "customize the name" part. Whatever
+   you type here becomes the subdomain segment in your app's free URL:
+   ```
+   https://p01--<service-name>--<project-name>--<account-id>.code.run
+   ```
+   You can rename the service later too. If you own a real domain, add it
+   under Project → Domains once the service is live and Northflank issues
+   a free HTTPS cert for it automatically — then the long `code.run` URL
+   becomes optional.
+4. Build settings:
+   - **Build type**: Buildpack/Dockerfile auto-detect is fine — Northflank
+     detects Node from `package.json` automatically.
+   - **Run command**: `npm start`
+5. **Networking / Ports**: add a public port, `3000`, HTTP, and check
+   "Enable public access" so it gets a URL. (Leave the app's own `PORT` env
+   var unset — Northflank injects the right value and `server.js` already
+   reads `process.env.PORT`.)
+6. **Environment variables** (Service → Environment):
 
-## The three admin tiers
-`roles.js` defines three passkeys. A higher tier can do everything a lower
-one can:
-- **Super Admin** — everything, plus the Branding Center.
-- **Admin** — group/transaction/task management, uploads, kicking users, DMs.
-- **Moderator** — message moderation only (edit/delete/pin, edit history).
+   | Key | Value |
+   |---|---|
+   | `DATABASE_URL` | the Postgres connection string from step 3 |
+   | `SUPER_ADMIN_PASSKEY` | pick a real value — do not keep the default |
+   | `ADMIN_PASSKEY` | pick a real value |
+   | `MODERATOR_PASSKEY` | pick a real value |
+   | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | optional, see note below |
+   | `CORS_ORIGIN` | your `code.run` URL once known, or `*` while testing |
+   | `EMAIL_SERVICE` / `EMAIL_USER` / `EMAIL_PASS` | optional, e.g. Gmail + App Password |
+   | `EMAIL_FROM` | optional display "from" address |
 
-All three log in from the same hidden URL: visit your deployed site once
-with `?officer=1` (e.g. `https://your-app-url/?officer=1`) — this reveals a
-shield icon that then stays visible in that browser tab. Click it and enter
-whichever passkey matches the access level you want to grant.
+   **VAPID keys**: skip them for the first deploy, watch the runtime logs
+   for a line starting with `[push] No VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY
+   set`, copy the two keys it prints, paste them in as env vars, and
+   redeploy once — after that push subscriptions survive restarts.
 
-## File uploads & disk persistence
-Chat attachments are written to a local `uploads/` folder via multer. Most
-free container hosts (this one included) have **ephemeral disks** — files
-written to local disk disappear on the next redeploy (they usually survive
-plain restarts, just not redeploys). Chat messages, users, groups,
-reactions, pins, tasks, announcements, and transactions are all in
-Postgres and are unaffected by this — only attached files are at risk.
+7. Deploy. Watch the build/runtime logs for:
+   ```
+   [storage] Connected to PostgreSQL. Persistence enabled.
+   Quantum Secure Transaction Desk running on port XXXX
+   ```
 
-Two ways to fix it, if attachments need to last:
-- Mount a **persistent volume** at the `uploads/` path, if your host offers
-  one (Northflank, Fly.io, and Railway all do).
-- Swap the multer disk storage in `routes.js` for an S3-compatible object
-  store (Cloudflare R2 and Backblaze B2 both have workable free tiers) —
-  more setup, but survives redeploys on any host, including ones without
-  persistent volumes.
+## 5. Persistent uploads (optional but recommended)
+Chat file attachments are written to a local `uploads/` folder. Northflank
+rebuilds the container filesystem on every redeploy, so without a volume,
+attachments vanish on the next deploy. To keep them:
+1. Service → **Volumes → Add volume**.
+2. Mount path: `/app/uploads` (or wherever your build places the app —
+   check the build logs if unsure).
+3. Pick a size (1 GB is plenty to start).
 
-## Local development
+Everything else — messages, users, groups, transactions, tasks,
+announcements — is in Postgres and is unaffected either way.
+
+## 6. First login
+- Open your deployed URL. Regular users just pick a role (Buyer/Seller)
+  and join.
+- To log in as Super Admin/Admin/Moderator, visit your URL once with
+  `?officer=1` appended (e.g.
+  `https://p01--quantum-desk--quantum-desk--yourid.code.run/?officer=1`)
+  — this reveals a shield icon that stays visible in that browser after.
+  Click it and enter the matching passkey.
+
+## Local development (unchanged, works the same regardless of host)
 ```bash
 cp .env.example .env
 npm install
 npm start
 ```
-Without `DATABASE_URL` set, it runs on in-memory storage automatically —
-fine for a quick local check, but everything resets when you stop it.

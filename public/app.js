@@ -44,6 +44,10 @@ let currentAdminRole = null;
 let tasksCache = [];
 let brandingCache = null;
 let pushSubscribed = false;
+let myRole = null; // 'PARTY A' | 'PARTY B' | null (admin) — as confirmed by the server, not just the dropdown
+let currentGroupCustomNames = { A: 'Buyer', B: 'Seller' };
+let lastPresenceUsers = [];
+let pendingInviteLinksGroupId = null; // set right after create-group, consumed once init-state for it arrives
 
 const ROLE_LEVEL = { MODERATOR: 1, ADMIN: 2, SUPER_ADMIN: 3 };
 function hasMinRoleClient(role, minRole) {
@@ -205,8 +209,10 @@ socket.on('error-msg', (msg) => toast(msg, true));
 socket.on('init-state', async (data) => {
   isAdminConfirmed = data.isAdminConfirmed;
   currentAdminRole = data.adminRole || null;
+  myRole = data.role || null;
   currentSocketId = data.socketId;
   activeGroupId = data.group.id;
+  currentGroupCustomNames = data.group.customNames || { A: 'Buyer', B: 'Seller' };
   _myToken = data.sessionToken; // must be set before rendering messages below
   document.body.classList.toggle('is-admin', isAdminConfirmed);
   document.body.classList.remove('role-admin', 'role-super_admin', 'role-moderator');
@@ -248,6 +254,17 @@ socket.on('init-state', async (data) => {
   } else {
     maybeShowOnboarding();
   }
+
+  if (pendingInviteLinksGroupId && pendingInviteLinksGroupId === activeGroupId) {
+    pendingInviteLinksGroupId = null;
+    openInviteLinksModal(activeGroupId, currentGroupCustomNames.A, currentGroupCustomNames.B);
+  }
+
+  // The authoritative presence list for this group arrives moments later via
+  // 'presence-update'; render an empty (all-offline) cluster now so the header
+  // never flashes stale data left over from a previously viewed group.
+  lastPresenceUsers = [];
+  renderPresenceBadges(lastPresenceUsers);
 });
 
 // ---------------- MESSAGES ----------------
@@ -735,58 +752,39 @@ function switchGroup(groupId) {
 }
 
 socket.on('group-created-and-switch', ({ newGroupId }) => {
+  pendingInviteLinksGroupId = newGroupId; // consumed by init-state once we're in the new room
   activeGroupId = newGroupId;
   joinSession(adminPasskeyMemory);
-  if (pendingGroupNames) {
-    const { buyer, seller } = pendingGroupNames;
-    if (buyer) socket.emit('rename-party', { groupId: newGroupId, party: 'A', newName: buyer });
-    if (seller) socket.emit('rename-party', { groupId: newGroupId, party: 'B', newName: seller });
-    showInviteLinksModal(newGroupId, buyer || 'Buyer', seller || 'Seller');
-    pendingGroupNames = null;
-  }
 });
 socket.on('force-room-switch', ({ newGroupId }) => { activeGroupId = newGroupId; joinSession(adminPasskeyMemory); });
 
 // Renaming a party relabels new messages going forward; it deliberately does
 // NOT force a rejoin (that used to cause a disconnect/reconnect cycle that
-// spammed the chat with duplicate system messages). Just confirm it worked.
-socket.on('party-renamed', ({ party }) => {
+// spammed the chat with duplicate system messages). Just confirm it worked,
+// and if it's the group the officer is currently looking at, update the
+// header badges immediately so the new name shows without a reload.
+socket.on('party-renamed', ({ groupId, party, customNames }) => {
+  if (groupId === activeGroupId && customNames) {
+    currentGroupCustomNames = customNames;
+    renderPresenceBadges(lastPresenceUsers);
+  }
   toast(`Party ${party} renamed. They'll see their new label after their next reload.`);
   socket.emit('get-all-groups');
 });
 
-let pendingGroupNames = null; // { buyer, seller } — carried across the create-group round trip
-let generatedLinks = { buyer: '', seller: '' };
-
 function createNewGroup() {
-  el('newGroupNameInput').value = '';
-  el('newGroupBuyerNameInput').value = '';
-  el('newGroupSellerNameInput').value = '';
+  el('createGroupNameInput').value = '';
+  el('createGroupNameAInput').value = '';
+  el('createGroupNameBInput').value = '';
   el('createGroupModal').classList.remove('hidden');
-  setTimeout(() => el('newGroupNameInput').focus(), 50);
+  el('createGroupNameInput').focus();
 }
-function submitCreateGroup() {
-  const groupName = el('newGroupNameInput').value.trim();
-  const buyer = el('newGroupBuyerNameInput').value.trim();
-  const seller = el('newGroupSellerNameInput').value.trim();
-  pendingGroupNames = { buyer, seller };
+function submitCreateGroupModal() {
+  const groupName = el('createGroupNameInput').value.trim();
+  const customNameA = el('createGroupNameAInput').value.trim();
+  const customNameB = el('createGroupNameBInput').value.trim();
   closeModal('createGroupModal');
-  socket.emit('create-group', { groupName });
-}
-function showInviteLinksModal(groupId, buyerLabel, sellerLabel) {
-  generatedLinks.buyer = `${window.location.origin}/?groupId=${groupId}&role=PARTY%20A`;
-  generatedLinks.seller = `${window.location.origin}/?groupId=${groupId}&role=PARTY%20B`;
-  el('inviteLinksBuyerLabel').textContent = buyerLabel;
-  el('inviteLinksSellerLabel').textContent = sellerLabel;
-  el('inviteLinksModal').classList.remove('hidden');
-}
-function copyGeneratedLink(who) {
-  const link = generatedLinks[who];
-  if (!link) return;
-  navigator.clipboard.writeText(link).then(
-    () => toast(`Link copied:\n${link}`),
-    () => toast(`Copy this link manually: ${link}`, true)
-  );
+  socket.emit('create-group', { groupName, customNameA, customNameB });
 }
 function deleteCurrentGroup() {
   showConfirmModal({ title: 'Delete Group', message: 'Delete the active group? All its messages and transactions will be removed. This cannot be undone.' }, () => {
@@ -810,9 +808,26 @@ function copyInviteLink(party) {
   // party: 'A' -> locks visitor into PARTY A, 'B' -> locks into PARTY B,
   // undefined -> old unlocked link (kept for backwards compatibility, not shown in UI anymore).
   const roleParam = party === 'A' ? '&role=PARTY%20A' : party === 'B' ? '&role=PARTY%20B' : '';
-  const activeGroup = groupsCache.find(g => g.id === activeGroupId);
-  const label = party === 'A' ? (activeGroup?.customNames?.A || 'Buyer') : party === 'B' ? (activeGroup?.customNames?.B || 'Seller') : 'Invite';
+  const label = party === 'A' ? (currentGroupCustomNames.A || 'Buyer') : party === 'B' ? (currentGroupCustomNames.B || 'Seller') : 'Invite';
   const link = `${window.location.origin}/?groupId=${activeGroupId}${roleParam}`;
+  navigator.clipboard.writeText(link).then(
+    () => toast(`${label} link copied:\n${link}`),
+    () => toast(`Copy this link manually: ${link}`, true)
+  );
+}
+
+// Shown once, right after a new group is created, so both links can be
+// grabbed and sent out in one go instead of hunting through the Controls tab.
+function openInviteLinksModal(groupId, nameA, nameB) {
+  el('inviteLinkALabel').textContent = nameA || 'Buyer';
+  el('inviteLinkBLabel').textContent = nameB || 'Seller';
+  el('inviteLinkAValue').textContent = `${window.location.origin}/?groupId=${groupId}&role=PARTY%20A`;
+  el('inviteLinkBValue').textContent = `${window.location.origin}/?groupId=${groupId}&role=PARTY%20B`;
+  el('inviteLinksModal').classList.remove('hidden');
+}
+function copyShownInviteLink(party) {
+  const link = (party === 'A' ? el('inviteLinkAValue') : el('inviteLinkBValue')).textContent;
+  const label = (party === 'A' ? el('inviteLinkALabel') : el('inviteLinkBLabel')).textContent;
   navigator.clipboard.writeText(link).then(
     () => toast(`${label} link copied:\n${link}`),
     () => toast(`Copy this link manually: ${link}`, true)
@@ -886,18 +901,52 @@ function clearOfflineUsers() {
 socket.on('directory-cleared', ({ removed }) => toast(`Removed ${removed} offline user(s) from the directory.`));
 
 // ---------------- PRESENCE ----------------
-// `users` is only ever the set of people currently connected to THIS group, so
-// its absence from the list is exactly "offline" — no chat-log spam needed.
-socket.on('presence-update', (users) => {
-  const peer = users.find(u => u.sessionToken !== myToken() && !u.isAdmin);
-  const dot = el('peerStatusDot'); const text = el('peerStatusText');
-  if (peer) { dot.className = 'status-dot online'; text.textContent = `${peer.displayName}: Online`; }
-  else { dot.className = 'status-dot offline'; text.textContent = 'Counterparty: Offline'; }
+function presenceBadgeHtml(label, isOnline) {
+  return `<div class="presence-badge">
+    <div class="status-dot ${isOnline ? 'online' : 'offline'}"></div>
+    <span>${escapeHtml(label)}: ${isOnline ? 'Online' : 'Offline'}</span>
+  </div>`;
+}
 
-  const adminOnline = users.some(u => u.isAdmin);
-  const adminDot = el('adminStatusDot'); const adminText = el('adminStatusText');
-  adminDot.className = `status-dot ${adminOnline ? 'online' : 'offline'}`;
-  adminText.textContent = `Desk Officer: ${adminOnline ? 'Online' : 'Offline'}`;
+// Builds the header presence cluster. What each side sees is intentionally
+// different:
+//  - Admin/Desk Officer: their own "You: Online", plus the Buyer's status and
+//    the Seller's status (labelled with whatever custom name is set) — full
+//    visibility across both parties in this group.
+//  - Buyer or Seller: never "You: Online" (that badge only makes sense for
+//    the officer watching the desk), never the literal "Party A"/"Party B"
+//    slot names — only whether the Desk Officer is currently reachable, and
+//    whether the other party in this transaction is online.
+function renderPresenceBadges(users) {
+  const cluster = el('presenceCluster');
+  if (!cluster) return;
+
+  if (isAdminConfirmed) {
+    const buyer = users.find(u => !u.isAdmin && u.role === 'PARTY A');
+    const seller = users.find(u => !u.isAdmin && u.role === 'PARTY B');
+    cluster.innerHTML = [
+      presenceBadgeHtml('You', true),
+      presenceBadgeHtml(currentGroupCustomNames.A || 'Buyer', !!(buyer && buyer.isOnline)),
+      presenceBadgeHtml(currentGroupCustomNames.B || 'Seller', !!(seller && seller.isOnline))
+    ].join('');
+    return;
+  }
+
+  const anyAdminOnline = users.some(u => u.isAdmin && u.isOnline);
+  const counterpartRole = myRole === 'PARTY B' ? 'PARTY A' : 'PARTY B';
+  const counterpartLabel = counterpartRole === 'PARTY A'
+    ? (currentGroupCustomNames.A || 'Buyer')
+    : (currentGroupCustomNames.B || 'Seller');
+  const counterpart = users.find(u => !u.isAdmin && u.role === counterpartRole);
+  cluster.innerHTML = [
+    presenceBadgeHtml('Admin', anyAdminOnline),
+    presenceBadgeHtml(counterpartLabel, !!(counterpart && counterpart.isOnline))
+  ].join('');
+}
+
+socket.on('presence-update', (users) => {
+  lastPresenceUsers = users;
+  renderPresenceBadges(users);
 });
 
 // ---------------- ADMIN STATS ----------------

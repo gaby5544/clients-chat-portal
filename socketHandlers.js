@@ -1,59 +1,730 @@
-require('dotenv').config();
-const express = require('express');
-const http = require('http');
-const path = require('path');
-const rateLimit = require('express-rate-limit');
-const { Server } = require('socket.io');
+const { store } = require('./db');
+const { escapeHtml, sanitizeText, RateLimiter } = require('./security');
+const { notifyOfflineMessage, notifyTransactionSubmitted } = require('./email');
+const { resolveAdminRole, hasMinRole } = require('./roles');
+const { sendPushToUser } = require('./webpush');
 
-const { initStore } = require('./db');
-const { registerSocketHandlers } = require('./socketHandlers');
-const { buildRouter } = require('./routes');
+const messageLimiter = new RateLimiter({ windowMs: 10000, max: 20 });   // 20 msgs / 10s per socket
+const actionLimiter = new RateLimiter({ windowMs: 10000, max: 30 });    // generic admin/action guard
+setInterval(() => { messageLimiter.sweep(); actionLimiter.sweep(); }, 60000).unref();
 
-const app = express();
-const server = http.createServer(app);
-const io = new Server(server, {
-  cors: { origin: process.env.CORS_ORIGIN || '*' },
-  maxHttpBufferSize: 2 * 1024 * 1024 // 2MB cap on socket payloads (files go through /api/upload instead)
-});
+function nowTime() {
+  return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
 
-// Basic hardening
-app.disable('x-powered-by');
-app.use(express.json({ limit: '1mb' }));
-app.use(express.urlencoded({ extended: true, limit: '1mb' }));
+function publicUser(u) {
+  if (!u) return null;
+  return {
+    sessionToken: u.session_token,
+    displayName: u.display_name,
+    role: u.role,
+    isAdmin: u.is_admin,
+    adminRole: u.admin_role || null,
+    isOnline: u.is_online,
+    lastSeen: u.last_seen
+  };
+}
 
-// Global light rate limit on all HTTP traffic (Socket.IO handshake included,
-// since it rides over HTTP first).
-app.use(rateLimit({ windowMs: 60 * 1000, max: 300, standardHeaders: true, legacyHeaders: false }));
+async function publicMessage(m) {
+  const [reactions, status] = await Promise.all([
+    store.getReactionSummary(m.id),
+    store.getMessageStatus(m.id)
+  ]);
+  return {
+    id: m.id,
+    groupId: m.group_id,
+    sender: m.sender_name,
+    senderRole: m.sender_role,
+    senderToken: m.sender_token,
+    text: m.text,
+    fileUrl: m.file_url,
+    fileType: m.file_type,
+    fileName: m.file_name,
+    replyToId: m.reply_to_id,
+    forwardedFrom: m.forwarded_from,
+    targetLang: m.target_lang,
+    isEdited: m.is_edited,
+    time: nowTime(),
+    createdAt: m.created_at,
+    reactions,
+    status
+  };
+}
 
-app.use(express.static(path.join(__dirname, 'public'), {
-  setHeaders: (res, filePath) => {
-    // HTML/JS/CSS must always be revalidated — this app is actively updated,
-    // and a stale cached app.js after a redeploy causes exactly the kind of
-    // "half the features silently don't work" symptom this project has hit
-    // before. Uploaded user files (served separately in routes.js) are fine
-    // to cache normally since they're immutable once created.
-    if (/\.(html|js|css)$/.test(filePath)) {
-      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-      res.setHeader('Pragma', 'no-cache');
-      res.setHeader('Expires', '0');
+function publicTask(t) {
+  return {
+    id: t.id, groupId: t.group_id, title: t.title, description: t.description,
+    status: t.status, createdBy: t.created_by, assignedRole: t.assigned_role,
+    createdAt: t.created_at, updatedAt: t.updated_at
+  };
+}
+
+function publicAnnouncement(a) {
+  return { id: a.id, groupId: a.group_id, messageId: a.message_id, text: a.text, createdBy: a.created_by, createdAt: a.created_at };
+}
+
+async function groupSummary(g, viewerToken) {
+  const messages = await store.getMessagesForGroup(g.id, 1);
+  const last = messages[messages.length - 1];
+  const unread = viewerToken ? (await store.getUnreadCounts(viewerToken))[g.id] || 0 : 0;
+  return {
+    id: g.id,
+    name: g.name,
+    customNames: { A: g.custom_name_a, B: g.custom_name_b },
+    fileUploadsEnabled: g.file_uploads_enabled,
+    highlighted: g.highlighted,
+    transactionFormEnabled: g.transaction_form_enabled,
+    bannerUrl: g.banner_url || null,
+    lastMessagePreview: last ? (last.file_url ? `📎 ${last.file_name || 'Attachment'}` : last.text).slice(0, 80) : 'No messages yet...',
+    unreadCount: unread
+  };
+}
+
+function registerSocketHandlers(io, socket) {
+  const activeSockets = io._activeSockets || (io._activeSockets = new Map()); // socketId -> {sessionToken, groupId, isAdmin, adminRole}
+  const pendingDisconnects = io._pendingDisconnects || (io._pendingDisconnects = new Map()); // sessionToken -> timeout handle
+  const DISCONNECT_GRACE_MS = 8000; // absorb brief network blips / tab backgrounding without spamming the chat
+
+  function meta() { return activeSockets.get(socket.id); }
+  function metaHasMinRole(minRole) {
+    const m = meta();
+    return !!m && hasMinRole(m.adminRole, minRole);
+  }
+
+  async function broadcastPresence(groupId) {
+    const all = await store.getAllUsers();
+    const tokensInGroup = new Set(
+      Array.from(activeSockets.values()).filter(v => v.groupId === groupId).map(v => v.sessionToken)
+    );
+    const roomUsers = all.filter(u => tokensInGroup.has(u.session_token)).map(publicUser);
+    io.to(groupId).emit('presence-update', roomUsers);
+  }
+
+  async function broadcastDirectory() {
+    const all = await store.getAllUsers();
+    io.to('admins').emit('user-directory', all.map(publicUser));
+  }
+
+  async function broadcastGroupsList(viewerSocket) {
+    const groups = await store.getAllGroups();
+    if (viewerSocket) {
+      const m = activeSockets.get(viewerSocket.id);
+      if (!m || !hasMinRole(m.adminRole, 'ADMIN')) return; // silently ignore for non-admins/moderators
+      const list = await Promise.all(groups.map(g => groupSummary(g, m.sessionToken)));
+      viewerSocket.emit('all-groups-list', list);
+    } else {
+      const list = await Promise.all(groups.map(g => groupSummary(g, null)));
+      io.to('admins').emit('all-groups-list', list);
     }
   }
-}));
-app.use(buildRouter());
 
-io.on('connection', (socket) => registerSocketHandlers(io, socket));
+  async function broadcastStats() {
+    const stats = await store.getStats();
+    io.to('admins').emit('admin-stats', stats);
+  }
 
-const PORT = process.env.PORT || 3000;
+  async function broadcastDashboardWidgets() {
+    const widgets = await store.getDashboardWidgets();
+    io.to('admins').emit('dashboard-widgets-update', widgets);
+  }
 
-initStore()
-  .then(() => {
-    server.listen(PORT, () => {
-      console.log(`Quantum Secure Transaction Desk running on port ${PORT}`);
+  async function pushNotificationIfOffline(targetToken, payload) {
+    const targetOnline = Array.from(activeSockets.values()).some(v => v.sessionToken === targetToken);
+    if (targetOnline) return;
+    const user = await store.getUser(targetToken);
+    await store.addNotification(targetToken, 'message', payload);
+    if (user && user.email) {
+      await notifyOfflineMessage(user.email, payload);
+    }
+    await sendPushToUser(targetToken, {
+      title: `New message from ${payload.fromName}`,
+      body: payload.text,
+      url: '/'
     });
-  })
-  .catch((err) => {
-    console.error('Failed to initialize data store:', err);
-    process.exit(1);
+  }
+
+  // ---------------- JOIN ROOM ----------------
+  socket.on('join-room', async ({ groupId, role, adminKey, sessionToken, email }) => {
+    try {
+      if (!sessionToken || typeof sessionToken !== 'string') return;
+      groupId = sanitizeText(groupId || 'default-group', 100);
+      const adminRole = resolveAdminRole(adminKey);
+      const isAdmin = !!adminRole;
+
+      let group = await store.getGroup(groupId);
+      if (!group) {
+        if (!isAdmin) {
+          return socket.emit('error-msg', 'This group does not exist, or your invite link is invalid. Please check the link with your Desk Officer.');
+        }
+        group = await store.createGroupIfMissing(groupId, `Transaction Group #${(await store.getAllGroups()).length + 1}`);
+      }
+
+      const safeRole = ['PARTY A', 'PARTY B'].includes(role) ? role : 'PARTY A';
+      const displayName = isAdmin
+        ? `Desk Officer (${adminRole === 'SUPER_ADMIN' ? 'Super Admin' : adminRole === 'MODERATOR' ? 'Moderator' : 'Admin'})`
+        : (safeRole === 'PARTY A' ? group.custom_name_a : group.custom_name_b);
+
+      // A reconnect within the grace window (brief network blip / tab
+      // backgrounding) just clears the pending "went offline" timer below —
+      // it does not need any special handling here any more since presence
+      // is no longer logged into the chat as a message.
+      if (pendingDisconnects.has(sessionToken)) {
+        clearTimeout(pendingDisconnects.get(sessionToken));
+        pendingDisconnects.delete(sessionToken);
+      }
+
+      const user = await store.upsertUser({
+        sessionToken,
+        displayName,
+        role: isAdmin ? 'ADMINISTRATOR' : safeRole,
+        isAdmin,
+        adminRole,
+        email: isValidEmailSafe(email) ? email : undefined,
+        isOnline: true
+      });
+
+      socket.rooms.forEach(r => { if (r !== socket.id) socket.leave(r); });
+      socket.join(groupId);
+      if (isAdmin) socket.join('admins');
+
+      activeSockets.set(socket.id, { sessionToken, groupId, isAdmin, adminRole });
+
+      const [messages, pinnedMessages, unreadCounts, announcements, tasks] = await Promise.all([
+        store.getMessagesForGroup(groupId),
+        store.getPinnedMessages(groupId),
+        store.getUnreadCounts(sessionToken),
+        store.getAnnouncements(groupId),
+        store.getTasks(groupId)
+      ]);
+
+      await store.clearUnread(sessionToken, groupId);
+
+      socket.emit('init-state', {
+        group: await groupSummary(group, sessionToken),
+        isAdminConfirmed: isAdmin,
+        adminRole,
+        role: isAdmin ? null : safeRole,
+        socketId: socket.id,
+        sessionToken,
+        messages: await Promise.all(messages.map(publicMessage)),
+        pinnedMessages: await Promise.all(pinnedMessages.map(publicMessage)),
+        unreadCounts,
+        announcements: announcements.map(publicAnnouncement),
+        tasks: tasks.map(publicTask)
+      });
+
+      // Presence (the header badges + User Directory) is how joins are surfaced
+      // now — they are deliberately NOT logged as chat messages any more, so the
+      // transaction log stays clean for both parties.
+      await broadcastPresence(groupId);
+      await broadcastDirectory();
+      await broadcastGroupsList();
+      if (isAdmin) { await broadcastStats(); await broadcastDashboardWidgets(); }
+    } catch (err) {
+      console.error('[join-room] error:', err);
+      socket.emit('error-msg', 'Failed to join room.');
+    }
   });
 
-process.on('unhandledRejection', (err) => console.error('Unhandled rejection:', err));
+  // ---------------- SEND MESSAGE ----------------
+  socket.on('send-message', async ({ groupId, text, targetLang, replyToId, fileUrl, fileType, fileName }) => {
+    try {
+      if (!messageLimiter.allow(socket.id)) {
+        return socket.emit('error-msg', 'You are sending messages too quickly. Please slow down.');
+      }
+      const m = meta();
+      if (!m) return;
+      const user = await store.getUser(m.sessionToken);
+      const group = await store.getGroup(groupId);
+      if (!user || !group) return;
+
+      const cleanText = sanitizeText(text, 4000);
+      if (!cleanText && !fileUrl) return;
+      if (fileUrl && !group.file_uploads_enabled) {
+        return socket.emit('error-msg', 'File uploads are currently disabled by the Admin for this group.');
+      }
+
+      const msg = await store.insertMessage({
+        id: 'msg-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
+        groupId,
+        senderToken: user.session_token,
+        senderName: user.display_name,
+        senderRole: user.role,
+        text: escapeHtml(cleanText || (fileName ? `Shared file: ${fileName}` : '')),
+        targetLang: targetLang || 'en',
+        replyToId: replyToId || null,
+        fileUrl: fileUrl || null,
+        fileType: fileType || null,
+        fileName: fileName ? escapeHtml(fileName) : null
+      });
+
+      const roomTokens = new Set(Array.from(activeSockets.values()).filter(v => v.groupId === groupId).map(v => v.sessionToken));
+      for (const token of roomTokens) {
+        if (token === user.session_token) continue;
+        await store.markDelivered(msg.id, token);
+      }
+
+      const payload = await publicMessage(msg);
+      io.to(groupId).emit('message', payload);
+      await broadcastGroupsList();
+      await broadcastStats();
+      if (fileUrl) await broadcastDashboardWidgets();
+
+      const allUsers = await store.getAllUsers();
+      const onlineTokens = new Set(Array.from(activeSockets.values()).map(v => v.sessionToken));
+      for (const other of allUsers) {
+        if (other.session_token === user.session_token) continue;
+        await store.incrementUnread(other.session_token, groupId);
+        if (!onlineTokens.has(other.session_token)) {
+          await pushNotificationIfOffline(other.session_token, {
+            fromName: user.display_name,
+            groupName: group.name,
+            text: cleanText.slice(0, 200)
+          });
+        }
+      }
+    } catch (err) {
+      console.error('[send-message] error:', err);
+    }
+  });
+
+  // ---------------- MARK READ (also drives read receipts) ----------------
+  socket.on('mark-group-read', async ({ groupId }) => {
+    const m = meta();
+    if (!m) return;
+    await store.clearUnread(m.sessionToken, groupId);
+    const updatedIds = await store.markGroupRead(groupId, m.sessionToken, m.sessionToken);
+    if (updatedIds.length) io.to(groupId).emit('message-status-bulk-update', { messageIds: updatedIds, status: 'read' });
+    await broadcastGroupsList(socket);
+  });
+
+  // ---------------- MODERATOR+: EDIT MESSAGE ----------------
+  socket.on('admin-edit-message', async ({ groupId, messageId, newText }) => {
+    if (!metaHasMinRole('MODERATOR')) return;
+    const clean = sanitizeText(newText, 4000);
+    if (!clean) return;
+    const updated = await store.editMessage(messageId, escapeHtml(clean), meta().sessionToken);
+    if (!updated) return;
+    io.to(groupId).emit('message-edited', { groupId, messageId, newText: updated.text });
+    io.to('admins').emit('message-edited-admin-flag', { groupId, messageId, isEdited: true });
+  });
+
+  // ---------------- MODERATOR+: GET EDIT HISTORY ----------------
+  socket.on('admin-get-edit-history', async ({ messageId }) => {
+    if (!metaHasMinRole('MODERATOR')) return;
+    const history = await store.getMessageEditHistory(messageId);
+    socket.emit('edit-history-result', { messageId, history });
+  });
+
+  // ---------------- MODERATOR+: PIN / UNPIN ----------------
+  socket.on('admin-toggle-pin-message', async ({ groupId, messageId }) => {
+    if (!metaHasMinRole('MODERATOR')) return;
+    const pinned = await store.togglePin(groupId, messageId);
+    io.to(groupId).emit('pinned-messages-updated', {
+      groupId,
+      pinnedMessages: await Promise.all(pinned.map(publicMessage))
+    });
+  });
+
+  // ---------------- MODERATOR+: BULK DELETE MESSAGES ----------------
+  socket.on('admin-bulk-delete-messages', async ({ groupId, messageIds }) => {
+    if (!metaHasMinRole('MODERATOR') || !Array.isArray(messageIds)) return;
+    await store.deleteMessages(groupId, messageIds);
+    io.to(groupId).emit('messages-bulk-deleted', { groupId, messageIds });
+    const pinned = await store.getPinnedMessages(groupId);
+    io.to(groupId).emit('pinned-messages-updated', { groupId, pinnedMessages: await Promise.all(pinned.map(publicMessage)) });
+    await broadcastGroupsList();
+  });
+
+  // ---------------- ADMIN+: TOGGLE UPLOAD PERMISSION ----------------
+  socket.on('admin-toggle-upload-permission', async ({ groupId }) => {
+    if (!metaHasMinRole('ADMIN')) return;
+    const group = await store.getGroup(groupId);
+    if (!group) return;
+    const updated = await store.updateGroup(groupId, { file_uploads_enabled: !group.file_uploads_enabled });
+    io.to(groupId).emit('upload-permission-changed', { groupId, fileUploadsEnabled: updated.file_uploads_enabled });
+  });
+
+  // ---------------- ADMIN+: TRANSACTION FORM TOGGLE ----------------
+  socket.on('admin-toggle-transaction-form', async ({ groupId }) => {
+    if (!metaHasMinRole('ADMIN')) return;
+    const group = await store.getGroup(groupId);
+    if (!group) return;
+    const updated = await store.updateGroup(groupId, { transaction_form_enabled: !group.transaction_form_enabled });
+    io.to(groupId).emit('transaction-form-status', { groupId, enabled: updated.transaction_form_enabled });
+  });
+
+  // ---------------- SUBMIT TRANSACTION (any authenticated user) ----------------
+  socket.on('submit-transaction', async ({ groupId, formData }) => {
+    if (!actionLimiter.allow(socket.id)) return;
+    const m = meta();
+    if (!m) return;
+    const group = await store.getGroup(groupId);
+    const user = await store.getUser(m.sessionToken);
+    if (!group || !group.transaction_form_enabled || !formData) return;
+
+    const { validateTransactionForm } = require('./security');
+    const { valid, errors } = validateTransactionForm(formData);
+    if (!valid) return socket.emit('error-msg', `Transaction form error: ${errors.join(', ')}`);
+
+    const tx = await store.insertTransaction({
+      group_id: groupId,
+      full_legal_name: escapeHtml(sanitizeText(formData.full_legal_name, 200)),
+      country: escapeHtml(sanitizeText(formData.country, 100)),
+      role: escapeHtml(sanitizeText(formData.role, 50)),
+      asset_type: escapeHtml(sanitizeText(formData.asset_type, 200)),
+      asset_description: escapeHtml(sanitizeText(formData.asset_description, 1000)),
+      quantity: escapeHtml(sanitizeText(formData.quantity, 100)),
+      unit_price: escapeHtml(sanitizeText(formData.unit_price, 100)),
+      total_value: escapeHtml(sanitizeText(formData.total_value, 100)),
+      payment_currency: escapeHtml(sanitizeText(formData.payment_currency, 20)),
+      payment_method: escapeHtml(sanitizeText(formData.payment_method, 100)),
+      payment_terms: escapeHtml(sanitizeText(formData.payment_terms, 500)),
+      notes: escapeHtml(sanitizeText(formData.notes, 1000)),
+      submitted_by: user ? user.display_name : 'Unknown'
+    });
+
+    io.to('admins').emit('transaction-submitted', { groupId, transaction: tx });
+    await broadcastStats();
+    await broadcastDashboardWidgets();
+
+    // Let both parties in this group know a form was submitted (as a normal chat
+    // notice) without exposing the sensitive form details to them — only the
+    // admin panel (above) receives the full transaction data.
+    const noticeMsg = await store.insertMessage({
+      id: 'sys-' + Date.now() + Math.random().toString(36).slice(2, 6),
+      groupId,
+      senderName: 'SYSTEM',
+      text: `📄 Transaction form submitted by ${escapeHtml(tx.submitted_by)}. The Desk Officer has been notified.`
+    });
+    io.to(groupId).emit('message', await publicMessage(noticeMsg));
+
+    const admins = (await store.getAllUsers()).filter(u => u.is_admin && u.email);
+    for (const admin of admins) {
+      await notifyTransactionSubmitted(admin.email, { submitterName: tx.submitted_by, groupName: group.name });
+    }
+    socket.emit('transaction-submit-ack', { success: true, txId: tx.id });
+  });
+
+  socket.on('admin-get-transactions', async ({ groupId }) => {
+    if (!metaHasMinRole('ADMIN')) return;
+    const [rows, group] = await Promise.all([store.getTransactions(groupId), store.getGroup(groupId)]);
+    socket.emit('transactions-list', { groupId, transactions: rows, formEnabled: !!(group && group.transaction_form_enabled) });
+  });
+
+  socket.on('admin-delete-transaction', async ({ groupId, txId }) => {
+    if (!metaHasMinRole('ADMIN')) return;
+    await store.deleteTransaction(groupId, txId);
+    io.to('admins').emit('transaction-deleted', { groupId, txId });
+    await broadcastStats();
+    await broadcastDashboardWidgets();
+  });
+
+  // ---------------- REACTIONS (any authenticated user) ----------------
+  socket.on('toggle-reaction', async ({ groupId, messageId, emoji }) => {
+    const m = meta();
+    if (!m || typeof emoji !== 'string' || emoji.length > 8) return;
+    const summary = await store.toggleReaction(messageId, m.sessionToken, emoji);
+    io.to(groupId).emit('reaction-updated', { messageId, reactions: summary });
+  });
+
+  // ---------------- ADMIN+: GROUP MANAGEMENT ----------------
+  socket.on('create-group', async ({ groupName, customNameA, customNameB }) => {
+    if (!metaHasMinRole('ADMIN')) return;
+    const newId = 'group-' + Date.now();
+    const name = sanitizeText(groupName, 100) || `General Transaction Group #${(await store.getAllGroups()).length + 1}`;
+    await store.createGroupIfMissing(newId, escapeHtml(name));
+
+    // Every group is a private, one-buyer-one-seller room. The Desk Officer can
+    // put each client's own name on their link right away instead of renaming
+    // it later — falls back to the generic "Buyer"/"Seller" default otherwise.
+    const cleanA = escapeHtml(sanitizeText(customNameA, 100));
+    const cleanB = escapeHtml(sanitizeText(customNameB, 100));
+    if (cleanA || cleanB) {
+      const fields = {};
+      if (cleanA) fields.custom_name_a = cleanA;
+      if (cleanB) fields.custom_name_b = cleanB;
+      await store.updateGroup(newId, fields);
+    }
+
+    const group = await store.getGroup(newId);
+    await broadcastGroupsList();
+    socket.emit('group-created-and-switch', {
+      newGroupId: newId,
+      customNames: { A: group.custom_name_a, B: group.custom_name_b }
+    });
+  });
+
+  socket.on('delete-group', async ({ groupId }) => {
+    if (!metaHasMinRole('ADMIN')) return;
+    const all = await store.getAllGroups();
+    if (all.length <= 1) return socket.emit('error-msg', 'Cannot delete the last remaining group!');
+    await store.deleteGroup(groupId);
+    await broadcastGroupsList();
+    const remaining = (await store.getAllGroups())[0];
+    io.to(groupId).emit('force-room-switch', { newGroupId: remaining.id });
+  });
+
+  socket.on('bulk-delete-groups', async ({ groupIds }) => {
+    if (!metaHasMinRole('ADMIN') || !Array.isArray(groupIds)) return;
+    for (const gid of groupIds) {
+      const all = await store.getAllGroups();
+      if (all.length > 1) {
+        await store.deleteGroup(gid);
+        const remaining = (await store.getAllGroups())[0];
+        io.to(gid).emit('force-room-switch', { newGroupId: remaining.id });
+      }
+    }
+    await broadcastGroupsList();
+  });
+
+  socket.on('toggle-highlight-group', async ({ groupId }) => {
+    if (!metaHasMinRole('ADMIN')) return;
+    const group = await store.getGroup(groupId);
+    if (!group) return;
+    await store.updateGroup(groupId, { highlighted: !group.highlighted });
+    await broadcastGroupsList();
+  });
+
+  socket.on('rename-party', async ({ groupId, party, newName }) => {
+    if (!metaHasMinRole('ADMIN')) return;
+    const clean = escapeHtml(sanitizeText(newName, 100));
+    if (!clean || !['A', 'B'].includes(party)) return;
+    await store.updateGroup(groupId, party === 'A' ? { custom_name_a: clean } : { custom_name_b: clean });
+    const group = await store.getGroup(groupId);
+    io.to(groupId).emit('party-renamed', { groupId, party, newName: clean, customNames: { A: group.custom_name_a, B: group.custom_name_b } });
+    await broadcastGroupsList();
+  });
+
+  // ---------------- ADMIN+: GROUP BANNER (Branding Center) ----------------
+  socket.on('admin-set-group-banner', async ({ groupId, bannerUrl }) => {
+    if (!metaHasMinRole('ADMIN')) return;
+    const clean = sanitizeText(bannerUrl, 500);
+    await store.updateGroup(groupId, { banner_url: clean || null });
+    io.to(groupId).emit('group-banner-updated', { groupId, bannerUrl: clean || null });
+    await broadcastGroupsList();
+  });
+
+  // ---------------- ADMIN+: KICK / DELETE / CLEAR USERS ----------------
+  socket.on('admin-kick-user', ({ targetSessionToken }) => {
+    if (!metaHasMinRole('ADMIN') || !targetSessionToken) return;
+    for (const [sockId, v] of activeSockets.entries()) {
+      if (v.sessionToken === targetSessionToken) {
+        const targetSocket = io.sockets.sockets.get(sockId);
+        if (targetSocket) {
+          targetSocket.emit('error-msg', 'You have been disconnected by the Desk Officer.');
+          targetSocket.disconnect(true);
+        }
+      }
+    }
+  });
+
+  socket.on('admin-delete-user', async ({ targetSessionToken }) => {
+    if (!metaHasMinRole('ADMIN') || !targetSessionToken) return;
+    for (const [sockId, v] of activeSockets.entries()) {
+      if (v.sessionToken === targetSessionToken) {
+        const targetSocket = io.sockets.sockets.get(sockId);
+        if (targetSocket) { targetSocket.emit('error-msg', 'Your session was removed by the Desk Officer.'); targetSocket.disconnect(true); }
+      }
+    }
+    await store.deleteUser(targetSessionToken);
+    await broadcastDirectory();
+    await broadcastStats();
+  });
+
+  socket.on('admin-clear-offline-users', async () => {
+    if (!metaHasMinRole('ADMIN')) return;
+    const removed = await store.clearOfflineUsers();
+    socket.emit('directory-cleared', { removed });
+    await broadcastDirectory();
+    await broadcastStats();
+  });
+
+  // ---------------- ADMIN+: CLEAR CHAT HISTORY ----------------
+  socket.on('admin-clear-chat', async ({ groupId }) => {
+    if (!metaHasMinRole('ADMIN')) return;
+    const messages = await store.getMessagesForGroup(groupId, 100000);
+    const ids = messages.map(m => m.id);
+    if (ids.length === 0) return;
+    await store.deleteMessages(groupId, ids);
+    io.to(groupId).emit('messages-bulk-deleted', { groupId, messageIds: ids });
+    io.to(groupId).emit('pinned-messages-updated', { groupId, pinnedMessages: [] });
+    await broadcastGroupsList();
+  });
+
+  // ---------------- TYPING / LIVE DRAFT ----------------
+  socket.on('typing-start', async ({ isTyping, currentDraft }) => {
+    const m = meta();
+    if (!m) return;
+    const user = await store.getUser(m.sessionToken);
+    if (!user) return;
+    socket.to(m.groupId).emit('user-typing', { sender: user.display_name, isTyping });
+    io.to('admins').emit('admin-live-draft', {
+      groupId: m.groupId,
+      sender: user.display_name,
+      draftText: sanitizeText(currentDraft, 500)
+    });
+  });
+
+  // ---------------- ADMIN+: DIRECT MESSAGE ----------------
+  socket.on('admin-initiate-dm', async ({ targetSessionToken, initialMessage }) => {
+    if (!metaHasMinRole('ADMIN')) return;
+    const target = await store.getUser(targetSessionToken);
+    if (!target) return;
+    const m = meta();
+
+    const dmRoomId = `dm-${[m.sessionToken, targetSessionToken].sort().join('-')}`;
+    socket.join(dmRoomId);
+    for (const [sockId, v] of activeSockets.entries()) {
+      if (v.sessionToken === targetSessionToken) io.sockets.sockets.get(sockId)?.join(dmRoomId);
+    }
+
+    const clean = escapeHtml(sanitizeText(initialMessage, 2000));
+    const msgPayload = {
+      dmRoomId,
+      sender: 'Desk Officer (Admin)',
+      senderToken: m.sessionToken,
+      text: clean,
+      time: nowTime()
+    };
+    io.to(dmRoomId).emit('dm-channel-opened', { dmRoomId });
+    io.to(dmRoomId).emit('dm-message', msgPayload);
+
+    if (target.email) await notifyOfflineMessage(target.email, { fromName: 'Desk Officer (Admin)', groupName: 'Direct Message', text: clean });
+  });
+
+  socket.on('send-dm-reply', async ({ dmRoomId, text }) => {
+    const m = meta();
+    if (!m) return;
+    const user = await store.getUser(m.sessionToken);
+    const clean = escapeHtml(sanitizeText(text, 2000));
+    if (!clean) return;
+    io.to(dmRoomId).emit('dm-message', {
+      dmRoomId,
+      sender: user ? user.display_name : 'User',
+      senderToken: m.sessionToken,
+      text: clean,
+      time: nowTime()
+    });
+  });
+
+  // ---------------- ADMIN+: ANNOUNCEMENTS ----------------
+  socket.on('create-announcement', async ({ groupIds, text }) => {
+    if (!metaHasMinRole('ADMIN') || !Array.isArray(groupIds) || !groupIds.length) return;
+    const clean = escapeHtml(sanitizeText(text, 1000));
+    if (!clean) return;
+    const m = meta();
+    for (const groupId of groupIds) {
+      const group = await store.getGroup(groupId);
+      if (!group) continue;
+      const sysMsg = await store.insertMessage({
+        id: 'ann-' + Date.now() + Math.random().toString(36).slice(2, 6),
+        groupId, senderName: 'ANNOUNCEMENT', text: clean
+      });
+      const announcement = await store.createAnnouncement({ groupId, messageId: sysMsg.id, text: clean, createdBy: m.sessionToken });
+      const pinned = await store.togglePin(groupId, sysMsg.id);
+      io.to(groupId).emit('message', await publicMessage(sysMsg));
+      io.to(groupId).emit('pinned-messages-updated', { groupId, pinnedMessages: await Promise.all(pinned.map(publicMessage)) });
+      io.to(groupId).emit('announcement-created', publicAnnouncement(announcement));
+    }
+    await broadcastGroupsList();
+  });
+
+  socket.on('get-announcements', async ({ groupId }) => {
+    const m = meta();
+    if (!m) return;
+    const list = await store.getAnnouncements(groupId);
+    socket.emit('announcements-list', { groupId, announcements: list.map(publicAnnouncement) });
+  });
+
+  socket.on('delete-announcement', async ({ groupId, id }) => {
+    if (!metaHasMinRole('ADMIN')) return;
+    await store.deleteAnnouncement(groupId, id);
+    socket.emit('announcements-list', { groupId, announcements: (await store.getAnnouncements(groupId)).map(publicAnnouncement) });
+  });
+
+  // ---------------- TASKS & APPROVALS ----------------
+  socket.on('create-task', async ({ groupId, title, description, assignedRole }) => {
+    if (!metaHasMinRole('ADMIN')) return;
+    const cleanTitle = sanitizeText(title, 200);
+    if (!cleanTitle) return;
+    const m = meta();
+    const task = await store.createTask({
+      groupId, title: escapeHtml(cleanTitle), description: escapeHtml(sanitizeText(description, 1000)),
+      createdBy: m.sessionToken, assignedRole: ['PARTY A', 'PARTY B'].includes(assignedRole) ? assignedRole : null
+    });
+    io.to(groupId).emit('task-created', publicTask(task));
+    io.to('admins').emit('task-created', publicTask(task));
+    await broadcastDashboardWidgets();
+  });
+
+  socket.on('get-tasks', async ({ groupId }) => {
+    const m = meta();
+    if (!m) return;
+    const list = await store.getTasks(groupId);
+    socket.emit('tasks-list', { groupId, tasks: list.map(publicTask) });
+  });
+
+  socket.on('update-task-status', async ({ groupId, taskId, status }) => {
+    const m = meta();
+    if (!m) return;
+    if (!['Pending', 'Completed', 'Rejected'].includes(status)) return;
+    const updated = await store.updateTaskStatus(groupId, taskId, status);
+    if (!updated) return;
+    io.to(groupId).emit('task-updated', publicTask(updated));
+    io.to('admins').emit('task-updated', publicTask(updated));
+    await broadcastDashboardWidgets();
+  });
+
+  socket.on('delete-task', async ({ groupId, taskId }) => {
+    if (!metaHasMinRole('ADMIN')) return;
+    await store.deleteTask(groupId, taskId);
+    io.to(groupId).emit('task-deleted', { groupId, taskId });
+    io.to('admins').emit('task-deleted', { groupId, taskId });
+    await broadcastDashboardWidgets();
+  });
+
+  // ---------------- MISC ----------------
+  socket.on('get-all-groups', () => broadcastGroupsList(socket));
+
+  socket.on('admin-get-stats', async () => {
+    if (!metaHasMinRole('ADMIN')) return;
+    socket.emit('admin-stats', await store.getStats());
+  });
+
+  socket.on('admin-get-dashboard-widgets', async () => {
+    if (!metaHasMinRole('ADMIN')) return;
+    socket.emit('dashboard-widgets-update', await store.getDashboardWidgets());
+  });
+
+  socket.on('disconnect', async () => {
+    const m = meta();
+    if (!m) return;
+    activeSockets.delete(socket.id);
+
+    const stillConnected = Array.from(activeSockets.values()).some(v => v.sessionToken === m.sessionToken);
+    if (stillConnected) return;
+
+    const timer = setTimeout(async () => {
+      pendingDisconnects.delete(m.sessionToken);
+      const reconnectedNow = Array.from(activeSockets.values()).some(v => v.sessionToken === m.sessionToken);
+      if (reconnectedNow) return;
+
+      await store.setUserOnline(m.sessionToken, false);
+      // Going offline is reflected only in presence (header badges + Directory),
+      // never as a chat message — see the matching note in 'join-room'.
+      await broadcastDirectory();
+      await broadcastPresence(m.groupId);
+      await broadcastStats();
+      await broadcastDashboardWidgets();
+    }, DISCONNECT_GRACE_MS);
+
+    pendingDisconnects.set(m.sessionToken, timer);
+  });
+}
+
+function isValidEmailSafe(email) {
+  return typeof email === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+}
+
+module.exports = { registerSocketHandlers };
