@@ -35,7 +35,7 @@ async function sendEmail(to, subject, text) {
   try {
     if (transporter) {
       await transporter.sendMail({
-        from: process.env.EMAIL_FROM || '"Quantum Desk Alerts" <no-reply@quantumdesk.com>',
+        from: process.env.EMAIL_FROM || '"Transaction Account Alerts" <no-reply@transactionaccount.example>',
         to,
         subject,
         text
@@ -53,7 +53,7 @@ function notifyOfflineMessage(toEmail, { fromName, groupName, text }) {
   return sendEmail(
     toEmail,
     `New message in ${groupName}`,
-    `${fromName} sent you a message while you were offline:\n\n"${text}"\n\nLog in to Quantum Secure Desk to reply.`
+    `${fromName} sent you a message while you were offline:\n\n"${text}"\n\nLog in to your Transaction Account to reply.`
   );
 }
 
@@ -65,58 +65,41 @@ function notifyTransactionSubmitted(toEmail, { submitterName, groupName }) {
   );
 }
 
-function sendPasswordResetCode(toEmail, code) {
+function notifyPasswordResetCode(toEmail, { code, groupName }) {
   return sendEmail(
     toEmail,
-    'Your Quantum Desk verification code',
-    `Your password reset code is: ${code}\n\nThis code expires in 10 minutes. If you didn't request this, you can ignore this email.`
+    `Your Transaction Account verification code`,
+    `Your password reset code for the Transaction Account on "${groupName}" is: ${code}\n\nThis code expires in 10 minutes. If you didn't request this, you can ignore this email.`
   );
 }
 
-function notifyInvite(toEmail, { inviteUrl, groupLabel }) {
-  return sendEmail(
-    toEmail,
-    'You have been invited to Quantum Secure Transaction Desk',
-    `You've been invited to set up your seller account${groupLabel ? ` for ${groupLabel}` : ''}.\n\nUse this link to register:\n${inviteUrl}\n\nThis link is single-use and tied to this email address.`
-  );
-}
-
-function notifyKycStatus(toEmail, { status, reason }) {
-  const subject = status === 'verified' ? 'Your identity has been verified' : 'Update on your identity verification';
-  const body = status === 'verified'
-    ? 'Your identity verification has been approved. You can now withdraw funds at any time.'
-    : `Your identity verification was not approved.${reason ? ` Reason: ${reason}` : ''} You can submit new documents from your Profile.`;
-  return sendEmail(toEmail, subject, body);
-}
-
-function notifyDepositStatus(toEmail, { status, amount, currency, reason }) {
-  const subject = status === 'verified' ? 'Deposit confirmed' : 'Update on your deposit';
-  const body = status === 'verified'
-    ? `Your deposit of ${currency} ${amount} has been verified and is now available in your balance.`
-    : `Your deposit of ${currency} ${amount} could not be verified.${reason ? ` Reason: ${reason}` : ''}`;
-  return sendEmail(toEmail, subject, body);
-}
-
-function notifyWithdrawalStatus(toEmail, { status, amount, currency, reason }) {
-  const labels = {
-    held_in_vault: 'is held in the vault pending compliance review',
-    processing: 'is now processing',
-    completed: 'has been completed',
-    rejected: 'was declined',
-    failed: 'could not be completed'
+function notifyKycStatus(toEmail, { groupName, status, reason }) {
+  const lines = {
+    pending: `Your identity verification documents for "${groupName}" have been received and are now under review.`,
+    verified: `Your identity has been verified for "${groupName}". You can now request withdrawals at any time.`,
+    rejected: `Your identity verification for "${groupName}" was not approved.${reason ? `\n\nReason: ${reason}` : ''}\n\nPlease resubmit your documents.`
   };
-  const subject = `Withdrawal update: ${status.replace(/_/g, ' ')}`;
-  const body = `Your withdrawal of ${currency} ${amount} ${labels[status] || `is now "${status}"`}.${reason ? ` Reason: ${reason}` : ''}`;
-  return sendEmail(toEmail, subject, body);
+  return sendEmail(toEmail, `Identity verification update — ${groupName}`, lines[status] || `Your verification status is now: ${status}`);
+}
+
+function notifyDepositStatus(toEmail, { groupName, amount, status, reason }) {
+  const lines = {
+    verified: `Your deposit of ${amount} for "${groupName}" has been confirmed and is now available in your Transaction Account.`,
+    rejected: `Your deposit of ${amount} for "${groupName}" could not be confirmed.${reason ? `\n\nReason: ${reason}` : ''}`
+  };
+  return sendEmail(toEmail, `Deposit update — ${groupName}`, lines[status] || `Your deposit status is now: ${status}`);
+}
+
+function notifyWithdrawalStatus(toEmail, { groupName, amount, currency, status, reason }) {
+  const labels = { held_in_vault: 'Held in Vault', processing: 'Processing', completed: 'Completed', rejected: 'Failed / Declined', failed: 'Failed / Declined' };
+  return sendEmail(
+    toEmail,
+    `Withdrawal update — ${groupName}`,
+    `Your withdrawal of ${amount} ${currency} for "${groupName}" is now: ${labels[status] || status}.${reason ? `\n\nNote: ${reason}` : ''}`
+  );
 }
 
 module.exports = {
-  sendEmail,
-  notifyOfflineMessage,
-  notifyTransactionSubmitted,
-  sendPasswordResetCode,
-  notifyInvite,
-  notifyKycStatus,
-  notifyDepositStatus,
-  notifyWithdrawalStatus
+  sendEmail, notifyOfflineMessage, notifyTransactionSubmitted,
+  notifyPasswordResetCode, notifyKycStatus, notifyDepositStatus, notifyWithdrawalStatus
 };

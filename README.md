@@ -37,119 +37,6 @@ hardened input handling throughout.
 - **Enterprise polish** — message fade-in animations, empty states, glowing
   redesigned send button, skeleton-ready structure, consistent spacing.
 
-## v3.1 — Seller accounts, KYC & the vault (new)
-
-A parallel, password-protected identity layer for sellers ("Party A / Type
-A"), separate from the free-form chat `session_token` above — real money
-movement needs real authentication, not a client-picked name. A "seller
-account" is a `groups` row with login credentials; the group **is** the
-seller's dedicated workspace.
-
-- **Invite → register → login**. Admin sends an invite by email
-  (`POST /api/admin/invites`) from `public/admin-finance.html`; the seller
-  opens `public/seller.html?invite=TOKEN`, which resolves and locks their
-  email, then walks them through full name + password, naming their group,
-  and choosing a currency (USD/GBP/EUR, locked after the first deposit).
-  Subsequent visits just need `public/seller.html` — email + password only.
-- **Forgot password**: email → 6-digit code (emailed, 10-minute expiry,
-  single-use) → new password. Every response is worded identically whether
-  or not the email is registered, so the endpoint can't be used to check
-  who has an account.
-- **KYC documents are never publicly served.** Unlike ordinary chat
-  attachments (`/uploads`, served statically), photo IDs, proof-of-address
-  documents and selfies are saved to a separate `kyc-uploads/` directory
-  that has no static route at all. They're only reachable through
-  `GET /api/kyc-file/:submissionId/:field`, which checks the requester is
-  either the seller who owns that submission (via their session cookie) or
-  an authenticated admin before streaming anything from disk.
-- **KYC, reviewed manually only, no auto-approval**: sellers submit a photo
-  ID (national ID / driver's license / passport), a proof of address dated
-  within 3 months, and a selfie, from `seller.html`. An admin approves or
-  rejects (with a reason) from `admin-finance.html`. Withdrawals are
-  blocked (`403`) until `kyc_status = 'verified'` — and once verified, nothing
-  in the seller-facing code can revert it; that's an admin-only action.
-- **The vault**: one shared `held` balance covering money in either
-  direction under manual review — an incoming deposit a seller reports
-  (`POST /api/seller/deposits`) lands in `held` immediately (and counts
-  toward Total Deposited) but not `available` until an admin verifies it
-  actually arrived; an outgoing withdrawal moves the same way in reverse as
-  an admin advances it through **Pending → Held in Vault → Processing →
-  Completed** (or **Rejected/Failed** with a required reason at any stage).
-  All of this is real, transactional balance math in both `memStore.js` and
-  `pgStore.js` — see the test suite note below.
-- **Withdrawals**: crypto (BTC/ETH/USDT, with a BEP20/TRC20 network picker
-  for USDT) or bank transfer, gated on KYC. A crypto withdrawal can be
-  *entered* in USD/GBP/EUR for convenience even though the account's ledger
-  is fixed to one currency — it's converted server-side
-  (see `fx.js` — **placeholder rates, swap for a live FX API before going
-  live**) and both the entered amount and the ledger amount are kept for
-  the audit trail.
-- **Admin panel**: `public/admin-finance.html` — a shared-passkey-gated
-  page (same model as the rest of the admin surface) with an invite sender
-  and three live queues (KYC, deposits, withdrawals), each with
-  approve/reject or stage-advance actions and a required reason on any
-  decline. Everything pushes live via Socket.IO
-  (`kyc-queue-updated`, `deposit-queue-updated`, `withdrawal-queue-updated`,
-  and per-seller `*-status-changed` events) using the existing `admins` /
-  per-group room pattern already in `socketHandlers.js`.
-- **New tables** (`schema.sql`): `seller_sessions`, `password_reset_codes`,
-  `kyc_submissions`, `deposits`, `withdrawal_requests`, `balances`, plus
-  new columns on `groups` (`account_type`, `registration_status`,
-  `invite_token`, `owner_email`, `owner_password_hash`, `currency`,
-  `kyc_status`, …).
-- **No new dependencies.** Password hashing uses Node's own built-in
-  `crypto.scrypt` (see `sellerAuth.js`) rather than an external package —
-  a memory-hard, well-regarded password hash that ships with Node itself.
-  (An earlier draft of this feature used `bcryptjs`; it was swapped out
-  after a lockfile/registry sync issue broke the Northflank build — see
-  the note below.)
-- **New env vars** — see `.env.example`: `RESET_CODE_SECRET` and the
-  `DEPOSIT_*` vars (your actual receiving crypto addresses / bank details,
-  shown to sellers when they go to deposit — these are placeholders until
-  you set them).
-
-**Known placeholders, called out in code comments where they live:**
-- `fx.js` ships fixed, approximate FX rates. Swap `convert()` for a live
-  FX API call (e.g. exchangerate.host) before relying on this for real
-  amounts.
-- There's no automated blockchain or bank-feed verification — by design,
-  per the requirement that KYC and fund processing be reviewed manually.
-  "Record a deposit" is the seller *telling* you funds are coming; an admin
-  still confirms they actually arrived before verifying it.
-- `io.to(groupId)` / `join-finance-room` trusts knowledge of the (UUID,
-  unguessable) group id, the same trust boundary the rest of this file
-  already uses for chat rooms. Tightening this to also check the seller's
-  session cookie during the socket handshake is a reasonable hardening
-  step if you want defense-in-depth here.
-
-**Testing performed for v3.1** (see also "Testing performed" below for the
-same caveat on the rest of the app): the full seller lifecycle — register,
-login, password reset, deposit → vault → admin-verify, KYC submit →
-admin-verify, withdrawal with currency conversion through
-Pending → Held in Vault → Processing → Completed, a rejection path that
-returns funds, and the guard against skipping straight from Pending to
-Completed — was run end-to-end against `memStore.js` (32 assertions, all
-passing) in this sandbox, which has no network access to install real
-dependencies or run a live Postgres instance. `pgStore.js`'s SQL mirrors
-that exact same logic (with `BEGIN`/`COMMIT`/`ROLLBACK` and `FOR UPDATE`
-row locks around every balance-mutating query) and is syntax-checked, but
-**not** exercised against a live database from here — test it against your
-real Postgres instance before trusting it in production, same as the rest
-of the Postgres code path.
-
-**Deploy fix, 2026-09-27:** the first push of this feature set failed
-Northflank's build with `npm error Missing: bcryptjs@2.4.3 from lock file`.
-Cause: `bcryptjs` was added to `package.json` from a sandbox with no
-network access, so `package-lock.json` never got regenerated to match, and
-the buildpack's `npm ci` correctly refused to install with a mismatched
-lockfile. Fixed by removing the dependency entirely rather than patching
-the lockfile by hand — password hashing now uses Node's built-in
-`crypto.scrypt` (see `sellerAuth.js`), so `package.json` and
-`package-lock.json` need nothing added and can't drift apart again. If you
-ever do add a real new dependency to this project by hand-editing
-`package.json`, always run `npm install` locally and commit the updated
-`package-lock.json` in the same commit — `npm ci` will not do this for you.
-
 ## What changed in the original rebuild
 
 **Fixed event mismatches** (frontend and backend were using different event
@@ -192,18 +79,14 @@ db.js                   Picks Postgres or in-memory backend
 pgStore.js              Postgres implementation
 memStore.js             In-memory fallback (dev only)
 socketHandlers.js       All Socket.IO event logic
-routes.js               REST: uploads, CSV export, PDF receipt, push, branding, health, seller/admin finance API
-sellerAuth.js           Seller password hashing + session cookie auth (separate from chat's session_token)
-fx.js                   Currency conversion — placeholder rates, see v3.1 notes above
+routes.js               REST: file upload, CSV export, PDF receipt, push, branding, health check
 roles.js                Multi-admin role tiers (Super Admin/Admin/Moderator)
 security.js             Escaping, sanitization, validation, rate limiting
-email.js                Nodemailer wrapper (incl. invites, reset codes, KYC/deposit/withdrawal notices)
+email.js                Nodemailer wrapper
 webpush.js              Web Push (VAPID) wrapper
 pdfReceipt.js           Branded PDF transaction receipts
 public/
-  index.html, style.css, app.js, i18n.js, sw.js, icon-192.png   Chat + admin UI
-  seller.html             Seller dashboard: register/login/KYC/deposits/withdrawals
-  admin-finance.html      Admin review panel: invites, KYC/deposit/withdrawal queues
+  index.html, style.css, app.js, i18n.js, sw.js, icon-192.png
 schema.sql              Postgres schema (auto-applied on boot)
 DEPLOY.md               Host-agnostic deployment guide — read this first
 DEPLOY_NORTHFLANK.md    Step-by-step walkthrough for Northflank (free, always-on, custom name)
@@ -246,16 +129,7 @@ cp .env.example .env
 npm install
 npm start
 ```
-Then open `http://localhost:3000` for the chat/admin app,
-`http://localhost:3000/admin-finance.html` for the new KYC/deposit/
-withdrawal review panel (same passkey as the rest of admin), and send
-yourself an invite from there to try `http://localhost:3000/seller.html`
-end-to-end. If you already have a Postgres database from an earlier
-version of this app, no manual migration is needed — `schema.sql` re-runs
-on every boot and every new table/column uses `IF NOT EXISTS`, so it's
-safe to just restart.
-
-For deploying somewhere it'll stay
+Then open `http://localhost:3000`. For deploying somewhere it'll stay
 online, start with `DEPLOY.md` (works on any host) or `DEPLOY_NORTHFLANK.md`
 (step-by-step for a free, always-on host with a custom name). Render
 instructions are still in `DEPLOY_RENDER.md` if you want them.

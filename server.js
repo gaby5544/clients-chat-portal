@@ -39,7 +39,7 @@ app.use(express.static(path.join(__dirname, 'public'), {
     }
   }
 }));
-app.use(buildRouter(io));
+app.use(buildRouter());
 
 io.on('connection', (socket) => registerSocketHandlers(io, socket));
 
