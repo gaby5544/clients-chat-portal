@@ -10,21 +10,49 @@
 // sees or sets this value itself.
 
 const crypto = require('crypto');
-const bcrypt = require('bcryptjs');
 const { store } = require('./db');
 
 const SESSION_COOKIE = 'qsd_seller_session';
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const RESET_CODE_TTL_MS = 10 * 60 * 1000; // 10 minutes
-const BCRYPT_ROUNDS = 11;
+const SCRYPT_KEYLEN = 64;
 
+// Password hashing via Node's built-in crypto.scrypt — no external
+// dependency (deliberately: this project previously depended on bcryptjs
+// for this, but a lockfile/registry mismatch broke the deploy build; scrypt
+// is a well-regarded, memory-hard password hash and ships with Node itself,
+// so there's nothing here that can go out of sync with package.json again).
+// Stored format: "scrypt$<salt-hex>$<hash-hex>".
 function hashPassword(plain) {
-  return bcrypt.hash(plain, BCRYPT_ROUNDS);
+  return new Promise((resolve, reject) => {
+    const salt = crypto.randomBytes(16);
+    crypto.scrypt(String(plain), salt, SCRYPT_KEYLEN, (err, derivedKey) => {
+      if (err) return reject(err);
+      resolve(`scrypt$${salt.toString('hex')}$${derivedKey.toString('hex')}`);
+    });
+  });
 }
 
-function verifyPassword(plain, hash) {
-  if (!hash) return Promise.resolve(false);
-  return bcrypt.compare(plain, hash);
+function verifyPassword(plain, stored) {
+  return new Promise((resolve) => {
+    if (!stored || typeof stored !== 'string' || !stored.startsWith('scrypt$')) return resolve(false);
+    const parts = stored.split('$');
+    if (parts.length !== 3) return resolve(false);
+    const [, saltHex, hashHex] = parts;
+    let salt, expected;
+    try {
+      salt = Buffer.from(saltHex, 'hex');
+      expected = Buffer.from(hashHex, 'hex');
+    } catch (e) { return resolve(false); }
+    crypto.scrypt(String(plain), salt, expected.length, (err, derivedKey) => {
+      if (err) return resolve(false);
+      try {
+        resolve(derivedKey.length === expected.length && crypto.timingSafeEqual(derivedKey, expected));
+      } catch (e) {
+        resolve(false);
+      }
+    });
+  });
 }
 
 function generateToken(bytes = 32) {

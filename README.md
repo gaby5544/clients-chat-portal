@@ -97,8 +97,12 @@ seller's dedicated workspace.
   new columns on `groups` (`account_type`, `registration_status`,
   `invite_token`, `owner_email`, `owner_password_hash`, `currency`,
   `kyc_status`, …).
-- **New dependency**: `bcryptjs` (pure JS, no native build step) for
-  password hashing. Run `npm install` to pick it up.
+- **No new dependencies.** Password hashing uses Node's own built-in
+  `crypto.scrypt` (see `sellerAuth.js`) rather than an external package —
+  a memory-hard, well-regarded password hash that ships with Node itself.
+  (An earlier draft of this feature used `bcryptjs`; it was swapped out
+  after a lockfile/registry sync issue broke the Northflank build — see
+  the note below.)
 - **New env vars** — see `.env.example`: `RESET_CODE_SECRET` and the
   `DEPOSIT_*` vars (your actual receiving crypto addresses / bank details,
   shown to sellers when they go to deposit — these are placeholders until
@@ -132,6 +136,19 @@ row locks around every balance-mutating query) and is syntax-checked, but
 **not** exercised against a live database from here — test it against your
 real Postgres instance before trusting it in production, same as the rest
 of the Postgres code path.
+
+**Deploy fix, 2026-09-27:** the first push of this feature set failed
+Northflank's build with `npm error Missing: bcryptjs@2.4.3 from lock file`.
+Cause: `bcryptjs` was added to `package.json` from a sandbox with no
+network access, so `package-lock.json` never got regenerated to match, and
+the buildpack's `npm ci` correctly refused to install with a mismatched
+lockfile. Fixed by removing the dependency entirely rather than patching
+the lockfile by hand — password hashing now uses Node's built-in
+`crypto.scrypt` (see `sellerAuth.js`), so `package.json` and
+`package-lock.json` need nothing added and can't drift apart again. If you
+ever do add a real new dependency to this project by hand-editing
+`package.json`, always run `npm install` locally and commit the updated
+`package-lock.json` in the same commit — `npm ci` will not do this for you.
 
 ## What changed in the original rebuild
 
