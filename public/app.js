@@ -2,26 +2,15 @@
 const socket = io();
 
 // ---------------- STATE ----------------
-// Persisted in localStorage (not sessionStorage) so a Seller's account —
-// created once, via invite — survives closing the browser, not just the tab.
-let sessionToken = localStorage.getItem('q_session_token') || ('token-' + Math.random().toString(36).slice(2, 15));
-localStorage.setItem('q_session_token', sessionToken);
+let sessionToken = sessionStorage.getItem('q_session_token') || ('token-' + Math.random().toString(36).slice(2, 15));
+sessionStorage.setItem('q_session_token', sessionToken);
 
 const urlParams = new URLSearchParams(window.location.search);
 let activeGroupId = urlParams.get('groupId') || 'default-group';
 // If the link itself says who the visitor is (?role=PARTY%20A or PARTY%20B),
 // lock them into that role so two people can never both land on "Party A"
 // just because they opened a shared link and forgot to change a dropdown.
-// (Mutable: redeeming a Seller invite below locks this in too, from then on.)
-let urlLockedRole = ['PARTY A', 'PARTY B'].includes(urlParams.get('role')) ? urlParams.get('role') : null;
-
-// A Seller account can ONLY ever be created by opening a real, single-use
-// invite link (?invite=<token>) an Admin generated. Everything else about
-// how a visitor lands in this app (Buyer, Admin) is unchanged.
-const inviteToken = urlParams.get('invite') || null;
-let inviteHandled = false; // true once this invite has been checked/redeemed this page-load
-let kycStatus = 'not_submitted';
-let kycPendingDocs = [];
+const urlLockedRole = ['PARTY A', 'PARTY B'].includes(urlParams.get('role')) ? urlParams.get('role') : null;
 
 let isAdminConfirmed = false;
 
@@ -59,7 +48,6 @@ let myRole = null; // 'PARTY A' | 'PARTY B' | null (admin) — as confirmed by t
 let currentGroupCustomNames = { A: 'Buyer', B: 'Seller' };
 let lastPresenceUsers = [];
 let pendingInviteLinksGroupId = null; // set right after create-group, consumed once init-state for it arrives
-let pendingSellerInviteToken = null;  // the real, single-use Seller invite generated alongside that new group
 
 const ROLE_LEVEL = { MODERATOR: 1, ADMIN: 2, SUPER_ADMIN: 3 };
 function hasMinRoleClient(role, minRole) {
@@ -166,9 +154,8 @@ function setAdminTab(tab) {
   document.querySelectorAll('.drawer-tab-panel').forEach(p => p.classList.add('hidden'));
   el('tab' + tab.charAt(0).toUpperCase() + tab.slice(1)).classList.remove('hidden');
   if (tab === 'transactions') loadTransactionsList();
-  if (tab === 'controls') { renderAnnouncementGroupChecks(); socket.emit('admin-list-invites', { groupId: activeGroupId }); }
+  if (tab === 'controls') renderAnnouncementGroupChecks();
   if (tab === 'tasks') socket.emit('get-tasks', { groupId: activeGroupId });
-  if (tab === 'kyc') socket.emit('admin-list-kyc');
   if (tab === 'branding') loadBrandingIntoForm();
 }
 
@@ -214,44 +201,7 @@ function joinSession(adminKey = null) {
   socket.emit('join-room', { groupId: activeGroupId, role: selectedRole, adminKey, sessionToken, email });
 }
 
-socket.on('connect', () => {
-  currentSocketId = socket.id;
-  if (inviteToken && !inviteHandled) {
-    // Don't auto-join as anyone yet — validate the invite first. A valid one
-    // shows the "Create your account" popup instead of silently joining.
-    socket.emit('check-invite', { token: inviteToken });
-  } else {
-    joinSession(adminPasskeyMemory);
-  }
-});
-
-// ---------------- INVITE-ONLY SELLER REGISTRATION ----------------
-socket.on('invite-valid', (data) => {
-  el('sellerInviteIntro').textContent =
-    `You've been invited to join "${data.groupName}" as ${data.roleLabel}. Set your name and a password to finish creating your account.`;
-  el('sellerAccountName').value = data.prefillName || '';
-  el('sellerAccountPassword').value = '';
-  el('sellerAccountPasswordConfirm').value = '';
-  el('sellerCreateAccountModal').classList.remove('hidden');
-  setTimeout(() => el('sellerAccountName').focus(), 50);
-});
-
-socket.on('invite-invalid', ({ reason }) => {
-  inviteHandled = true;
-  toast(reason || 'This invite link is not valid.', true);
-  el('sellerCreateAccountModal').classList.add('hidden');
-  joinSession(); // fall back to a normal landing rather than leaving the visitor stuck
-});
-
-function submitSellerCreateAccount() {
-  const displayName = el('sellerAccountName').value.trim();
-  const password = el('sellerAccountPassword').value;
-  const confirmPassword = el('sellerAccountPasswordConfirm').value;
-  if (!displayName) return toast('Please enter your full name.', true);
-  if (password.length < 8) return toast('Password must be at least 8 characters.', true);
-  if (password !== confirmPassword) return toast('Passwords do not match.', true);
-  socket.emit('redeem-invite', { token: inviteToken, sessionToken, displayName, password });
-}
+socket.on('connect', () => { currentSocketId = socket.id; joinSession(adminPasskeyMemory); });
 
 socket.on('error-msg', (msg) => toast(msg, true));
 
@@ -269,26 +219,6 @@ socket.on('init-state', async (data) => {
   if (currentAdminRole) document.body.classList.add('role-' + currentAdminRole.toLowerCase());
   updateRailVisibility();
   updateRoleBadge();
-
-  // The refined look (and the KYC entry point) apply ONLY to a genuine
-  // Seller account — never to Buyer or any Admin tier.
-  const isSeller = !isAdminConfirmed && myRole === 'PARTY B';
-  document.body.classList.toggle('seller-view', isSeller);
-  kycStatus = data.kycStatus || 'not_submitted';
-  if (isSeller) updateKycUi();
-
-  if (inviteToken && !inviteHandled) {
-    // This init-state is the result of a just-redeemed invite. Lock the role
-    // in for every future reconnect and swap the one-time link for a durable,
-    // reusable URL — exactly the same shape a Buyer's link already uses —
-    // so reloading later just reconnects this same Seller account normally.
-    inviteHandled = true;
-    urlLockedRole = 'PARTY B';
-    el('sellerCreateAccountModal').classList.add('hidden');
-    const durableUrl = `${window.location.origin}/?groupId=${encodeURIComponent(activeGroupId)}&role=PARTY%20B`;
-    history.replaceState(null, '', durableUrl);
-    toast('Account created — welcome!');
-  }
 
   el('currentGroupName').textContent = data.group.name;
   // Hide the picker entirely once a role is locked in by the link (or for admins) —
@@ -327,9 +257,7 @@ socket.on('init-state', async (data) => {
 
   if (pendingInviteLinksGroupId && pendingInviteLinksGroupId === activeGroupId) {
     pendingInviteLinksGroupId = null;
-    const tok = pendingSellerInviteToken;
-    pendingSellerInviteToken = null;
-    openInviteLinksModal(activeGroupId, currentGroupCustomNames.A, currentGroupCustomNames.B, tok);
+    openInviteLinksModal(activeGroupId, currentGroupCustomNames.A, currentGroupCustomNames.B);
   }
 
   // The authoritative presence list for this group arrives moments later via
@@ -597,63 +525,6 @@ async function uploadFile(file) {
 }
 function handleFileInputUpload(input) { if (input.files && input.files[0]) uploadFile(input.files[0]); input.value = ''; }
 
-// ---------------- KYC (Seller-facing: submit, track status) ----------------
-const KYC_LABELS = {
-  not_submitted: { cls: 'not_submitted', html: '<i class="fa-solid fa-circle-info"></i> You have not submitted verification documents yet.' },
-  pending: { cls: 'pending', html: '<i class="fa-solid fa-hourglass-half"></i> Submitted — awaiting Admin review.' },
-  verified: { cls: 'verified', html: '<i class="fa-solid fa-circle-check"></i> Verified by your Admin.' },
-  rejected: { cls: 'rejected', html: '<i class="fa-solid fa-circle-xmark"></i> Rejected — please correct and resubmit.' }
-};
-function updateKycUi() {
-  const banner = el('kycStatusBanner');
-  if (!banner) return;
-  const info = KYC_LABELS[kycStatus] || KYC_LABELS.not_submitted;
-  banner.className = 'kyc-status-banner show ' + info.cls;
-  banner.innerHTML = info.html;
-  const submitSection = el('kycSubmitSection');
-  if (submitSection) submitSection.style.display = (kycStatus === 'pending' || kycStatus === 'verified') ? 'none' : 'block';
-  const dot = el('kycNeedsActionDot');
-  if (dot) dot.classList.toggle('hidden', !(kycStatus === 'not_submitted' || kycStatus === 'rejected'));
-}
-function openKycModal() {
-  el('kycModal').classList.remove('hidden');
-  updateKycUi();
-}
-async function handleKycFileChosen(input) {
-  const file = input.files && input.files[0];
-  input.value = '';
-  if (!file) return;
-  if (file.size > 15 * 1024 * 1024) return toast('File exceeds the 15MB limit.', true);
-  const fd = new FormData();
-  fd.append('file', file);
-  try {
-    const res = await fetch('/api/upload', { method: 'POST', body: fd });
-    const data = await res.json();
-    if (!res.ok) return toast(data.error || 'Upload failed', true);
-    kycPendingDocs.push({ url: data.fileUrl, name: data.fileName, type: el('kycDocType').value });
-    renderKycAttachedList();
-  } catch (err) { toast('Upload failed', true); }
-}
-function renderKycAttachedList() {
-  el('kycAttachedList').innerHTML = kycPendingDocs.map((d, i) => `
-    <div class="kyc-doc-row"><span><i class="fa-solid fa-file"></i> ${escapeHtml(d.name)} <small style="color:var(--text-faint);">(${escapeHtml(d.type)})</small></span>
-      <i class="fa-solid fa-xmark" style="cursor:pointer;" onclick="removeKycDoc(${i})"></i></div>`).join('');
-}
-function removeKycDoc(i) { kycPendingDocs.splice(i, 1); renderKycAttachedList(); }
-function submitKycDocuments() {
-  if (!kycPendingDocs.length) return toast('Attach at least one document first.', true);
-  socket.emit('submit-kyc', { groupId: activeGroupId, documents: kycPendingDocs });
-  kycPendingDocs = [];
-  renderKycAttachedList();
-}
-socket.on('kyc-status-update', ({ status, rejectReason }) => {
-  kycStatus = status;
-  updateKycUi();
-  if (status === 'verified') toast('Your identity verification was approved.');
-  else if (status === 'rejected') toast(`Your submission was rejected.${rejectReason ? ' Reason: ' + rejectReason : ''}`, true);
-  else if (status === 'pending') toast('Documents submitted — awaiting review.');
-});
-
 (function setupDragDrop() {
   const zone = el('messageContainer');
   ['dragenter', 'dragover'].forEach(evt => zone.addEventListener(evt, (e) => { e.preventDefault(); zone.classList.add('drag-active'); }));
@@ -880,9 +751,8 @@ function switchGroup(groupId) {
   joinSession(adminPasskeyMemory);
 }
 
-socket.on('group-created-and-switch', ({ newGroupId, sellerInviteToken }) => {
+socket.on('group-created-and-switch', ({ newGroupId }) => {
   pendingInviteLinksGroupId = newGroupId; // consumed by init-state once we're in the new room
-  pendingSellerInviteToken = sellerInviteToken || null;
   activeGroupId = newGroupId;
   joinSession(adminPasskeyMemory);
 });
@@ -948,13 +818,11 @@ function copyInviteLink(party) {
 
 // Shown once, right after a new group is created, so both links can be
 // grabbed and sent out in one go instead of hunting through the Controls tab.
-function openInviteLinksModal(groupId, nameA, nameB, sellerInviteToken) {
+function openInviteLinksModal(groupId, nameA, nameB) {
   el('inviteLinkALabel').textContent = nameA || 'Buyer';
   el('inviteLinkBLabel').textContent = nameB || 'Seller';
   el('inviteLinkAValue').textContent = `${window.location.origin}/?groupId=${groupId}&role=PARTY%20A`;
-  el('inviteLinkBValue').textContent = sellerInviteToken
-    ? `${window.location.origin}/?invite=${sellerInviteToken}`
-    : `${window.location.origin}/?groupId=${groupId}&role=PARTY%20B`;
+  el('inviteLinkBValue').textContent = `${window.location.origin}/?groupId=${groupId}&role=PARTY%20B`;
   el('inviteLinksModal').classList.remove('hidden');
 }
 function copyShownInviteLink(party) {
@@ -964,47 +832,6 @@ function copyShownInviteLink(party) {
     () => toast(`${label} link copied:\n${link}`),
     () => toast(`Copy this link manually: ${link}`, true)
   );
-}
-
-// ---------------- SELLER INVITES (Admin+ only — the ONLY way a Seller account gets created) ----------------
-function createSellerInvite() {
-  socket.emit('admin-create-invite', { groupId: activeGroupId });
-}
-socket.on('invite-created', ({ token, groupId }) => {
-  if (groupId !== activeGroupId) return;
-  const link = `${window.location.origin}/?invite=${token}`;
-  navigator.clipboard.writeText(link).then(
-    () => toast(`Seller invite link copied (works once):\n${link}`),
-    () => toast(`Seller invite link — copy manually:\n${link}`, true)
-  );
-  socket.emit('admin-list-invites', { groupId: activeGroupId });
-});
-function renderPendingInvites(invites) {
-  const container = el('pendingInvitesList');
-  if (!container) return;
-  const pending = invites.filter(i => !i.usedAt);
-  if (!pending.length) {
-    container.innerHTML = `<div class="empty-state" style="padding:12px;"><i class="fa-solid fa-link-slash"></i><span>No pending invites</span></div>`;
-    return;
-  }
-  container.innerHTML = pending.map(i => `
-    <div class="task-card">
-      <div class="task-card-title">${i.sellerName ? escapeHtml(i.sellerName) : 'Unnamed invite'}</div>
-      <div class="task-card-meta">Created ${new Date(i.createdAt).toLocaleDateString()} &middot; Expires ${new Date(i.expiresAt).toLocaleDateString()}
-        <span class="tx-delete-btn" style="margin-left:10px;" onclick="copyExistingInvite('${i.token}')"><i class="fa-solid fa-copy"></i> Copy</span>
-        <span class="tx-delete-btn" style="margin-left:10px;" onclick="revokeInviteClient('${i.token}')"><i class="fa-solid fa-ban"></i> Revoke</span>
-      </div>
-    </div>`).join('');
-}
-socket.on('invites-list', ({ groupId, invites }) => { if (groupId === activeGroupId) renderPendingInvites(invites); });
-function copyExistingInvite(token) {
-  const link = `${window.location.origin}/?invite=${token}`;
-  navigator.clipboard.writeText(link).then(() => toast('Invite link copied.'), () => toast(`Copy manually: ${link}`, true));
-}
-function revokeInviteClient(token) {
-  showConfirmModal({ title: 'Revoke Invite', message: 'This link will stop working immediately. It can\'t be undone.' }, () => {
-    socket.emit('admin-revoke-invite', { token, groupId: activeGroupId });
-  });
 }
 function kickSelectedUser() {
   const targetSessionToken = el('kickUserSelect').value;
@@ -1131,8 +958,7 @@ socket.on('admin-stats', (stats) => {
     <div class="stat-card"><div class="stat-value">${stats.totalGroups}</div><div class="stat-label">Total Groups</div></div>
     <div class="stat-card"><div class="stat-value">${stats.messagesToday}</div><div class="stat-label">Messages Today</div></div>
     <div class="stat-card"><div class="stat-value">${stats.uploadsToday}</div><div class="stat-label">Uploads Today</div></div>
-    <div class="stat-card"><div class="stat-value">${stats.transactionsSubmitted}</div><div class="stat-label">Transactions Submitted</div></div>
-    <div class="stat-card"><div class="stat-value">${stats.pendingKyc}</div><div class="stat-label">Pending KYC</div></div>
+    <div class="stat-card" style="grid-column: span 2;"><div class="stat-value">${stats.transactionsSubmitted}</div><div class="stat-label">Transactions Submitted</div></div>
   `;
 });
 
@@ -1319,40 +1145,6 @@ socket.on('task-deleted', ({ taskId }) => {
   renderAdminTasksList(tasksCache);
 });
 
-// ---------------- ADMIN+: KYC REVIEW (only an Admin can verify/reject) ----------------
-function renderAdminKycList(submissions) {
-  const container = el('adminKycListContainer');
-  if (!container) return;
-  if (!submissions.length) {
-    container.innerHTML = `<div class="empty-state"><i class="fa-solid fa-id-card-clip"></i><span>No pending submissions</span></div>`;
-    return;
-  }
-  container.innerHTML = submissions.map(k => `
-    <div class="task-card">
-      <div class="task-card-title">${escapeHtml(k.sellerName)} <small style="color:var(--text-faint);">— ${escapeHtml(k.groupName)}</small></div>
-      <div class="task-card-desc">${k.documents.map(d => `<div><i class="fa-solid fa-file"></i> ${escapeHtml(d.name)} <small>(${escapeHtml(d.type)})</small> — <a href="${d.url}" target="_blank" rel="noopener" style="color:var(--accent-cyan);">view</a></div>`).join('')}</div>
-      <div class="task-status-row">
-        <button class="task-status-btn active completed" onclick="reviewKycClient('${k.id}','verified')">Verify</button>
-        <button class="task-status-btn active rejected" onclick="reviewKycClient('${k.id}','rejected')">Reject</button>
-      </div>
-      <div class="task-card-meta">Submitted ${new Date(k.submittedAt).toLocaleDateString()}</div>
-    </div>`).join('');
-}
-socket.on('kyc-list', ({ submissions }) => {
-  renderAdminKycList(submissions);
-});
-socket.on('kyc-submission-created', () => { socket.emit('admin-list-kyc'); toast('New KYC submission received.'); });
-socket.on('kyc-submission-reviewed', () => { socket.emit('admin-list-kyc'); });
-function reviewKycClient(submissionId, decision) {
-  if (decision === 'rejected') {
-    showConfirmModal({ title: 'Reject Submission', message: "Reject this KYC submission? The Seller will be notified." }, () => {
-      socket.emit('admin-review-kyc', { submissionId, decision: 'rejected' });
-    });
-  } else {
-    socket.emit('admin-review-kyc', { submissionId, decision: 'verified' });
-  }
-}
-
 function createTask() {
   const title = el('taskTitleInput').value.trim();
   if (!title) return toast('Task title is required.', true);
@@ -1407,7 +1199,6 @@ socket.on('dashboard-widgets-update', (w) => {
     : `<div class="empty-state" style="padding:16px;"><i class="fa-solid fa-cloud-arrow-up"></i><span>No uploads yet</span></div>`;
 
   el('widgetPendingReviews').textContent = w.pendingReviews;
-  el('widgetPendingKyc').textContent = w.pendingKyc;
 });
 
 // ---------------- BRANDING CENTER ----------------

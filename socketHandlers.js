@@ -1,5 +1,5 @@
 const { store } = require('./db');
-const { escapeHtml, sanitizeText, RateLimiter, hashPassword, isValidPassword, generateInviteToken } = require('./security');
+const { escapeHtml, sanitizeText, RateLimiter } = require('./security');
 const { notifyOfflineMessage, notifyTransactionSubmitted } = require('./email');
 const { resolveAdminRole, hasMinRole } = require('./roles');
 const { sendPushToUser } = require('./webpush');
@@ -61,18 +61,6 @@ function publicTask(t) {
 
 function publicAnnouncement(a) {
   return { id: a.id, groupId: a.group_id, messageId: a.message_id, text: a.text, createdBy: a.created_by, createdAt: a.created_at };
-}
-
-// A Seller invite is never broadcast to anyone but the Admin who can see it —
-// this shape deliberately carries no session/auth secrets, just enough for
-// the Admin's "pending invites" list.
-function publicInvite(i) {
-  return {
-    token: i.token, groupId: i.group_id, role: i.role,
-    sellerName: i.seller_name, sellerEmail: i.seller_email,
-    createdAt: i.created_at, expiresAt: i.expires_at,
-    usedAt: i.used_at, usedBy: i.used_by
-  };
 }
 
 async function groupSummary(g, viewerToken) {
@@ -155,14 +143,8 @@ function registerSocketHandlers(io, socket) {
     });
   }
 
-  // ---------------- JOIN ROOM (shared by a normal join AND a fresh invite redemption) ----------------
-  // Seller (PARTY B) accounts are invite-only. A brand-new session may only
-  // ever land here as Seller immediately after redeeming a valid invite
-  // (sellerPreauthorized=true, set only by redeem-invite below, right after
-  // it has created the account). Anyone else asking for PARTY B must already
-  // own a Seller account on this exact browser session — that's what lets a
-  // returning Seller simply reconnect. Everyone else is refused.
-  async function performJoin(socket, { groupId, role, adminKey, sessionToken, email, sellerPreauthorized = false, displayNameOverride = null }) {
+  // ---------------- JOIN ROOM ----------------
+  socket.on('join-room', async ({ groupId, role, adminKey, sessionToken, email }) => {
     try {
       if (!sessionToken || typeof sessionToken !== 'string') return;
       groupId = sanitizeText(groupId || 'default-group', 100);
@@ -178,23 +160,9 @@ function registerSocketHandlers(io, socket) {
       }
 
       const safeRole = ['PARTY A', 'PARTY B'].includes(role) ? role : 'PARTY A';
-
-      let existingSeller = null;
-      if (!isAdmin && safeRole === 'PARTY B') {
-        existingSeller = await store.getUser(sessionToken);
-        if (!sellerPreauthorized && (!existingSeller || existingSeller.role !== 'PARTY B')) {
-          return socket.emit('error-msg', 'Seller accounts are invite-only. Please use the link your Admin sent you to create your account.');
-        }
-      }
-
       const displayName = isAdmin
         ? `Desk Officer (${adminRole === 'SUPER_ADMIN' ? 'Super Admin' : adminRole === 'MODERATOR' ? 'Moderator' : 'Admin'})`
-        : safeRole === 'PARTY A'
-          ? group.custom_name_a
-          // A Seller's personal name (given once, at account creation) always
-          // wins over the group's generic "Seller" label — and must survive
-          // every later reconnect, not just the first one.
-          : (displayNameOverride || (existingSeller && existingSeller.display_name) || group.custom_name_b);
+        : (safeRole === 'PARTY A' ? group.custom_name_a : group.custom_name_b);
 
       // A reconnect within the grace window (brief network blip / tab
       // backgrounding) just clears the pending "went offline" timer below —
@@ -238,7 +206,6 @@ function registerSocketHandlers(io, socket) {
         role: isAdmin ? null : safeRole,
         socketId: socket.id,
         sessionToken,
-        kycStatus: user.kyc_status || 'not_submitted',
         messages: await Promise.all(messages.map(publicMessage)),
         pinnedMessages: await Promise.all(pinnedMessages.map(publicMessage)),
         unreadCounts,
@@ -254,177 +221,25 @@ function registerSocketHandlers(io, socket) {
       await broadcastGroupsList();
       if (isAdmin) { await broadcastStats(); await broadcastDashboardWidgets(); }
     } catch (err) {
-      console.error('[join] error:', err);
+      console.error('[join-room] error:', err);
       socket.emit('error-msg', 'Failed to join room.');
     }
-  }
-
-  socket.on('join-room', (payload) => performJoin(socket, payload || {}));
-
-  // ---------------- INVITE-ONLY SELLER REGISTRATION ----------------
-  // Check whether a link's token is still good, *without* creating anything —
-  // this is what shows the "Create your account" popup instead of an error.
-  socket.on('check-invite', async ({ token }) => {
-    try {
-      if (!token || typeof token !== 'string') return socket.emit('invite-invalid', { reason: 'Missing invite token.' });
-      const invite = await store.getInvite(token);
-      if (!invite) return socket.emit('invite-invalid', { reason: 'This invite link is invalid.' });
-      if (invite.used_at) return socket.emit('invite-invalid', { reason: 'This invite link has already been used. If this is your link, just open the app normally — your account remembers you.' });
-      if (new Date(invite.expires_at) < new Date()) return socket.emit('invite-invalid', { reason: 'This invite link has expired. Ask your Admin for a new one.' });
-      const group = await store.getGroup(invite.group_id);
-      if (!group) return socket.emit('invite-invalid', { reason: 'The group for this invite no longer exists.' });
-      socket.emit('invite-valid', {
-        token,
-        groupId: invite.group_id,
-        groupName: group.name,
-        roleLabel: group.custom_name_b || 'Seller',
-        prefillName: invite.seller_name || '',
-        prefillEmail: invite.seller_email || ''
-      });
-    } catch (err) {
-      console.error('[check-invite] error:', err);
-      socket.emit('invite-invalid', { reason: 'Something went wrong checking your invite link.' });
-    }
   });
 
-  // Redeem a valid invite: this is the ONLY place a Seller account is ever
-  // created. Everything after that (joining the room, live state) reuses the
-  // exact same performJoin() a normal reconnect uses.
-  socket.on('redeem-invite', async ({ token, sessionToken, displayName, password }) => {
-    try {
-      if (!sessionToken || typeof sessionToken !== 'string') return;
-      if (!token || typeof token !== 'string') return socket.emit('error-msg', 'Missing invite token.');
-
-      const invite = await store.getInvite(token);
-      if (!invite) return socket.emit('invite-invalid', { reason: 'This invite link is invalid.' });
-      if (invite.used_at) return socket.emit('invite-invalid', { reason: 'This invite link has already been used.' });
-      if (new Date(invite.expires_at) < new Date()) return socket.emit('invite-invalid', { reason: 'This invite link has expired. Ask your Admin for a new one.' });
-
-      const cleanName = sanitizeText(displayName, 100);
-      if (!cleanName) return socket.emit('error-msg', 'Please enter your full name.');
-      if (!isValidPassword(password)) return socket.emit('error-msg', 'Choose a password with at least 8 characters.');
-
-      const group = await store.getGroup(invite.group_id);
-      if (!group) return socket.emit('invite-invalid', { reason: 'The group for this invite no longer exists.' });
-
-      const passwordHash = hashPassword(password);
-      const safeName = escapeHtml(cleanName);
-      await store.upsertUser({
-        sessionToken,
-        displayName: safeName,
-        role: 'PARTY B',
-        isAdmin: false,
-        adminRole: null,
-        email: isValidEmailSafe(invite.seller_email) ? invite.seller_email : undefined,
-        passwordHash,
-        kycStatus: 'not_submitted',
-        isOnline: true
-      });
-      await store.markInviteUsed(token, sessionToken);
-
-      await performJoin(socket, {
-        groupId: invite.group_id, role: 'PARTY B', adminKey: null, sessionToken,
-        email: invite.seller_email, sellerPreauthorized: true, displayNameOverride: safeName
-      });
-      await broadcastDirectory();
-    } catch (err) {
-      console.error('[redeem-invite] error:', err);
-      socket.emit('error-msg', 'Failed to create your account. Please try again.');
-    }
+  // ---------------- FINANCE DASHBOARD LIVE UPDATES ----------------
+  // Lightweight, separate from the chat join-room flow above: the seller
+  // finance dashboard (public/seller.html) authenticates over REST with its
+  // own httpOnly session cookie, then just asks to be dropped into its
+  // group's room so it can hear the kyc/deposit/withdrawal-*-changed events
+  // that routes.js emits. Knowing the (unguessable, UUID) groupId is the
+  // same trust boundary the rest of this file already uses for group
+  // rooms — tightening this to also check the seller session cookie against
+  // the socket handshake is a reasonable follow-up hardening step.
+  socket.on('join-finance-room', ({ groupId }) => {
+    if (groupId && typeof groupId === 'string') socket.join(groupId);
   });
-
-  // ---------------- ADMIN+: INVITE MANAGEMENT ----------------
-  socket.on('admin-create-invite', async ({ groupId, sellerName, sellerEmail }) => {
-    if (!metaHasMinRole('ADMIN')) return;
-    const group = await store.getGroup(groupId);
-    if (!group) return socket.emit('error-msg', 'Group not found.');
-    const token = generateInviteToken();
-    await store.createInvite({
-      token, groupId, role: 'PARTY B',
-      sellerName: sanitizeText(sellerName, 100) || null,
-      sellerEmail: isValidEmailSafe(sellerEmail) ? sellerEmail : null,
-      createdBy: meta().sessionToken
-    });
-    socket.emit('invite-created', { token, groupId });
-  });
-
-  socket.on('admin-list-invites', async ({ groupId }) => {
-    if (!metaHasMinRole('ADMIN')) return;
-    const invites = await store.getInvitesForGroup(groupId);
-    socket.emit('invites-list', { groupId, invites: invites.map(publicInvite) });
-  });
-
-  socket.on('admin-revoke-invite', async ({ token, groupId }) => {
-    if (!metaHasMinRole('ADMIN')) return;
-    await store.revokeInvite(token);
-    const invites = await store.getInvitesForGroup(groupId);
-    socket.emit('invites-list', { groupId, invites: invites.map(publicInvite) });
-  });
-
-  // ---------------- SELLER: SUBMIT KYC ----------------
-  socket.on('submit-kyc', async ({ groupId, documents }) => {
-    const m = meta();
-    if (!m || m.isAdmin) return;
-    if (!Array.isArray(documents) || documents.length === 0) {
-      return socket.emit('error-msg', 'Please attach at least one document.');
-    }
-    const cleanDocs = documents.slice(0, 10)
-      .map(d => ({
-        url: sanitizeText(d && d.url, 500),
-        name: escapeHtml(sanitizeText(d && d.name, 200)),
-        type: escapeHtml(sanitizeText(d && d.type, 100))
-      }))
-      .filter(d => d.url);
-    if (!cleanDocs.length) return socket.emit('error-msg', 'Please attach at least one valid document.');
-
-    const submission = await store.createKycSubmission({ sessionToken: m.sessionToken, groupId, documents: cleanDocs });
-    await store.setKycStatus(m.sessionToken, 'pending');
-    socket.emit('kyc-status-update', { status: 'pending' });
-
-    const [user, group] = await Promise.all([store.getUser(m.sessionToken), store.getGroup(groupId)]);
-    io.to('admins').emit('kyc-submission-created', {
-      id: submission.id, sessionToken: m.sessionToken, groupId,
-      sellerName: user ? user.display_name : 'Unknown',
-      groupName: group ? group.name : 'Unknown group',
-      documents: cleanDocs, status: 'pending', submittedAt: submission.submitted_at
-    });
-    await broadcastStats();
-    await broadcastDashboardWidgets();
-  });
-
-  // ---------------- ADMIN+: REVIEW KYC (the only role that can approve/reject) ----------------
-  socket.on('admin-list-kyc', async () => {
-    if (!metaHasMinRole('ADMIN')) return;
-    const pending = await store.getPendingKycSubmissions();
-    const enriched = await Promise.all(pending.map(async k => {
-      const [user, group] = await Promise.all([store.getUser(k.session_token), store.getGroup(k.group_id)]);
-      return {
-        id: k.id, sessionToken: k.session_token, groupId: k.group_id,
-        sellerName: user ? user.display_name : 'Unknown',
-        groupName: group ? group.name : 'Unknown group',
-        documents: k.documents, status: k.status, submittedAt: k.submitted_at
-      };
-    }));
-    socket.emit('kyc-list', { submissions: enriched });
-  });
-
-  socket.on('admin-review-kyc', async ({ submissionId, decision, rejectReason }) => {
-    if (!metaHasMinRole('ADMIN')) return;
-    if (!['verified', 'rejected'].includes(decision)) return;
-    const submission = await store.getKycSubmission(submissionId);
-    if (!submission) return socket.emit('error-msg', 'Submission not found.');
-    const cleanReason = sanitizeText(rejectReason, 300);
-    await store.reviewKycSubmission(submissionId, { status: decision, reviewedBy: meta().sessionToken, rejectReason: cleanReason });
-    await store.setKycStatus(submission.session_token, decision);
-
-    for (const [socketId, v] of activeSockets.entries()) {
-      if (v.sessionToken === submission.session_token) {
-        io.sockets.sockets.get(socketId)?.emit('kyc-status-update', { status: decision, rejectReason: cleanReason || null });
-      }
-    }
-    io.to('admins').emit('kyc-submission-reviewed', { id: submissionId, status: decision });
-    await broadcastStats();
-    await broadcastDashboardWidgets();
+  socket.on('join-admin-finance-room', ({ adminKey } = {}) => {
+    if (resolveAdminRole(adminKey)) socket.join('admins');
   });
 
   // ---------------- SEND MESSAGE ----------------
@@ -649,18 +464,10 @@ function registerSocketHandlers(io, socket) {
     }
 
     const group = await store.getGroup(newId);
-
-    // The Seller side of a brand-new group is invite-only from the moment it
-    // exists — generate that first invite right away so the "Group Ready"
-    // modal can hand a real, single-use link straight to the Admin.
-    const sellerInviteToken = generateInviteToken();
-    await store.createInvite({ token: sellerInviteToken, groupId: newId, role: 'PARTY B', createdBy: meta().sessionToken });
-
     await broadcastGroupsList();
     socket.emit('group-created-and-switch', {
       newGroupId: newId,
-      customNames: { A: group.custom_name_a, B: group.custom_name_b },
-      sellerInviteToken
+      customNames: { A: group.custom_name_a, B: group.custom_name_b }
     });
   });
 

@@ -1,42 +1,5 @@
 // Security utilities: XSS protection, input validation/sanitization, rate limiting.
 
-const crypto = require('crypto');
-
-/**
- * Password hashing for seller accounts (invite-based registration).
- * Uses Node's built-in scrypt — no extra dependency (e.g. bcrypt) required.
- * Stored format: "<hex salt>:<hex hash>".
- */
-function hashPassword(password) {
-  const salt = crypto.randomBytes(16).toString('hex');
-  const hash = crypto.scryptSync(String(password), salt, 64).toString('hex');
-  return `${salt}:${hash}`;
-}
-
-/** Verify a plaintext password against a stored "salt:hash" string. Timing-safe. */
-function verifyPassword(password, stored) {
-  if (!stored || typeof stored !== 'string' || !stored.includes(':')) return false;
-  const [salt, hash] = stored.split(':');
-  try {
-    const candidate = crypto.scryptSync(String(password), salt, 64).toString('hex');
-    const a = Buffer.from(hash, 'hex');
-    const b = Buffer.from(candidate, 'hex');
-    if (a.length !== b.length) return false;
-    return crypto.timingSafeEqual(a, b);
-  } catch {
-    return false;
-  }
-}
-
-function isValidPassword(password) {
-  return typeof password === 'string' && password.length >= 8 && password.length <= 200;
-}
-
-/** Unguessable single-use invite token — this is the only door a Seller account can walk through. */
-function generateInviteToken() {
-  return crypto.randomBytes(24).toString('hex');
-}
-
 /**
  * Escape HTML special characters so user-generated text can never be
  * interpreted as markup when injected into the DOM. Applied server-side
@@ -130,9 +93,5 @@ module.exports = {
   isValidEmail,
   isNonEmptyString,
   validateTransactionForm,
-  RateLimiter,
-  hashPassword,
-  verifyPassword,
-  isValidPassword,
-  generateInviteToken
+  RateLimiter
 };
