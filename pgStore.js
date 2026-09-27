@@ -31,8 +31,8 @@ class PgStore {
   // ---------- USERS ----------
   async upsertUser(u) {
     const { rows } = await this.pool.query(
-      `INSERT INTO users (session_token, display_name, role, is_admin, admin_role, email, country_code, avatar_seed, is_online, last_seen)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, NOW())
+      `INSERT INTO users (session_token, display_name, role, is_admin, admin_role, email, country_code, avatar_seed, is_online, password_hash, kyc_status, last_seen)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,COALESCE($11,'not_submitted'), NOW())
        ON CONFLICT (session_token) DO UPDATE SET
          display_name = COALESCE($2, users.display_name),
          role = COALESCE($3, users.role),
@@ -41,9 +41,11 @@ class PgStore {
          email = CASE WHEN $6 IS NOT NULL THEN $6 ELSE users.email END,
          country_code = CASE WHEN $7 IS NOT NULL THEN $7 ELSE users.country_code END,
          is_online = COALESCE($9, users.is_online),
+         password_hash = CASE WHEN $10 IS NOT NULL THEN $10 ELSE users.password_hash END,
+         kyc_status = CASE WHEN $11 IS NOT NULL THEN $11 ELSE users.kyc_status END,
          last_seen = NOW()
        RETURNING *`,
-      [u.sessionToken, u.displayName, u.role || 'PARTY A', !!u.isAdmin, u.adminRole || null, u.email || null, u.countryCode || null, u.sessionToken, u.isOnline ?? false]
+      [u.sessionToken, u.displayName, u.role || 'PARTY A', !!u.isAdmin, u.adminRole || null, u.email || null, u.countryCode || null, u.sessionToken, u.isOnline ?? false, u.passwordHash || null, u.kycStatus || null]
     );
     return rows[0];
   }
@@ -54,6 +56,17 @@ class PgStore {
 
   async getUser(sessionToken) {
     const { rows } = await this.pool.query(`SELECT * FROM users WHERE session_token=$1`, [sessionToken]);
+    return rows[0] || null;
+  }
+
+  async getUserByEmail(email) {
+    if (!email) return null;
+    const { rows } = await this.pool.query(`SELECT * FROM users WHERE lower(email)=lower($1) LIMIT 1`, [email]);
+    return rows[0] || null;
+  }
+
+  async setKycStatus(sessionToken, status) {
+    const { rows } = await this.pool.query(`UPDATE users SET kyc_status=$2 WHERE session_token=$1 RETURNING *`, [sessionToken, status]);
     return rows[0] || null;
   }
 
@@ -92,31 +105,11 @@ class PgStore {
     return rows;
   }
 
-  async findGroupsBySellerEmail(email) {
-    const { rows } = await this.pool.query(
-      `SELECT * FROM groups WHERE lower(email_b) = lower($1) AND seller_registered = TRUE`,
-      [email]
-    );
-    return rows;
-  }
-
   async updateGroup(groupId, fields) {
     const map = {
       name: 'name', custom_name_a: 'custom_name_a', custom_name_b: 'custom_name_b',
-      email_a: 'email_a', email_b: 'email_b',
-      buyer_session_token: 'buyer_session_token', seller_session_token: 'seller_session_token',
       file_uploads_enabled: 'file_uploads_enabled', highlighted: 'highlighted',
-      transaction_form_enabled: 'transaction_form_enabled', banner_url: 'banner_url',
-      // Transaction Account (seller registration/KYC/balance)
-      seller_registered: 'seller_registered', seller_full_name: 'seller_full_name',
-      seller_password_hash: 'seller_password_hash', seller_currency: 'seller_currency',
-      currency_locked_at: 'currency_locked_at', seller_failed_logins: 'seller_failed_logins',
-      seller_locked_until: 'seller_locked_until', kyc_status: 'kyc_status', kyc_doc_type: 'kyc_doc_type',
-      kyc_id_front_url: 'kyc_id_front_url', kyc_id_back_url: 'kyc_id_back_url',
-      kyc_proof_address_url: 'kyc_proof_address_url', kyc_selfie_url: 'kyc_selfie_url',
-      kyc_submitted_at: 'kyc_submitted_at', kyc_reviewed_by: 'kyc_reviewed_by', kyc_reviewed_at: 'kyc_reviewed_at',
-      kyc_rejection_reason: 'kyc_rejection_reason', balance_available: 'balance_available',
-      balance_held: 'balance_held', total_deposited: 'total_deposited'
+      transaction_form_enabled: 'transaction_form_enabled', banner_url: 'banner_url'
     };
     const keys = Object.keys(fields).filter(k => map[k]);
     if (keys.length === 0) return this.getGroup(groupId);
@@ -333,13 +326,14 @@ class PgStore {
 
   // ---------- STATS ----------
   async getStats() {
-    const [{ rows: u }, { rows: g }, { rows: mt }, { rows: ut }, { rows: tx }] = await Promise.all([
+    const [{ rows: u }, { rows: g }, { rows: mt }, { rows: ut }, { rows: tx }, pendingKyc] = await Promise.all([
       this.pool.query(`SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE is_online)::int AS online FROM users`),
       this.pool.query(`SELECT COUNT(*)::int AS total FROM groups`),
       this.pool.query(`SELECT COUNT(*)::int AS total FROM messages WHERE is_deleted=FALSE AND created_at >= date_trunc('day', NOW())`),
       this.pool.query(`SELECT COUNT(*)::int AS total FROM messages WHERE is_deleted=FALSE AND file_url IS NOT NULL AND created_at >= date_trunc('day', NOW())`),
-      this.pool.query(`SELECT COUNT(*)::int AS total FROM transactions`)
-    ].map(p => p.then(r => ({ rows: r.rows }))));
+      this.pool.query(`SELECT COUNT(*)::int AS total FROM transactions`),
+      this.getPendingKycCount()
+    ].map((p, i) => i === 5 ? p : p.then(r => ({ rows: r.rows }))));
 
     return {
       totalUsers: u[0].total,
@@ -348,7 +342,8 @@ class PgStore {
       totalGroups: g[0].total,
       messagesToday: mt[0].total,
       uploadsToday: ut[0].total,
-      transactionsSubmitted: tx[0].total
+      transactionsSubmitted: tx[0].total,
+      pendingKyc
     };
   }
 
@@ -439,6 +434,74 @@ class PgStore {
     return 'sent';
   }
 
+  // ---------- INVITES (Seller registration is invite-only) ----------
+  async createInvite({ token, groupId, role, sellerName, sellerEmail, createdBy, expiresAt }) {
+    const { rows } = await this.pool.query(
+      `INSERT INTO invites (token, group_id, role, seller_name, seller_email, created_by, expires_at)
+       VALUES ($1,$2,COALESCE($3,'PARTY B'),$4,$5,$6,COALESCE($7, NOW() + INTERVAL '14 days'))
+       RETURNING *`,
+      [token, groupId, role, sellerName || null, sellerEmail || null, createdBy || null, expiresAt || null]
+    );
+    return rows[0];
+  }
+  async getInvite(token) {
+    const { rows } = await this.pool.query(`SELECT * FROM invites WHERE token=$1`, [token]);
+    return rows[0] || null;
+  }
+  async getInvitesForGroup(groupId) {
+    const { rows } = await this.pool.query(`SELECT * FROM invites WHERE group_id=$1 ORDER BY created_at DESC`, [groupId]);
+    return rows;
+  }
+  async markInviteUsed(token, usedBy) {
+    const { rows } = await this.pool.query(
+      `UPDATE invites SET used_at=NOW(), used_by=$2 WHERE token=$1 RETURNING *`,
+      [token, usedBy]
+    );
+    return rows[0] || null;
+  }
+  async revokeInvite(token) {
+    const { rowCount } = await this.pool.query(`DELETE FROM invites WHERE token=$1`, [token]);
+    return rowCount > 0;
+  }
+
+  // ---------- KYC SUBMISSIONS ----------
+  async createKycSubmission({ sessionToken, groupId, documents }) {
+    const id = uuid();
+    const { rows } = await this.pool.query(
+      `INSERT INTO kyc_submissions (id, session_token, group_id, documents) VALUES ($1,$2,$3,$4) RETURNING *`,
+      [id, sessionToken, groupId, JSON.stringify(documents || [])]
+    );
+    return rows[0];
+  }
+  async getKycSubmission(id) {
+    const { rows } = await this.pool.query(`SELECT * FROM kyc_submissions WHERE id=$1`, [id]);
+    return rows[0] || null;
+  }
+  async getKycForUser(sessionToken) {
+    const { rows } = await this.pool.query(
+      `SELECT * FROM kyc_submissions WHERE session_token=$1 ORDER BY submitted_at DESC`,
+      [sessionToken]
+    );
+    return rows;
+  }
+  async getPendingKycSubmissions() {
+    const { rows } = await this.pool.query(
+      `SELECT * FROM kyc_submissions WHERE status='pending' ORDER BY submitted_at ASC`
+    );
+    return rows;
+  }
+  async reviewKycSubmission(id, { status, reviewedBy, rejectReason }) {
+    const { rows } = await this.pool.query(
+      `UPDATE kyc_submissions SET status=$2, reviewed_by=$3, reviewed_at=NOW(), reject_reason=$4 WHERE id=$1 RETURNING *`,
+      [id, status, reviewedBy || null, rejectReason || null]
+    );
+    return rows[0] || null;
+  }
+  async getPendingKycCount() {
+    const { rows } = await this.pool.query(`SELECT COUNT(*)::int AS total FROM kyc_submissions WHERE status='pending'`);
+    return rows[0].total;
+  }
+
   // ---------- PUSH SUBSCRIPTIONS ----------
   async savePushSubscription(sessionToken, sub) {
     await this.pool.query(
@@ -453,130 +516,6 @@ class PgStore {
   async getPushSubscriptionsForUser(sessionToken) {
     const { rows } = await this.pool.query(`SELECT * FROM push_subscriptions WHERE session_token=$1`, [sessionToken]);
     return rows;
-  }
-
-  // ---------- PENDING EMAILS (missed-message alerts awaiting admin approval) ----------
-  async createPendingEmail(rec) {
-    const id = uuid();
-    const { rows } = await this.pool.query(
-      `INSERT INTO pending_emails (id, group_id, party, to_email, from_name, group_name, message_text)
-       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-      [id, rec.groupId, rec.party, rec.toEmail, rec.fromName, rec.groupName, rec.messageText]
-    );
-    return rows[0];
-  }
-  async getPendingEmails(status = 'pending') {
-    const { rows } = await this.pool.query(`SELECT * FROM pending_emails WHERE status=$1 ORDER BY created_at DESC`, [status]);
-    return rows;
-  }
-  async getPendingEmailById(id) {
-    const { rows } = await this.pool.query(`SELECT * FROM pending_emails WHERE id=$1`, [id]);
-    return rows[0] || null;
-  }
-  async resolvePendingEmail(id, status) {
-    const { rows } = await this.pool.query(
-      `UPDATE pending_emails SET status=$2, resolved_at=NOW() WHERE id=$1 RETURNING *`,
-      [id, status]
-    );
-    return rows[0] || null;
-  }
-
-  // ---------- PASSWORD RESETS (Transaction Account) ----------
-  async createPasswordReset(rec) {
-    const { rows } = await this.pool.query(
-      `INSERT INTO password_resets (id, group_id, code_hash, expires_at) VALUES ($1,$2,$3,$4) RETURNING *`,
-      [uuid(), rec.groupId, rec.codeHash, rec.expiresAt]
-    );
-    return rows[0];
-  }
-  async getLatestPasswordReset(groupId) {
-    const { rows } = await this.pool.query(
-      `SELECT * FROM password_resets WHERE group_id=$1 AND consumed_at IS NULL ORDER BY created_at DESC LIMIT 1`,
-      [groupId]
-    );
-    return rows[0] || null;
-  }
-  async setPasswordResetToken(id, resetToken) {
-    const { rows } = await this.pool.query(
-      `UPDATE password_resets SET reset_token=$2 WHERE id=$1 RETURNING *`,
-      [id, resetToken]
-    );
-    return rows[0] || null;
-  }
-  async consumePasswordResetByToken(groupId, resetToken) {
-    const { rows } = await this.pool.query(
-      `UPDATE password_resets SET consumed_at=NOW()
-       WHERE group_id=$1 AND reset_token=$2 AND consumed_at IS NULL RETURNING *`,
-      [groupId, resetToken]
-    );
-    return rows[0] || null;
-  }
-
-  // ---------- DEPOSITS ----------
-  async createDeposit(rec) {
-    const { rows } = await this.pool.query(
-      `INSERT INTO deposits (id, group_id, method, asset, network, reference_code, amount)
-       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-      [uuid(), rec.groupId, rec.method, rec.asset || null, rec.network || null, rec.referenceCode || null, rec.amount]
-    );
-    return rows[0];
-  }
-  async getDepositsForGroup(groupId) {
-    const { rows } = await this.pool.query(`SELECT * FROM deposits WHERE group_id=$1 ORDER BY notified_at DESC`, [groupId]);
-    return rows;
-  }
-  async getDepositById(id) {
-    const { rows } = await this.pool.query(`SELECT * FROM deposits WHERE id=$1`, [id]);
-    return rows[0] || null;
-  }
-  async getPendingDeposits() {
-    const { rows } = await this.pool.query(`SELECT * FROM deposits WHERE status='held_in_vault' ORDER BY notified_at ASC`);
-    return rows;
-  }
-  async resolveDeposit(id, { status, verifiedBy, rejectionReason }) {
-    const { rows } = await this.pool.query(
-      `UPDATE deposits SET status=$2, verified_by=$3, verified_at=NOW(), rejection_reason=$4 WHERE id=$1 RETURNING *`,
-      [id, status, verifiedBy || null, rejectionReason || null]
-    );
-    return rows[0] || null;
-  }
-
-  // ---------- WITHDRAWAL REQUESTS ----------
-  async createWithdrawal(rec) {
-    const history = JSON.stringify([{ status: 'pending', at: new Date().toISOString(), by: null, note: 'Submitted by seller' }]);
-    const { rows } = await this.pool.query(
-      `INSERT INTO withdrawal_requests
-        (id, group_id, method, asset, network, destination, beneficiary_name, bank_name, bank_account, bank_swift, bank_country, amount, amount_currency, amount_ledger, status_history)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
-      [uuid(), rec.groupId, rec.method, rec.asset || null, rec.network || null, rec.destination || null,
-       rec.beneficiaryName || null, rec.bankName || null, rec.bankAccount || null, rec.bankSwift || null, rec.bankCountry || null,
-       rec.amount, rec.amountCurrency, rec.amountLedger, history]
-    );
-    return rows[0];
-  }
-  async getWithdrawalsForGroup(groupId) {
-    const { rows } = await this.pool.query(`SELECT * FROM withdrawal_requests WHERE group_id=$1 ORDER BY created_at DESC`, [groupId]);
-    return rows;
-  }
-  async getWithdrawalById(id) {
-    const { rows } = await this.pool.query(`SELECT * FROM withdrawal_requests WHERE id=$1`, [id]);
-    return rows[0] || null;
-  }
-  async getPendingWithdrawals() {
-    const { rows } = await this.pool.query(
-      `SELECT * FROM withdrawal_requests WHERE status NOT IN ('completed','rejected','failed') ORDER BY created_at ASC`
-    );
-    return rows;
-  }
-  async advanceWithdrawal(id, { status, reason, by }) {
-    const { rows } = await this.pool.query(
-      `UPDATE withdrawal_requests
-         SET status=$2, status_reason=$3, updated_at=NOW(),
-             status_history = status_history || $4::jsonb
-       WHERE id=$1 RETURNING *`,
-      [id, status, reason || null, JSON.stringify([{ status, at: new Date().toISOString(), by: by || null, note: reason || null }])]
-    );
-    return rows[0] || null;
   }
 
   // ---------- BRANDING ----------
@@ -602,17 +541,19 @@ class PgStore {
 
   // ---------- DASHBOARD WIDGETS ----------
   async getDashboardWidgets() {
-    const [{ rows: online }, { rows: recentTx }, { rows: recentUploads }, pendingReviews] = await Promise.all([
+    const [{ rows: online }, { rows: recentTx }, { rows: recentUploads }, pendingReviews, pendingKyc] = await Promise.all([
       this.pool.query(`SELECT display_name, role, is_admin FROM users WHERE is_online=TRUE ORDER BY last_seen DESC`),
       this.pool.query(`SELECT * FROM transactions ORDER BY submitted_at DESC LIMIT 5`),
       this.pool.query(`SELECT id, file_name, file_type, sender_name, group_id, created_at FROM messages WHERE file_url IS NOT NULL AND is_deleted=FALSE ORDER BY created_at DESC LIMIT 5`),
-      this.getPendingTasksCount()
+      this.getPendingTasksCount(),
+      this.getPendingKycCount()
     ]);
     return {
       onlineUsers: online.map(u => ({ displayName: u.display_name, role: u.role, isAdmin: u.is_admin })),
       recentTransactions: recentTx,
       recentUploads: recentUploads.map(m => ({ id: m.id, fileName: m.file_name, fileType: m.file_type, sender: m.sender_name, groupId: m.group_id, createdAt: m.created_at })),
-      pendingReviews
+      pendingReviews,
+      pendingKyc
     };
   }
 }

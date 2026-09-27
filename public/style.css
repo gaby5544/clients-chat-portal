@@ -613,3 +613,49 @@ body.role-super_admin button.drawer-tab.super-admin-only { display: block !impor
 @media (max-width: 900px) {
   .onboarding-card { padding: 26px 20px; }
 }
+
+/* ==================== SELLER-ONLY GATING ==================== */
+/* Mirrors .admin-only — visible only when body carries .seller-view
+   (set client-side once the server confirms this session is a Seller,
+   PARTY B, and not an Admin). */
+.seller-only { display: none !important; }
+body.seller-view .seller-only { display: flex !important; }
+
+/* ==================== KYC ==================== */
+.kyc-status-banner { border-radius: 12px; padding: 10px 13px; font-size: 0.8rem; font-weight: 700; margin-bottom: 14px; display: none; align-items: center; gap: 8px; }
+.kyc-status-banner.show { display: flex; }
+.kyc-status-banner.not_submitted { background: rgba(148,163,184,0.12); color: var(--text-muted); }
+.kyc-status-banner.pending { background: rgba(245,165,36,0.14); color: var(--accent-amber); border: 1px solid rgba(245,165,36,0.35); }
+.kyc-status-banner.verified { background: rgba(34,211,165,0.14); color: var(--accent-emerald); border: 1px solid rgba(34,211,165,0.35); }
+.kyc-status-banner.rejected { background: rgba(251,84,121,0.14); color: var(--accent-rose); border: 1px solid rgba(251,84,121,0.35); }
+.kyc-doc-row { display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.03); border: 1px solid var(--border-soft); border-radius: 9px; padding: 8px 11px; font-size: 0.78rem; }
+
+/* ==================== SELLER ACCOUNT — REFINED LOOK ====================
+   Scoped to body.seller-view only, so Buyer and every Admin/Moderator tier
+   keep the exact original look. Same color palette throughout — only the
+   type, corner radius, shadow weight and button edges change. */
+body.seller-view {
+  --radius-lg: 18px;
+  --radius-md: 12px;
+  --radius-sm: 8px;
+  --shadow-deep: 0 32px 64px -22px rgba(0,0,0,0.55);
+}
+body.seller-view .brand-title,
+body.seller-view .tx-modal-title,
+body.seller-view .tx-section-heading,
+body.seller-view .onboarding-title,
+body.seller-view .stat-value,
+body.seller-view .widget-pending-count,
+body.seller-view .modal-header span:first-child {
+  font-family: 'Fraunces', 'Sora', serif;
+  letter-spacing: 0.2px;
+}
+body.seller-view .send-btn,
+body.seller-view .send-btn-elite,
+body.seller-view .tx-submit-elite {
+  border: 1px solid rgba(255,255,255,0.16);
+}
+body.seller-view .admin-btn,
+body.seller-view .icon-btn {
+  border-color: rgba(255,255,255,0.10);
+}

@@ -1,10 +1,33 @@
-# Quantum Secure Transaction Desk — v3.0
+# Quantum Secure Transaction Desk — v3.1
 
 Enterprise chat portal: dark-glass UI, PostgreSQL persistence (with
 in-memory dev fallback), transaction board with PDF receipts, multi-admin
 role tiers, announcements, tasks & approvals, live dashboard widgets, push
 notifications, message read receipts, a Branding Center, onboarding, and
 hardened input handling throughout.
+
+## v3.1 additions — invite-only Seller accounts + KYC
+- **Seller registration is invite-only.** A Seller (Party B) can no longer
+  self-register by opening a guessable `?groupId=...&role=PARTY%20B` link.
+  Only an Admin+ can generate a real, single-use invite (Controls tab →
+  "Generate Seller Invite Link", or automatically when a new group is
+  created). Anyone else asking to join as Seller is refused server-side.
+- **"Create Your Account" popup.** Opening a valid invite link shows a
+  mandatory name + password modal — shown *only* to that Seller — before
+  they can enter the group. Once created, the account persists (localStorage,
+  survives closing the browser) and the link is marked used so it can't be
+  shared or replayed.
+- **KYC review.** A Seller can submit identity documents from a new
+  verification button (visible only on Seller accounts); Admin+ gets a new
+  **KYC tab** to verify or reject each submission, with live status updates
+  pushed back to the Seller and a "Pending KYC" count on the Admin dashboard.
+- **Refined Seller look.** A distinct serif display font (Fraunces), tighter
+  corners, and a softer shadow apply *only* to a logged-in Seller's view
+  (`body.seller-view`) — Buyer and every Admin tier are visually unchanged.
+- New tables: `invites`, `kyc_submissions`; new columns on `users`:
+  `password_hash` (scrypt-hashed, no new dependency), `kyc_status`.
+- `npm run test:invite-flow` — an end-to-end smoke test covering the whole
+  flow above against a live (in-memory is fine) instance of the server.
 
 ## v3.0 additions
 - **Announcements** — Admin+ can post to any combination of groups; each one

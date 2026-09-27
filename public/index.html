@@ -6,7 +6,7 @@
 <title>Quantum Secure Transaction Desk</title>
 <script src="/socket.io/socket.io.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Sora:wght@600;700;800&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Sora:wght@600;700;800&family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700;9..144,800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 <link rel="stylesheet" href="/style.css">
 </head>
@@ -75,8 +75,9 @@
           <i class="fa-solid fa-list-check"></i><span class="badge-dot hidden" id="tasksDot"></span>
         </button>
         <button class="icon-btn" id="notifyToggleBtn" onclick="togglePushSubscription()" title="Enable notifications"><i class="fa-solid fa-bell"></i></button>
-        <button class="icon-btn" id="emailAlertsBtn" onclick="openEmailSettings()" title="Email alerts"><i class="fa-solid fa-envelope"></i></button>
-        <button class="icon-btn hidden" id="txAccountBtn" onclick="openTxAccountModal()" title="Your Transaction Account"><i class="fa-solid fa-building-columns"></i></button>
+        <button class="icon-btn seller-only" id="kycToggleBtn" onclick="openKycModal()" title="Identity Verification (KYC)">
+          <i class="fa-solid fa-id-card-clip"></i><span class="badge-dot hidden" id="kycNeedsActionDot"></span>
+        </button>
         <button class="icon-btn admin-only" id="selectModeBtn" onclick="toggleSelectMode()" title="Select messages"><i class="fa-solid fa-square-check"></i></button>
         <button class="icon-btn admin-only" onclick="openAdminDrawerTab('transactions')" title="Transaction Board"><i class="fa-solid fa-file-invoice-dollar"></i></button>
         <div class="presence-cluster" id="presenceCluster"></div>
@@ -173,8 +174,8 @@
       <button class="drawer-tab active" data-tab="dashboard" onclick="setAdminTab('dashboard')" data-i18n="dashboard">Dashboard</button>
       <button class="drawer-tab" data-tab="controls" onclick="setAdminTab('controls')" data-i18n="controls">Controls</button>
       <button class="drawer-tab admin-plus-only" data-tab="transactions" onclick="setAdminTab('transactions')" data-i18n="transactions">Transactions</button>
-      <button class="drawer-tab admin-plus-only" data-tab="accounts" onclick="setAdminTab('accounts')">Accounts</button>
       <button class="drawer-tab" data-tab="tasks" onclick="setAdminTab('tasks')">Tasks</button>
+      <button class="drawer-tab admin-plus-only" data-tab="kyc" onclick="setAdminTab('kyc')">KYC</button>
       <button class="drawer-tab super-admin-only hidden" data-tab="branding" onclick="setAdminTab('branding')">Branding</button>
     </div>
 
@@ -197,6 +198,10 @@
         <span class="admin-section-label"><i class="fa-solid fa-clipboard-check"></i> PENDING REVIEWS</span>
         <div id="widgetPendingReviews" class="widget-pending-count">0</div>
       </div>
+      <div class="admin-section">
+        <span class="admin-section-label"><i class="fa-solid fa-id-card-clip"></i> PENDING KYC</span>
+        <div id="widgetPendingKyc" class="widget-pending-count">0</div>
+      </div>
 
       <div class="admin-section">
         <span class="admin-section-label"><i class="fa-solid fa-eye"></i> <span data-i18n="liveDraft">LIVE SPECTATOR DRAFT</span></span>
@@ -215,21 +220,19 @@
         <button class="admin-btn admin-btn-danger" onclick="deleteCurrentGroup()"><i class="fa-solid fa-trash"></i> <span data-i18n="deleteGroup">Delete Active Group</span></button>
         <button class="admin-btn admin-btn-danger" onclick="clearChatHistory()"><i class="fa-solid fa-broom"></i> <span data-i18n="clearChat">Clear Chat History</span></button>
         <button class="admin-btn" onclick="copyInviteLink('A')"><i class="fa-solid fa-link"></i> <span data-i18n="inviteLinkA">Copy Party A Link (Buyer)</span></button>
-        <button class="admin-btn" onclick="copyInviteLink('B')"><i class="fa-solid fa-link"></i> <span data-i18n="inviteLinkB">Copy Party B Link (Seller)</span></button>
         <button class="admin-btn" onclick="toggleHighlightGroup()"><i class="fa-solid fa-star"></i> <span data-i18n="toggleHighlight">Toggle Group Highlight</span></button>
+      </div>
+      <div class="admin-section admin-plus-only">
+        <span class="admin-section-label"><i class="fa-solid fa-user-plus"></i> SELLER — INVITE-ONLY ACCESS</span>
+        <p style="color:var(--text-muted); font-size:0.74rem; margin:0 0 10px;">A Seller can only ever create an account by opening a link generated here. Each link works once, for one person.</p>
+        <button class="admin-btn" onclick="createSellerInvite()"><i class="fa-solid fa-link"></i> Generate Seller Invite Link</button>
+        <div id="pendingInvitesList" class="tasks-list" style="margin-top:10px;"></div>
       </div>
       <div class="admin-section admin-plus-only">
         <span class="admin-section-label" data-i18n="permissions">PARTY RENAMING &amp; PERMISSIONS</span>
         <button class="admin-btn" onclick="renameParty('A')"><i class="fa-solid fa-pen"></i> <span data-i18n="renameBuyer">Rename Buyer (A)</span></button>
         <button class="admin-btn" onclick="renameParty('B')"><i class="fa-solid fa-pen"></i> <span data-i18n="renameSeller">Rename Seller (B)</span></button>
-        <button class="admin-btn" onclick="setPartyEmail('A')"><i class="fa-solid fa-envelope"></i> Set Buyer's Email</button>
-        <button class="admin-btn" onclick="setPartyEmail('B')"><i class="fa-solid fa-envelope"></i> Set Seller's Email</button>
         <button class="admin-btn" onclick="toggleFileLock()" id="lockFileBtn"><i class="fa-solid fa-lock"></i> <span data-i18n="toggleUploads">Toggle File Upload Switch</span></button>
-      </div>
-      <div class="admin-section admin-plus-only">
-        <span class="admin-section-label"><i class="fa-solid fa-envelope-circle-check"></i> PENDING EMAIL APPROVALS</span>
-        <p style="font-size:0.76rem; color:var(--text-muted); margin:0 0 8px;">Missed-message emails wait here — nothing is sent until you approve it.</p>
-        <div id="pendingEmailsList"><p style="font-size:0.78rem; color:var(--text-faint); margin:0;">No pending emails.</p></div>
       </div>
       <div class="admin-section admin-plus-only">
         <span class="admin-section-label"><i class="fa-solid fa-bullhorn"></i> ANNOUNCEMENTS</span>
@@ -269,23 +272,6 @@
       <div id="transactionsListContainer" class="transactions-list"></div>
     </div>
 
-    <div class="drawer-tab-panel hidden" id="tabAccounts">
-      <div class="admin-section admin-plus-only">
-        <span class="admin-section-label"><i class="fa-solid fa-id-card-clip"></i> KYC REVIEW QUEUE</span>
-        <p style="font-size:0.76rem; color:var(--text-muted); margin:0 0 8px;">Every submission is reviewed manually — nothing is ever auto-approved.</p>
-        <div id="kycQueueList"><p style="font-size:0.78rem; color:var(--text-faint); margin:0;">No pending KYC submissions.</p></div>
-      </div>
-      <div class="admin-section admin-plus-only">
-        <span class="admin-section-label"><i class="fa-solid fa-vault"></i> DEPOSITS — HELD IN VAULT</span>
-        <p style="font-size:0.76rem; color:var(--text-muted); margin:0 0 8px;">A seller's "I sent funds" notice, not proof — confirm on your bank feed or block explorer before verifying.</p>
-        <div id="depositsQueueList"><p style="font-size:0.78rem; color:var(--text-faint); margin:0;">No pending deposits.</p></div>
-      </div>
-      <div class="admin-section admin-plus-only">
-        <span class="admin-section-label"><i class="fa-solid fa-money-bill-transfer"></i> WITHDRAWALS IN PROGRESS</span>
-        <div id="withdrawalsQueueList"><p style="font-size:0.78rem; color:var(--text-faint); margin:0;">No withdrawals in progress.</p></div>
-      </div>
-    </div>
-
     <div class="drawer-tab-panel hidden" id="tabTasks">
       <div class="admin-section admin-plus-only">
         <span class="admin-section-label"><i class="fa-solid fa-list-check"></i> CREATE TASK (ACTIVE GROUP)</span>
@@ -301,6 +287,14 @@
       <div class="admin-section">
         <span class="admin-section-label"><i class="fa-solid fa-clipboard-list"></i> TASKS (ACTIVE GROUP)</span>
         <div id="adminTasksListContainer" class="tasks-list"></div>
+      </div>
+    </div>
+
+    <div class="drawer-tab-panel hidden" id="tabKyc">
+      <div class="admin-section admin-plus-only">
+        <span class="admin-section-label"><i class="fa-solid fa-id-card-clip"></i> PENDING KYC SUBMISSIONS</span>
+        <p style="color:var(--text-muted); font-size:0.74rem; margin:0 0 10px;">Only an Admin can verify or reject a Seller's identity documents.</p>
+        <div id="adminKycListContainer" class="tasks-list"></div>
       </div>
     </div>
 
@@ -354,9 +348,7 @@
       <div class="create-group-form">
         <label class="branding-field">Group Name<input type="text" id="createGroupNameInput" class="message-input" style="width:100%;" placeholder="e.g. Gold Bullion Deal — Lagos"></label>
         <label class="branding-field">Buyer's Name (optional)<input type="text" id="createGroupNameAInput" class="message-input" style="width:100%;" placeholder="Defaults to &quot;Buyer&quot;"></label>
-        <label class="branding-field">Buyer's Email (optional)<input type="email" id="createGroupEmailAInput" class="message-input" style="width:100%;" placeholder="For offline missed-message alerts"></label>
         <label class="branding-field">Seller's Name (optional)<input type="text" id="createGroupNameBInput" class="message-input" style="width:100%;" placeholder="Defaults to &quot;Seller&quot;"></label>
-        <label class="branding-field">Seller's Email (optional)<input type="email" id="createGroupEmailBInput" class="message-input" style="width:100%;" placeholder="For offline missed-message alerts"></label>
       </div>
       <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:16px;">
         <button class="ghost-btn" onclick="closeModal('createGroupModal')">Cancel</button>
@@ -385,152 +377,6 @@
       <div style="display:flex; justify-content:flex-end; margin-top:14px;">
         <button class="send-btn" onclick="closeModal('inviteLinksModal')"><i class="fa-solid fa-check"></i> Done</button>
       </div>
-    </div>
-  </div>
-</div>
-
-<!-- TRANSACTION ACCOUNT — REGISTRATION (seller only; shown the moment they join if not yet registered) -->
-<div class="modal-overlay hidden" id="txRegModal">
-  <div class="modal-box wide">
-    <div class="modal-header"><span><i class="fa-solid fa-shield-halved"></i> Create Your Transaction Account</span></div>
-    <div class="modal-body">
-      <p style="color:var(--text-muted); font-size:0.8rem; margin:0 0 16px;">One last step before you can trade — set up the account that holds your balance, identity verification and withdrawals for this deal.</p>
-      <div class="create-group-form">
-        <label class="branding-field">Full Legal Name<input type="text" id="txRegNameInput" class="message-input" style="width:100%;" placeholder="As it appears on your ID"></label>
-        <label class="branding-field" id="txRegEmailRow" style="display:none;">Email<input type="email" id="txRegEmailInput" class="message-input" style="width:100%;" placeholder="name@example.com"></label>
-        <label class="branding-field">Password<input type="password" id="txRegPasswordInput" class="message-input" style="width:100%;" placeholder="At least 8 characters"></label>
-        <label class="branding-field">Confirm Password<input type="password" id="txRegPasswordConfirmInput" class="message-input" style="width:100%;" placeholder="Re-enter your password"></label>
-        <label class="branding-field">Account Currency
-          <select id="txRegCurrencyInput" class="message-input" style="width:100%;">
-            <option value="USD">USD — US Dollar</option>
-            <option value="GBP">GBP — British Pound</option>
-            <option value="EUR">EUR — Euro</option>
-          </select>
-        </label>
-        <p style="font-size:0.72rem; color:var(--text-faint); margin:0;">Your currency is locked once set — all balances, deposits and withdrawals for this account will be shown in it.</p>
-      </div>
-      <div style="display:flex; justify-content:flex-end; margin-top:16px;">
-        <button class="send-btn" onclick="submitTxRegistration()"><i class="fa-solid fa-check"></i> Create Account</button>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- TRANSACTION ACCOUNT — DASHBOARD (seller only) -->
-<div class="modal-overlay hidden" id="txAccountModal">
-  <div class="modal-box wide">
-    <div class="modal-header"><span><i class="fa-solid fa-building-columns"></i> Your Transaction Account</span><i class="fa-solid fa-xmark" onclick="closeModal('txAccountModal')"></i></div>
-    <div class="drawer-tabs" style="padding:0 4px 10px;">
-      <button class="drawer-tab active" data-txtab="overview" onclick="setTxAccountTab('overview')">Overview</button>
-      <button class="drawer-tab" data-txtab="kyc" onclick="setTxAccountTab('kyc')">Verify Identity</button>
-      <button class="drawer-tab" data-txtab="deposit" onclick="setTxAccountTab('deposit')">Deposit</button>
-      <button class="drawer-tab" data-txtab="withdraw" onclick="setTxAccountTab('withdraw')">Withdraw</button>
-    </div>
-    <div class="modal-body" style="max-height:60vh; overflow-y:auto;">
-
-      <div class="drawer-tab-panel" id="txTabOverview">
-        <div class="stats-grid">
-          <div class="stat-card"><div style="font-size:0.7rem; color:var(--text-muted);">Available</div><div id="txAvailableBalance" style="font-size:1.3rem; font-weight:800;">0.00</div></div>
-          <div class="stat-card"><div style="font-size:0.7rem; color:var(--text-muted);">Held in Vault</div><div id="txHeldBalance" style="font-size:1.3rem; font-weight:800;">0.00</div></div>
-          <div class="stat-card"><div style="font-size:0.7rem; color:var(--text-muted);">Total Deposited</div><div id="txTotalDeposited" style="font-size:1.3rem; font-weight:800;">0.00</div></div>
-          <div class="stat-card"><div style="font-size:0.7rem; color:var(--text-muted);">Identity Status</div><div id="txKycBadgeSmall" class="tx-status-badge">Not submitted</div></div>
-        </div>
-        <div class="admin-section" style="margin-top:16px;">
-          <span class="admin-section-label"><i class="fa-solid fa-clock-rotate-left"></i> RECENT DEPOSITS</span>
-          <div id="txDepositsList"><p style="font-size:0.78rem; color:var(--text-faint); margin:0;">No deposits yet.</p></div>
-        </div>
-        <div class="admin-section">
-          <span class="admin-section-label"><i class="fa-solid fa-clock-rotate-left"></i> RECENT WITHDRAWALS</span>
-          <div id="txWithdrawalsList"><p style="font-size:0.78rem; color:var(--text-faint); margin:0;">No withdrawals yet.</p></div>
-        </div>
-      </div>
-
-      <div class="drawer-tab-panel hidden" id="txTabKyc">
-        <div id="txKycStatusBanner" class="tx-status-badge" style="margin-bottom:14px;">Not submitted</div>
-        <div class="create-group-form" id="txKycForm">
-          <label class="branding-field">Document Type
-            <select id="txKycDocType" class="message-input" style="width:100%;" onchange="toggleTxKycIdBackRow()">
-              <option value="passport">Passport</option>
-              <option value="national_id">National ID Card</option>
-              <option value="drivers_license">Driver's License</option>
-            </select>
-          </label>
-          <label class="branding-field">ID — Front<input type="file" id="txKycIdFront" accept="image/*,.pdf"></label>
-          <label class="branding-field" id="txKycIdBackRow">ID — Back<input type="file" id="txKycIdBack" accept="image/*,.pdf"></label>
-          <label class="branding-field">Proof of Address<input type="file" id="txKycProofAddress" accept="image/*,.pdf"></label>
-          <label class="branding-field">Selfie<input type="file" id="txKycSelfie" accept="image/*"></label>
-        </div>
-        <div style="display:flex; justify-content:flex-end; margin-top:14px;">
-          <button class="send-btn" onclick="submitTxKyc()"><i class="fa-solid fa-upload"></i> Submit for Review</button>
-        </div>
-      </div>
-
-      <div class="drawer-tab-panel hidden" id="txTabDeposit">
-        <div class="create-group-form">
-          <label class="branding-field">Method
-            <select id="txDepositMethod" class="message-input" style="width:100%;" onchange="toggleTxDepositFields()">
-              <option value="crypto">Crypto</option>
-              <option value="bank">Bank Transfer</option>
-            </select>
-          </label>
-          <label class="branding-field" id="txDepositAssetRow">Asset
-            <select id="txDepositAsset" class="message-input" style="width:100%;">
-              <option value="USDT">USDT</option>
-              <option value="BTC">BTC</option>
-              <option value="ETH">ETH</option>
-            </select>
-          </label>
-          <label class="branding-field" id="txDepositNetworkRow">Network
-            <select id="txDepositNetwork" class="message-input" style="width:100%;">
-              <option value="TRC20">TRC20</option>
-              <option value="BEP20">BEP20</option>
-            </select>
-          </label>
-          <label class="branding-field" id="txDepositRefRow" style="display:none;">Reference / Description<input type="text" id="txDepositRef" class="message-input" style="width:100%;" placeholder="e.g. bank transfer reference"></label>
-          <label class="branding-field">Amount<input type="number" id="txDepositAmount" class="message-input" style="width:100%;" placeholder="0.00" min="0" step="0.01"></label>
-        </div>
-        <p style="font-size:0.72rem; color:var(--text-faint); margin:10px 0 0;">This records that you sent funds — it is not proof of payment. The Desk Officer confirms receipt before it becomes available.</p>
-        <div style="display:flex; justify-content:flex-end; margin-top:14px;">
-          <button class="send-btn" onclick="submitTxDeposit()"><i class="fa-solid fa-arrow-down"></i> Notify Deposit</button>
-        </div>
-      </div>
-
-      <div class="drawer-tab-panel hidden" id="txTabWithdraw">
-        <div id="txWithdrawKycLock" class="tx-status-badge disabled" style="display:none; margin-bottom:14px;">Identity verification required before you can withdraw.</div>
-        <div class="create-group-form" id="txWithdrawForm">
-          <label class="branding-field">Method
-            <select id="txWithdrawMethod" class="message-input" style="width:100%;" onchange="toggleTxWithdrawFields()">
-              <option value="bank">Bank Transfer</option>
-              <option value="crypto">Crypto</option>
-            </select>
-          </label>
-          <div id="txWithdrawBankFields">
-            <label class="branding-field">Beneficiary Name<input type="text" id="txWdBeneficiary" class="message-input" style="width:100%;"></label>
-            <label class="branding-field">Bank Name<input type="text" id="txWdBankName" class="message-input" style="width:100%;"></label>
-            <label class="branding-field">Account Number / IBAN<input type="text" id="txWdBankAccount" class="message-input" style="width:100%;"></label>
-            <label class="branding-field">SWIFT / Sort Code (optional)<input type="text" id="txWdSwift" class="message-input" style="width:100%;"></label>
-            <label class="branding-field">Bank Country<input type="text" id="txWdBankCountry" class="message-input" style="width:100%;"></label>
-          </div>
-          <div id="txWithdrawCryptoFields" style="display:none;">
-            <label class="branding-field">Asset
-              <select id="txWdAsset" class="message-input" style="width:100%;">
-                <option value="USDT">USDT</option><option value="BTC">BTC</option><option value="ETH">ETH</option>
-              </select>
-            </label>
-            <label class="branding-field">Network
-              <select id="txWdNetwork" class="message-input" style="width:100%;">
-                <option value="TRC20">TRC20</option><option value="BEP20">BEP20</option>
-              </select>
-            </label>
-            <label class="branding-field">Destination Wallet Address<input type="text" id="txWdDestination" class="message-input" style="width:100%;"></label>
-          </div>
-          <label class="branding-field">Amount<input type="number" id="txWdAmount" class="message-input" style="width:100%;" placeholder="0.00" min="0" step="0.01"></label>
-        </div>
-        <div style="display:flex; justify-content:flex-end; margin-top:14px;">
-          <button class="send-btn" onclick="submitTxWithdrawal()"><i class="fa-solid fa-arrow-up"></i> Request Withdrawal</button>
-        </div>
-      </div>
-
     </div>
   </div>
 </div>
@@ -634,6 +480,47 @@
   <div class="modal-box">
     <div class="modal-header"><span><i class="fa-solid fa-list-check"></i> Tasks &amp; Approvals</span><i class="fa-solid fa-xmark" onclick="closeModal('tasksModal')"></i></div>
     <div class="modal-body" id="userTasksListContainer"></div>
+  </div>
+</div>
+
+<!-- KYC MODAL (Seller-facing: submit documents, see status) -->
+<div class="modal-overlay hidden" id="kycModal">
+  <div class="modal-box">
+    <div class="modal-header"><span><i class="fa-solid fa-id-card-clip"></i> Identity Verification</span><i class="fa-solid fa-xmark" onclick="closeModal('kycModal')"></i></div>
+    <div class="modal-body">
+      <div id="kycStatusBanner" class="kyc-status-banner"></div>
+      <div id="kycSubmitSection">
+        <p style="color:var(--text-muted); font-size:0.8rem; margin:0 0 12px;">Upload a government-issued ID or business document. Your Admin reviews and approves every submission personally.</p>
+        <label class="branding-field">Document type
+          <select id="kycDocType" class="group-dropdown">
+            <option value="Government ID">Government ID</option>
+            <option value="Proof of Address">Proof of Address</option>
+            <option value="Business Registration">Business Registration</option>
+            <option value="Other">Other</option>
+          </select>
+        </label>
+        <label class="icon-btn" id="kycFileLabel" for="kycFileInput" style="width:100%; border-radius:10px; margin:10px 0; display:flex; gap:8px; justify-content:center;">
+          <i class="fa-solid fa-paperclip"></i> <span id="kycFileChosenLabel">Choose file to upload</span>
+        </label>
+        <input type="file" id="kycFileInput" class="file-input" onchange="handleKycFileChosen(this)" />
+        <div id="kycAttachedList" style="display:flex; flex-direction:column; gap:6px; margin-bottom:12px;"></div>
+        <button class="send-btn" style="width:100%; justify-content:center;" onclick="submitKycDocuments()"><i class="fa-solid fa-shield-halved"></i> Submit for Review</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- CREATE YOUR ACCOUNT (Seller-only — shown only after opening a valid, single-use invite link) -->
+<div class="modal-overlay hidden" id="sellerCreateAccountModal">
+  <div class="modal-box">
+    <div class="modal-header"><span><i class="fa-solid fa-user-plus"></i> Create Your Account</span></div>
+    <div class="modal-body">
+      <p style="color:var(--text-muted); font-size:0.82rem; margin:0 0 14px;" id="sellerInviteIntro">You've been invited to join as Seller.</p>
+      <label class="branding-field">Full Name<input type="text" id="sellerAccountName" class="message-input" style="width:100%;" placeholder="Your full name" maxlength="100"></label>
+      <label class="branding-field">Password<input type="password" id="sellerAccountPassword" class="message-input" style="width:100%;" placeholder="At least 8 characters" maxlength="200"></label>
+      <label class="branding-field">Confirm Password<input type="password" id="sellerAccountPasswordConfirm" class="message-input" style="width:100%;" placeholder="Re-enter password" maxlength="200"></label>
+      <button class="send-btn" style="width:100%; justify-content:center; margin-top:6px;" onclick="submitSellerCreateAccount()"><i class="fa-solid fa-arrow-right"></i> Create Account &amp; Join</button>
+    </div>
   </div>
 </div>
 

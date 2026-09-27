@@ -13,36 +13,11 @@ function makeDefaultGroup(id, name) {
     name,
     custom_name_a: 'Buyer',
     custom_name_b: 'Seller',
-    email_a: null,
-    email_b: null,
-    buyer_session_token: null,
-    seller_session_token: null,
     file_uploads_enabled: true,
     highlighted: false,
     transaction_form_enabled: false,
     banner_url: null,
-    created_at: nowIso(),
-    // ---- Transaction Account (seller registration/KYC/balance) ----
-    seller_registered: false,
-    seller_full_name: null,
-    seller_password_hash: null,
-    seller_currency: null,
-    currency_locked_at: null,
-    seller_failed_logins: 0,
-    seller_locked_until: null,
-    kyc_status: 'not_submitted',
-    kyc_doc_type: null,
-    kyc_id_front_url: null,
-    kyc_id_back_url: null,
-    kyc_proof_address_url: null,
-    kyc_selfie_url: null,
-    kyc_submitted_at: null,
-    kyc_reviewed_by: null,
-    kyc_reviewed_at: null,
-    kyc_rejection_reason: null,
-    balance_available: 0,
-    balance_held: 0,
-    total_deposited: 0
+    created_at: nowIso()
   };
 }
 
@@ -61,10 +36,8 @@ class MemStore {
     this.tasks = new Map();          // groupId -> [task]
     this.messageReads = new Map();   // messageId -> Map(sessionToken -> {deliveredAt, readAt})
     this.pushSubs = new Map();       // endpoint -> {sessionToken, endpoint, p256dh, auth}
-    this.pendingEmails = new Map();  // id -> pending email record (missed-message alerts awaiting admin approval)
-    this.passwordResets = new Map(); // id -> reset record
-    this.deposits = new Map();       // id -> deposit record
-    this.withdrawals = new Map();    // id -> withdrawal record
+    this.invites = new Map();        // token -> invite (Seller accounts can only be created via one of these)
+    this.kycSubmissions = new Map(); // id -> kyc submission
     this.branding = {
       id: 1, logo_url: null, accent_color: '#38bdf8', accent_color_2: '#8b5cf6',
       welcome_message: 'Welcome to Quantum Secure Transaction Desk.', background_url: null,
@@ -94,6 +67,8 @@ class MemStore {
       country_code: u.countryCode !== undefined ? u.countryCode : existing.country_code ?? null,
       avatar_seed: existing.avatar_seed || u.sessionToken,
       is_online: u.isOnline ?? existing.is_online ?? false,
+      password_hash: u.passwordHash !== undefined ? u.passwordHash : existing.password_hash ?? null,
+      kyc_status: u.kycStatus !== undefined ? u.kycStatus : existing.kyc_status ?? 'not_submitted',
       first_seen: existing.first_seen || nowIso(),
       last_seen: nowIso()
     };
@@ -108,6 +83,21 @@ class MemStore {
 
   async getUser(sessionToken) { return this.users.get(sessionToken) || null; }
   async getAllUsers() { return Array.from(this.users.values()); }
+
+  async getUserByEmail(email) {
+    if (!email) return null;
+    const lower = String(email).toLowerCase();
+    for (const u of this.users.values()) {
+      if (u.email && u.email.toLowerCase() === lower) return u;
+    }
+    return null;
+  }
+
+  async setKycStatus(sessionToken, status) {
+    const u = this.users.get(sessionToken);
+    if (u) u.kyc_status = status;
+    return u || null;
+  }
 
   async deleteUser(sessionToken) {
     this.users.delete(sessionToken);
@@ -136,10 +126,6 @@ class MemStore {
 
   async getGroup(groupId) { return this.groups.get(groupId) || null; }
   async getAllGroups() { return Array.from(this.groups.values()); }
-  async findGroupsBySellerEmail(email) {
-    const lower = String(email).toLowerCase();
-    return Array.from(this.groups.values()).filter(g => g.email_b && g.email_b.toLowerCase() === lower && g.seller_registered);
-  }
 
   async updateGroup(groupId, fields) {
     const g = this.groups.get(groupId);
@@ -328,7 +314,8 @@ class MemStore {
       totalGroups: this.groups.size,
       messagesToday,
       uploadsToday,
-      transactionsSubmitted: await this.getAllTransactionsCount()
+      transactionsSubmitted: await this.getAllTransactionsCount(),
+      pendingKyc: await this.getPendingKycCount()
     };
   }
 
@@ -409,6 +396,72 @@ class MemStore {
     return 'sent';
   }
 
+  // ---------- INVITES (Seller registration is invite-only) ----------
+  async createInvite({ token, groupId, role, sellerName, sellerEmail, createdBy, expiresAt }) {
+    const record = {
+      token, group_id: groupId, role: role || 'PARTY B',
+      seller_name: sellerName || null, seller_email: sellerEmail || null,
+      created_by: createdBy || null, created_at: nowIso(),
+      expires_at: expiresAt || new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(),
+      used_at: null, used_by: null
+    };
+    this.invites.set(token, record);
+    return record;
+  }
+  async getInvite(token) { return this.invites.get(token) || null; }
+  async getInvitesForGroup(groupId) {
+    return Array.from(this.invites.values())
+      .filter(i => i.group_id === groupId)
+      .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  }
+  async markInviteUsed(token, usedBy) {
+    const inv = this.invites.get(token);
+    if (!inv) return null;
+    inv.used_at = nowIso();
+    inv.used_by = usedBy;
+    return inv;
+  }
+  async revokeInvite(token) {
+    return this.invites.delete(token);
+  }
+
+  // ---------- KYC SUBMISSIONS ----------
+  async createKycSubmission({ sessionToken, groupId, documents }) {
+    const record = {
+      id: uuid(), session_token: sessionToken, group_id: groupId,
+      documents: documents || [], status: 'pending',
+      reviewed_by: null, reviewed_at: null, reject_reason: null,
+      submitted_at: nowIso()
+    };
+    this.kycSubmissions.set(record.id, record);
+    return record;
+  }
+  async getKycSubmission(id) { return this.kycSubmissions.get(id) || null; }
+  async getKycForUser(sessionToken) {
+    return Array.from(this.kycSubmissions.values())
+      .filter(k => k.session_token === sessionToken)
+      .sort((a, b) => new Date(b.submitted_at) - new Date(a.submitted_at));
+  }
+  async getPendingKycSubmissions() {
+    return Array.from(this.kycSubmissions.values())
+      .filter(k => k.status === 'pending')
+      .sort((a, b) => new Date(a.submitted_at) - new Date(b.submitted_at));
+  }
+  async reviewKycSubmission(id, { status, reviewedBy, rejectReason }) {
+    const k = this.kycSubmissions.get(id);
+    if (!k) return null;
+    k.status = status;
+    k.reviewed_by = reviewedBy || null;
+    k.reviewed_at = nowIso();
+    k.reject_reason = rejectReason || null;
+    return k;
+  }
+  async getPendingKycCount() {
+    let count = 0;
+    for (const k of this.kycSubmissions.values()) if (k.status === 'pending') count++;
+    return count;
+  }
+
   // ---------- PUSH SUBSCRIPTIONS ----------
   async savePushSubscription(sessionToken, sub) {
     this.pushSubs.set(sub.endpoint, { sessionToken, endpoint: sub.endpoint, p256dh: sub.keys.p256dh, auth: sub.keys.auth });
@@ -416,114 +469,6 @@ class MemStore {
   async removePushSubscription(endpoint) { this.pushSubs.delete(endpoint); }
   async getPushSubscriptionsForUser(sessionToken) {
     return Array.from(this.pushSubs.values()).filter(s => s.sessionToken === sessionToken);
-  }
-
-  // ---------- PENDING EMAILS (missed-message alerts awaiting admin approval) ----------
-  async createPendingEmail(rec) {
-    const record = {
-      id: uuid(), group_id: rec.groupId, party: rec.party, to_email: rec.toEmail,
-      from_name: rec.fromName, group_name: rec.groupName, message_text: rec.messageText,
-      status: 'pending', created_at: nowIso(), resolved_at: null
-    };
-    this.pendingEmails.set(record.id, record);
-    return record;
-  }
-  async getPendingEmails(status = 'pending') {
-    return Array.from(this.pendingEmails.values())
-      .filter(p => p.status === status)
-      .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-  }
-  async getPendingEmailById(id) { return this.pendingEmails.get(id) || null; }
-  async resolvePendingEmail(id, status) {
-    const p = this.pendingEmails.get(id);
-    if (!p) return null;
-    p.status = status;
-    p.resolved_at = nowIso();
-    return p;
-  }
-
-  // ---------- PASSWORD RESETS (Transaction Account) ----------
-  async createPasswordReset(rec) {
-    const record = { id: uuid(), group_id: rec.groupId, code_hash: rec.codeHash, expires_at: rec.expiresAt, consumed_at: null, reset_token: null, created_at: nowIso() };
-    this.passwordResets.set(record.id, record);
-    return record;
-  }
-  async getLatestPasswordReset(groupId) {
-    const all = Array.from(this.passwordResets.values()).filter(r => r.group_id === groupId && !r.consumed_at);
-    all.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-    return all[0] || null;
-  }
-  async setPasswordResetToken(id, resetToken) {
-    const r = this.passwordResets.get(id);
-    if (!r) return null;
-    r.reset_token = resetToken;
-    return r;
-  }
-  async consumePasswordResetByToken(groupId, resetToken) {
-    const r = Array.from(this.passwordResets.values()).find(x => x.group_id === groupId && x.reset_token === resetToken && !x.consumed_at);
-    if (!r) return null;
-    r.consumed_at = nowIso();
-    return r;
-  }
-
-  // ---------- DEPOSITS ----------
-  async createDeposit(rec) {
-    const record = {
-      id: uuid(), group_id: rec.groupId, method: rec.method, asset: rec.asset || null, network: rec.network || null,
-      reference_code: rec.referenceCode || null, amount: rec.amount, status: 'held_in_vault',
-      notified_at: nowIso(), verified_by: null, verified_at: null, rejection_reason: null
-    };
-    this.deposits.set(record.id, record);
-    return record;
-  }
-  async getDepositsForGroup(groupId) {
-    return Array.from(this.deposits.values()).filter(d => d.group_id === groupId).sort((a, b) => new Date(b.notified_at) - new Date(a.notified_at));
-  }
-  async getDepositById(id) { return this.deposits.get(id) || null; }
-  async getPendingDeposits() {
-    return Array.from(this.deposits.values()).filter(d => d.status === 'held_in_vault').sort((a, b) => new Date(a.notified_at) - new Date(b.notified_at));
-  }
-  async resolveDeposit(id, { status, verifiedBy, rejectionReason }) {
-    const d = this.deposits.get(id);
-    if (!d) return null;
-    d.status = status;
-    d.verified_by = verifiedBy || null;
-    d.verified_at = nowIso();
-    d.rejection_reason = rejectionReason || null;
-    return d;
-  }
-
-  // ---------- WITHDRAWAL REQUESTS ----------
-  async createWithdrawal(rec) {
-    const record = {
-      id: uuid(), group_id: rec.groupId, method: rec.method, asset: rec.asset || null, network: rec.network || null,
-      destination: rec.destination || null, beneficiary_name: rec.beneficiaryName || null, bank_name: rec.bankName || null,
-      bank_account: rec.bankAccount || null, bank_swift: rec.bankSwift || null, bank_country: rec.bankCountry || null,
-      amount: rec.amount, amount_currency: rec.amountCurrency, amount_ledger: rec.amountLedger,
-      status: 'pending', status_reason: null,
-      status_history: [{ status: 'pending', at: nowIso(), by: null, note: 'Submitted by seller' }],
-      created_at: nowIso(), updated_at: nowIso()
-    };
-    this.withdrawals.set(record.id, record);
-    return record;
-  }
-  async getWithdrawalsForGroup(groupId) {
-    return Array.from(this.withdrawals.values()).filter(w => w.group_id === groupId).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-  }
-  async getWithdrawalById(id) { return this.withdrawals.get(id) || null; }
-  async getPendingWithdrawals() {
-    return Array.from(this.withdrawals.values())
-      .filter(w => !['completed', 'rejected', 'failed'].includes(w.status))
-      .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
-  }
-  async advanceWithdrawal(id, { status, reason, by }) {
-    const w = this.withdrawals.get(id);
-    if (!w) return null;
-    w.status = status;
-    w.status_reason = reason || null;
-    w.status_history.push({ status, at: nowIso(), by: by || null, note: reason || null });
-    w.updated_at = nowIso();
-    return w;
   }
 
   // ---------- BRANDING ----------
@@ -556,7 +501,8 @@ class MemStore {
       onlineUsers: onlineUsers.map(u => ({ displayName: u.display_name, role: u.role, isAdmin: u.is_admin })),
       recentTransactions: allTx.slice(0, 5),
       recentUploads: allUploads.slice(0, 5).map(m => ({ id: m.id, fileName: m.file_name, fileType: m.file_type, sender: m.sender_name, groupId: m.group_id, createdAt: m.created_at })),
-      pendingReviews: await this.getPendingTasksCount()
+      pendingReviews: await this.getPendingTasksCount(),
+      pendingKyc: await this.getPendingKycCount()
     };
   }
 }
