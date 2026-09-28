@@ -18,19 +18,6 @@ const io = new Server(server, {
 
 // Basic hardening
 app.disable('x-powered-by');
-
-// Northflank (like Render, Heroku, Fly, etc.) puts a reverse proxy in front
-// of the app and passes the visitor's real IP in X-Forwarded-For. Without
-// this, Express treats the proxy's address as every visitor's IP, so
-// express-rate-limit can't tell users apart: it logs
-// ERR_ERL_UNEXPECTED_X_FORWARDED_FOR (seen in the deploy logs) and — worse —
-// every visitor shares one rate-limit bucket, so a handful of login attempts
-// from anyone could lock everyone out. `1` = trust exactly one proxy hop;
-// override with TRUST_PROXY (a number of hops, or e.g. "loopback") if your
-// host has more layers in front (say Cloudflare + the host's own ingress).
-const trustProxyEnv = process.env.TRUST_PROXY;
-app.set('trust proxy', trustProxyEnv === undefined || trustProxyEnv === '' ? 1 : (isNaN(Number(trustProxyEnv)) ? trustProxyEnv : Number(trustProxyEnv)));
-
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
@@ -52,7 +39,7 @@ app.use(express.static(path.join(__dirname, 'public'), {
     }
   }
 }));
-app.use(buildRouter(io));
+app.use(buildRouter());
 
 io.on('connection', (socket) => registerSocketHandlers(io, socket));
 

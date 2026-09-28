@@ -17,20 +17,7 @@ function makeDefaultGroup(id, name) {
     highlighted: false,
     transaction_form_enabled: false,
     banner_url: null,
-    created_at: nowIso(),
-    // Seller account / finance fields — a group created from the admin
-    // panel (not via an invite) is chat-only until/unless it's turned into
-    // a seller account through the invite+registration flow.
-    account_type: 'seller_type_a',
-    registration_status: 'invited',
-    invite_token: null,
-    invite_consumed_at: null,
-    owner_full_name: null,
-    owner_email: null,
-    owner_password_hash: null,
-    currency: null,
-    currency_locked_at: null,
-    kyc_status: 'not_submitted'
+    created_at: nowIso()
   };
 }
 
@@ -49,19 +36,14 @@ class MemStore {
     this.tasks = new Map();          // groupId -> [task]
     this.messageReads = new Map();   // messageId -> Map(sessionToken -> {deliveredAt, readAt})
     this.pushSubs = new Map();       // endpoint -> {sessionToken, endpoint, p256dh, auth}
+    this.invites = new Map();        // token -> invite (Seller accounts can only be created via one of these)
+    this.kycSubmissions = new Map(); // id -> kyc submission
+    this.withdrawalRequests = new Map(); // id -> withdrawal request
     this.branding = {
       id: 1, logo_url: null, accent_color: '#38bdf8', accent_color_2: '#8b5cf6',
       welcome_message: 'Welcome to Quantum Secure Transaction Desk.', background_url: null,
       updated_at: nowIso()
     };
-
-    // ---- Seller accounts / finance (see sellerAuth.js + routes.js) ----
-    this.sellerSessions = new Map();     // token -> {group_id, expires_at}
-    this.resetCodes = new Map();         // groupId -> [{codeHash, expiresAt, consumedAt}]
-    this.kycSubmissions = new Map();     // groupId -> [submission]
-    this.deposits = new Map();           // groupId -> [deposit]
-    this.withdrawals = new Map();        // groupId -> [withdrawal]
-    this.balances = new Map();           // groupId -> {available, held}
 
     this.groups.set('default-group', makeDefaultGroup('default-group', 'General Transaction Group #1'));
     this.messages.set('default-group', []);
@@ -86,6 +68,8 @@ class MemStore {
       country_code: u.countryCode !== undefined ? u.countryCode : existing.country_code ?? null,
       avatar_seed: existing.avatar_seed || u.sessionToken,
       is_online: u.isOnline ?? existing.is_online ?? false,
+      password_hash: u.passwordHash !== undefined ? u.passwordHash : existing.password_hash ?? null,
+      kyc_status: u.kycStatus !== undefined ? u.kycStatus : existing.kyc_status ?? 'not_submitted',
       first_seen: existing.first_seen || nowIso(),
       last_seen: nowIso()
     };
@@ -100,6 +84,21 @@ class MemStore {
 
   async getUser(sessionToken) { return this.users.get(sessionToken) || null; }
   async getAllUsers() { return Array.from(this.users.values()); }
+
+  async getUserByEmail(email) {
+    if (!email) return null;
+    const lower = String(email).toLowerCase();
+    for (const u of this.users.values()) {
+      if (u.email && u.email.toLowerCase() === lower) return u;
+    }
+    return null;
+  }
+
+  async setKycStatus(sessionToken, status) {
+    const u = this.users.get(sessionToken);
+    if (u) u.kyc_status = status;
+    return u || null;
+  }
 
   async deleteUser(sessionToken) {
     this.users.delete(sessionToken);
@@ -316,7 +315,9 @@ class MemStore {
       totalGroups: this.groups.size,
       messagesToday,
       uploadsToday,
-      transactionsSubmitted: await this.getAllTransactionsCount()
+      transactionsSubmitted: await this.getAllTransactionsCount(),
+      pendingKyc: await this.getPendingKycCount(),
+      pendingWithdrawals: await this.getPendingWithdrawalCount()
     };
   }
 
@@ -397,6 +398,109 @@ class MemStore {
     return 'sent';
   }
 
+  // ---------- INVITES (Seller registration is invite-only) ----------
+  async createInvite({ token, groupId, role, sellerName, sellerEmail, createdBy, expiresAt }) {
+    const record = {
+      token, group_id: groupId, role: role || 'PARTY B',
+      seller_name: sellerName || null, seller_email: sellerEmail || null,
+      created_by: createdBy || null, created_at: nowIso(),
+      expires_at: expiresAt || new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(),
+      used_at: null, used_by: null
+    };
+    this.invites.set(token, record);
+    return record;
+  }
+  async getInvite(token) { return this.invites.get(token) || null; }
+  async getInvitesForGroup(groupId) {
+    return Array.from(this.invites.values())
+      .filter(i => i.group_id === groupId)
+      .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  }
+  async markInviteUsed(token, usedBy) {
+    const inv = this.invites.get(token);
+    if (!inv) return null;
+    inv.used_at = nowIso();
+    inv.used_by = usedBy;
+    return inv;
+  }
+  async revokeInvite(token) {
+    return this.invites.delete(token);
+  }
+
+  // ---------- KYC SUBMISSIONS ----------
+  async createKycSubmission({ sessionToken, groupId, documents }) {
+    const record = {
+      id: uuid(), session_token: sessionToken, group_id: groupId,
+      documents: documents || [], status: 'pending',
+      reviewed_by: null, reviewed_at: null, reject_reason: null,
+      submitted_at: nowIso()
+    };
+    this.kycSubmissions.set(record.id, record);
+    return record;
+  }
+  async getKycSubmission(id) { return this.kycSubmissions.get(id) || null; }
+  async getKycForUser(sessionToken) {
+    return Array.from(this.kycSubmissions.values())
+      .filter(k => k.session_token === sessionToken)
+      .sort((a, b) => new Date(b.submitted_at) - new Date(a.submitted_at));
+  }
+  async getPendingKycSubmissions() {
+    return Array.from(this.kycSubmissions.values())
+      .filter(k => k.status === 'pending')
+      .sort((a, b) => new Date(a.submitted_at) - new Date(b.submitted_at));
+  }
+  async reviewKycSubmission(id, { status, reviewedBy, rejectReason }) {
+    const k = this.kycSubmissions.get(id);
+    if (!k) return null;
+    k.status = status;
+    k.reviewed_by = reviewedBy || null;
+    k.reviewed_at = nowIso();
+    k.reject_reason = rejectReason || null;
+    return k;
+  }
+  async getPendingKycCount() {
+    let count = 0;
+    for (const k of this.kycSubmissions.values()) if (k.status === 'pending') count++;
+    return count;
+  }
+
+  // ---------- WITHDRAWAL REQUESTS (require a verified KYC — enforced by the caller) ----------
+  async createWithdrawalRequest({ sessionToken, groupId, amount, destination, note }) {
+    const record = {
+      id: uuid(), session_token: sessionToken, group_id: groupId,
+      amount, destination, note: note || null, status: 'pending',
+      reviewed_by: null, reviewed_at: null, reject_reason: null,
+      submitted_at: nowIso()
+    };
+    this.withdrawalRequests.set(record.id, record);
+    return record;
+  }
+  async getWithdrawalRequest(id) { return this.withdrawalRequests.get(id) || null; }
+  async getWithdrawalsForUser(sessionToken) {
+    return Array.from(this.withdrawalRequests.values())
+      .filter(w => w.session_token === sessionToken)
+      .sort((a, b) => new Date(b.submitted_at) - new Date(a.submitted_at));
+  }
+  async getPendingWithdrawals() {
+    return Array.from(this.withdrawalRequests.values())
+      .filter(w => w.status === 'pending')
+      .sort((a, b) => new Date(a.submitted_at) - new Date(b.submitted_at));
+  }
+  async reviewWithdrawalRequest(id, { status, reviewedBy, rejectReason }) {
+    const w = this.withdrawalRequests.get(id);
+    if (!w) return null;
+    w.status = status;
+    w.reviewed_by = reviewedBy || null;
+    w.reviewed_at = nowIso();
+    w.reject_reason = rejectReason || null;
+    return w;
+  }
+  async getPendingWithdrawalCount() {
+    let count = 0;
+    for (const w of this.withdrawalRequests.values()) if (w.status === 'pending') count++;
+    return count;
+  }
+
   // ---------- PUSH SUBSCRIPTIONS ----------
   async savePushSubscription(sessionToken, sub) {
     this.pushSubs.set(sub.endpoint, { sessionToken, endpoint: sub.endpoint, p256dh: sub.keys.p256dh, auth: sub.keys.auth });
@@ -436,270 +540,10 @@ class MemStore {
       onlineUsers: onlineUsers.map(u => ({ displayName: u.display_name, role: u.role, isAdmin: u.is_admin })),
       recentTransactions: allTx.slice(0, 5),
       recentUploads: allUploads.slice(0, 5).map(m => ({ id: m.id, fileName: m.file_name, fileType: m.file_type, sender: m.sender_name, groupId: m.group_id, createdAt: m.created_at })),
-      pendingReviews: await this.getPendingTasksCount()
+      pendingReviews: await this.getPendingTasksCount(),
+      pendingKyc: await this.getPendingKycCount(),
+      pendingWithdrawals: await this.getPendingWithdrawalCount()
     };
-  }
-
-  // ==================================================================
-  // SELLER ACCOUNTS, KYC, DEPOSITS & WITHDRAWALS
-  // ==================================================================
-
-  _ensureBalance(groupId) {
-    if (!this.balances.has(groupId)) this.balances.set(groupId, { available: 0, held: 0, updated_at: nowIso() });
-    return this.balances.get(groupId);
-  }
-
-  // ---------- INVITES / REGISTRATION ----------
-  async createInvite({ email, createdBy }) {
-    const id = uuid();
-    const inviteToken = uuid();
-    const group = {
-      ...makeDefaultGroup(id, 'Pending Registration'),
-      owner_email: email,
-      invite_token: inviteToken,
-      registration_status: 'invited'
-    };
-    this.groups.set(id, group);
-    this.messages.set(id, []);
-    this.pins.set(id, new Set());
-    this.transactions.set(id, []);
-    this.announcements.set(id, []);
-    this.tasks.set(id, []);
-    return group;
-  }
-
-  async getGroupByInviteToken(token) {
-    for (const g of this.groups.values()) {
-      if (g.invite_token === token) return g;
-    }
-    return null;
-  }
-
-  async getGroupByOwnerEmail(email) {
-    const norm = (email || '').trim().toLowerCase();
-    for (const g of this.groups.values()) {
-      if ((g.owner_email || '').trim().toLowerCase() === norm) return g;
-    }
-    return null;
-  }
-
-  async completeRegistration(groupId, { fullName, passwordHash, groupName, currency }) {
-    const g = this.groups.get(groupId);
-    if (!g) return null;
-    g.owner_full_name = fullName;
-    g.owner_password_hash = passwordHash;
-    g.name = groupName;
-    g.currency = currency;
-    g.registration_status = 'active';
-    g.kyc_status = 'not_submitted';
-    g.invite_consumed_at = nowIso();
-    this._ensureBalance(groupId);
-    return g;
-  }
-
-  async lockCurrencyIfNeeded(groupId) {
-    const g = this.groups.get(groupId);
-    if (g && !g.currency_locked_at) g.currency_locked_at = nowIso();
-  }
-
-  async updateSellerProfile(groupId, { fullName }) {
-    const g = this.groups.get(groupId);
-    if (!g) return null;
-    if (fullName) g.owner_full_name = fullName;
-    return g;
-  }
-
-  // ---------- SESSIONS ----------
-  async createSellerSession(token, groupId, expiresAt) {
-    this.sellerSessions.set(token, { group_id: groupId, expires_at: expiresAt });
-  }
-  async getSellerSession(token) { return this.sellerSessions.get(token) || null; }
-  async deleteSellerSession(token) { this.sellerSessions.delete(token); }
-
-  // ---------- PASSWORD RESET ----------
-  async createPasswordResetCode(groupId, codeHash, expiresAt) {
-    if (!this.resetCodes.has(groupId)) this.resetCodes.set(groupId, []);
-    const record = { codeHash, expiresAt, consumedAt: null, createdAt: nowIso() };
-    this.resetCodes.get(groupId).push(record);
-    return record;
-  }
-  async findValidResetCode(groupId, codeHash) {
-    const list = this.resetCodes.get(groupId) || [];
-    const now = new Date();
-    return list.find(r => r.codeHash === codeHash && !r.consumedAt && new Date(r.expiresAt) > now) || null;
-  }
-  async consumeResetCode(groupId, codeHash) {
-    const record = await this.findValidResetCode(groupId, codeHash);
-    if (record) record.consumedAt = nowIso();
-    return !!record;
-  }
-  async setOwnerPassword(groupId, passwordHash) {
-    const g = this.groups.get(groupId);
-    if (!g) return null;
-    g.owner_password_hash = passwordHash;
-    return g;
-  }
-
-  // ---------- KYC ----------
-  async createKycSubmission(sub) {
-    const record = {
-      id: uuid(), group_id: sub.groupId, doc_type: sub.docType,
-      id_front_url: sub.idFrontUrl, id_back_url: sub.idBackUrl || null,
-      proof_of_address_url: sub.proofOfAddressUrl, selfie_url: sub.selfieUrl,
-      status: 'pending', rejection_reason: null, reviewed_by: null, reviewed_at: null,
-      created_at: nowIso()
-    };
-    if (!this.kycSubmissions.has(sub.groupId)) this.kycSubmissions.set(sub.groupId, []);
-    this.kycSubmissions.get(sub.groupId).unshift(record);
-    const g = this.groups.get(sub.groupId);
-    if (g) g.kyc_status = 'pending';
-    return record;
-  }
-  async getKycSubmissions(groupId) { return this.kycSubmissions.get(groupId) || []; }
-  async getKycSubmissionById(id) {
-    for (const list of this.kycSubmissions.values()) {
-      const found = list.find(s => s.id === id);
-      if (found) return found;
-    }
-    return null;
-  }
-  async getKycQueue() {
-    const out = [];
-    for (const [groupId, list] of this.kycSubmissions.entries()) {
-      const latest = list[0];
-      if (latest && latest.status === 'pending') {
-        const g = this.groups.get(groupId);
-        out.push({ ...latest, group_name: g ? g.name : null, owner_email: g ? g.owner_email : null });
-      }
-    }
-    return out;
-  }
-  async reviewKyc(submissionId, { status, reviewedBy, rejectionReason }) {
-    for (const [groupId, list] of this.kycSubmissions.entries()) {
-      const sub = list.find(s => s.id === submissionId);
-      if (sub) {
-        sub.status = status;
-        sub.reviewed_by = reviewedBy || null;
-        sub.reviewed_at = nowIso();
-        sub.rejection_reason = rejectionReason || null;
-        const g = this.groups.get(groupId);
-        if (g) g.kyc_status = status;
-        return { submission: sub, groupId, group: g };
-      }
-    }
-    return null;
-  }
-
-  // ---------- DEPOSITS ----------
-  async createDeposit(dep) {
-    const record = {
-      id: uuid(), group_id: dep.groupId, reference: `DEP-${uuid().slice(0, 6).toUpperCase()}`,
-      method: dep.method, asset: dep.asset || null, network: dep.network || null,
-      amount: Number(dep.amount), status: 'held_in_vault',
-      rejection_reason: null, reviewed_by: null, reviewed_at: null, created_at: nowIso()
-    };
-    if (!this.deposits.has(dep.groupId)) this.deposits.set(dep.groupId, []);
-    this.deposits.get(dep.groupId).unshift(record);
-    const bal = this._ensureBalance(dep.groupId);
-    bal.held += record.amount;
-    bal.updated_at = nowIso();
-    return record;
-  }
-  async getDeposits(groupId) { return this.deposits.get(groupId) || []; }
-  async getDepositQueue() {
-    const out = [];
-    for (const [groupId, list] of this.deposits.entries()) {
-      const g = this.groups.get(groupId);
-      list.filter(d => d.status === 'held_in_vault').forEach(d => out.push({ ...d, group_name: g ? g.name : null }));
-    }
-    return out;
-  }
-  async getTotalDeposited(groupId) {
-    const list = this.deposits.get(groupId) || [];
-    return list.filter(d => d.status !== 'rejected').reduce((sum, d) => sum + d.amount, 0);
-  }
-  async reviewDeposit(depositId, { status, reviewedBy, rejectionReason }) {
-    for (const [groupId, list] of this.deposits.entries()) {
-      const dep = list.find(d => d.id === depositId);
-      if (dep) {
-        if (dep.status !== 'held_in_vault') return { deposit: dep, groupId, noop: true };
-        const bal = this._ensureBalance(groupId);
-        bal.held -= dep.amount;
-        if (status === 'verified') bal.available += dep.amount;
-        bal.updated_at = nowIso();
-        dep.status = status;
-        dep.reviewed_by = reviewedBy || null;
-        dep.reviewed_at = nowIso();
-        dep.rejection_reason = rejectionReason || null;
-        return { deposit: dep, groupId, group: this.groups.get(groupId) };
-      }
-    }
-    return null;
-  }
-
-  // ---------- WITHDRAWALS ----------
-  async createWithdrawal(w) {
-    const record = {
-      id: uuid(), group_id: w.groupId, reference: `WD-${uuid().slice(0, 6).toUpperCase()}`,
-      method: w.method, asset: w.asset || null, network: w.network || null,
-      destination: w.destination || null, amount: Number(w.amount),
-      amount_currency: w.amountCurrency,
-      entered_amount: w.enteredAmount != null ? Number(w.enteredAmount) : null,
-      entered_currency: w.enteredCurrency || null,
-      amount_usd_equiv: w.amountUsdEquiv || null,
-      status: 'pending', status_reason: null, status_history: [{ status: 'pending', at: nowIso(), byAdminId: null, note: null }],
-      created_at: nowIso(), updated_at: nowIso()
-    };
-    if (!this.withdrawals.has(w.groupId)) this.withdrawals.set(w.groupId, []);
-    this.withdrawals.get(w.groupId).unshift(record);
-    return record;
-  }
-  async getWithdrawals(groupId) { return this.withdrawals.get(groupId) || []; }
-  async getWithdrawalQueue() {
-    const out = [];
-    for (const [groupId, list] of this.withdrawals.entries()) {
-      const g = this.groups.get(groupId);
-      list.filter(w => !['completed', 'rejected', 'failed'].includes(w.status))
-        .forEach(w => out.push({ ...w, group_name: g ? g.name : null }));
-    }
-    return out;
-  }
-  async advanceWithdrawal(withdrawalId, { status, reason, adminId }) {
-    for (const [groupId, list] of this.withdrawals.entries()) {
-      const wd = list.find(w => w.id === withdrawalId);
-      if (!wd) continue;
-      const prev = wd.status;
-      const TERMINAL = ['completed', 'rejected', 'failed'];
-      if (TERMINAL.includes(prev)) return { withdrawal: wd, groupId, noop: true };
-      const bal = this._ensureBalance(groupId);
-      const isReturn = (prev === 'held_in_vault' || prev === 'processing') && (status === 'rejected' || status === 'failed');
-      if (prev === 'pending' && status === 'held_in_vault') {
-        bal.available -= wd.amount; bal.held += wd.amount;
-      } else if (prev === 'held_in_vault' && status === 'processing') {
-        // no balance movement — still held
-      } else if (prev === 'processing' && status === 'completed') {
-        bal.held -= wd.amount;
-      } else if (isReturn) {
-        bal.held -= wd.amount; bal.available += wd.amount;
-      } else if (prev === 'pending' && (status === 'rejected' || status === 'failed')) {
-        // funds were never moved out of available
-      } else {
-        throw new Error(`Invalid withdrawal transition: ${prev} -> ${status}`);
-      }
-      bal.updated_at = nowIso();
-      wd.status = status;
-      wd.status_reason = reason || null;
-      wd.status_history.push({ status, at: nowIso(), byAdminId: adminId || null, note: reason || null });
-      wd.updated_at = nowIso();
-      return { withdrawal: wd, groupId, group: this.groups.get(groupId) };
-    }
-    return null;
-  }
-
-  // ---------- BALANCES ----------
-  async getBalances(groupId) {
-    const bal = this._ensureBalance(groupId);
-    return { available: bal.available, held: bal.held, updated_at: bal.updated_at };
   }
 }
 

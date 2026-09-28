@@ -107,6 +107,46 @@ async function main() {
   await new Promise(r => setTimeout(r, 400));
   assert(gotSomething === false, 'a Seller (non-admin) cannot generate invite links');
 
+  // ---- 12. A second Seller, NOT yet KYC-verified, is blocked from withdrawing ----
+  admin.emit('admin-create-invite', { groupId: newGroupId });
+  const invCreated2 = await once(admin, 'invite-created');
+  const unverified = connect();
+  await once(unverified, 'connect');
+  unverified.emit('redeem-invite', { token: invCreated2.token, sessionToken: 'unverified-token-1', displayName: 'Unverified Seller', password: 'anotherpass1' });
+  await once(unverified, 'init-state');
+  unverified.emit('request-withdrawal', { groupId: newGroupId, amount: '1,000 USD', destination: 'some-wallet' });
+  const blocked = await once(unverified, 'withdrawal-blocked');
+  assert(/verification/i.test(blocked.reason), 'withdrawal is blocked server-side until KYC is verified: "' + blocked.reason + '"');
+
+  // ---- 13. The already-verified Seller (Jane) CAN request a withdrawal ----
+  const adminWithdrawalNotified = once(admin, 'withdrawal-request-created');
+  const sellerWithdrawSubmitted = once(rando, 'withdrawal-submitted');
+  rando.emit('request-withdrawal', { groupId: newGroupId, amount: '2,500 USD', destination: 'bank-acct-0099', note: 'After deal closed' });
+  const submitted = await sellerWithdrawSubmitted;
+  assert(submitted.status === 'pending', 'a KYC-verified seller can submit a withdrawal request');
+  const adminWithdrawal = await adminWithdrawalNotified;
+  assert(adminWithdrawal.sellerName === 'Jane Seller' && adminWithdrawal.amount === '2,500 USD', 'admin is notified live of the new withdrawal request');
+
+  // ---- 14. Admin lists and approves the withdrawal ----
+  admin.emit('admin-list-withdrawals');
+  const wList = await once(admin, 'withdrawals-list');
+  assert(wList.requests.length === 1 && wList.requests[0].status === 'pending', 'admin-list-withdrawals shows exactly one pending request');
+  const requestId = wList.requests[0].id;
+
+  const sellerWithdrawUpdatePromise = once(rando, 'withdrawal-status-update');
+  const adminReviewedPromise = once(admin, 'withdrawal-request-reviewed'); // drain THIS legitimate broadcast here
+  admin.emit('admin-review-withdrawal', { requestId, decision: 'approved' });
+  const withdrawApproved = await sellerWithdrawUpdatePromise;
+  assert(withdrawApproved.status === 'approved', 'seller is notified live once the withdrawal is approved');
+  await adminReviewedPromise; // make sure it's fully drained before the next check registers a fresh listener
+
+  // ---- 15. A non-admin cannot approve/reject withdrawals ----
+  let withdrawalReviewLeaked = false;
+  admin.once('withdrawal-request-reviewed', () => { withdrawalReviewLeaked = true; });
+  unverified.emit('admin-review-withdrawal', { requestId, decision: 'approved' });
+  await new Promise(r => setTimeout(r, 400));
+  assert(withdrawalReviewLeaked === false, 'a non-admin request-withdrawal review is silently ignored');
+
   console.log('\nAll checks complete.');
   process.exit(process.exitCode || 0);
 }

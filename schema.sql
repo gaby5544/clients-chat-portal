@@ -44,6 +44,10 @@ CREATE TABLE IF NOT EXISTS messages (
   is_deleted        BOOLEAN NOT NULL DEFAULT FALSE,
   created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+-- Older databases may already have a `messages` table from an earlier version
+-- that has no created_at; CREATE TABLE IF NOT EXISTS won't touch it, so add it
+-- here (a no-op on fresh databases) before the index below needs it.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 CREATE INDEX IF NOT EXISTS idx_messages_group ON messages(group_id, created_at);
 
 CREATE TABLE IF NOT EXISTS message_edits (
@@ -126,6 +130,7 @@ CREATE TABLE IF NOT EXISTS announcements (
   created_by    TEXT,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE announcements ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 CREATE INDEX IF NOT EXISTS idx_announcements_group ON announcements(group_id, created_at);
 
 -- Tasks & Approvals.
@@ -140,6 +145,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 CREATE INDEX IF NOT EXISTS idx_tasks_group ON tasks(group_id, created_at);
 
 -- Message delivery/read receipts (WhatsApp-style single/double check).
@@ -163,6 +170,65 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
 );
 CREATE INDEX IF NOT EXISTS idx_push_subs_session ON push_subscriptions(session_token);
 
+-- ============================================================
+-- Invite-only Seller registration + KYC (v3.1)
+-- ============================================================
+
+-- A Seller account can only ever be created by redeeming one of these.
+-- Issued by an Admin+ for one specific group; single-use.
+CREATE TABLE IF NOT EXISTS invites (
+  token         TEXT PRIMARY KEY,
+  group_id      TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+  role          TEXT NOT NULL DEFAULT 'PARTY B',
+  seller_name   TEXT,
+  seller_email  TEXT,
+  created_by    TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  expires_at    TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '14 days'),
+  used_at       TIMESTAMPTZ,
+  used_by       TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_invites_group ON invites(group_id);
+
+-- Password auth (Seller accounts only — Admin tiers keep using passkeys).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS kyc_status TEXT NOT NULL DEFAULT 'not_submitted';
+-- kyc_status: 'not_submitted' | 'pending' | 'verified' | 'rejected'
+
+-- KYC document submissions — reviewed and approved/rejected by an Admin+.
+CREATE TABLE IF NOT EXISTS kyc_submissions (
+  id             TEXT PRIMARY KEY,
+  session_token  TEXT NOT NULL,
+  group_id       TEXT NOT NULL,
+  documents      JSONB NOT NULL DEFAULT '[]',
+  status         TEXT NOT NULL DEFAULT 'pending', -- pending | verified | rejected
+  reviewed_by    TEXT,
+  reviewed_at    TIMESTAMPTZ,
+  reject_reason  TEXT,
+  submitted_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_kyc_session ON kyc_submissions(session_token);
+CREATE INDEX IF NOT EXISTS idx_kyc_status ON kyc_submissions(status);
+
+-- Withdrawal requests — a Seller can only submit one once their KYC is
+-- verified (enforced server-side, not just in the UI). Reviewed and
+-- approved/rejected by an Admin+, exactly like KYC.
+CREATE TABLE IF NOT EXISTS withdrawal_requests (
+  id             TEXT PRIMARY KEY,
+  session_token  TEXT NOT NULL,
+  group_id       TEXT NOT NULL,
+  amount         TEXT NOT NULL,
+  destination    TEXT NOT NULL,
+  note           TEXT,
+  status         TEXT NOT NULL DEFAULT 'pending', -- pending | approved | rejected
+  reviewed_by    TEXT,
+  reviewed_at    TIMESTAMPTZ,
+  reject_reason  TEXT,
+  submitted_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_withdrawals_session ON withdrawal_requests(session_token);
+CREATE INDEX IF NOT EXISTS idx_withdrawals_status ON withdrawal_requests(status);
+
 -- Branding Center — single-row global config (id is always 1).
 CREATE TABLE IF NOT EXISTS branding_settings (
   id                 INTEGER PRIMARY KEY DEFAULT 1,
@@ -174,155 +240,3 @@ CREATE TABLE IF NOT EXISTS branding_settings (
   updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT branding_singleton CHECK (id = 1)
 );
-
--- ============================================================
--- Seller accounts, KYC, deposits & withdrawals ("the vault").
--- A "seller account" is a groups row with real login credentials —
--- the group IS the seller's dedicated workspace. Chat still uses the
--- existing free-form session_token identity above; this is a separate,
--- password-protected identity layer used only for the finance features.
--- ============================================================
-
-ALTER TABLE groups ADD COLUMN IF NOT EXISTS account_type          TEXT NOT NULL DEFAULT 'seller_type_a';
-ALTER TABLE groups ADD COLUMN IF NOT EXISTS registration_status   TEXT NOT NULL DEFAULT 'invited'; -- 'invited' | 'active'
-ALTER TABLE groups ADD COLUMN IF NOT EXISTS invite_token          TEXT UNIQUE;
-ALTER TABLE groups ADD COLUMN IF NOT EXISTS invite_consumed_at    TIMESTAMPTZ;
-ALTER TABLE groups ADD COLUMN IF NOT EXISTS owner_full_name       TEXT;
-ALTER TABLE groups ADD COLUMN IF NOT EXISTS owner_email           TEXT UNIQUE;
-ALTER TABLE groups ADD COLUMN IF NOT EXISTS owner_password_hash   TEXT;
-ALTER TABLE groups ADD COLUMN IF NOT EXISTS currency              CHAR(3);
-ALTER TABLE groups ADD COLUMN IF NOT EXISTS currency_locked_at    TIMESTAMPTZ;
-ALTER TABLE groups ADD COLUMN IF NOT EXISTS kyc_status            TEXT NOT NULL DEFAULT 'not_submitted'; -- not_submitted | pending | verified | rejected
-
-CREATE TABLE IF NOT EXISTS seller_sessions (
-  session_token   TEXT PRIMARY KEY,
-  group_id        TEXT REFERENCES groups(id) ON DELETE CASCADE,
-  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  expires_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
--- Defensive backfill: if a table with this name already existed (from an
--- earlier, unrelated attempt at this feature) CREATE TABLE IF NOT EXISTS
--- above is a no-op, so every column it was supposed to create is added
--- explicitly here too. This is what actually failed on the first deploy —
--- "column created_at does not exist" while building an index below, because
--- the table already existed without it.
-ALTER TABLE seller_sessions ADD COLUMN IF NOT EXISTS group_id     TEXT REFERENCES groups(id) ON DELETE CASCADE;
-ALTER TABLE seller_sessions ADD COLUMN IF NOT EXISTS created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW();
-ALTER TABLE seller_sessions ADD COLUMN IF NOT EXISTS expires_at   TIMESTAMPTZ NOT NULL DEFAULT NOW();
-CREATE INDEX IF NOT EXISTS idx_seller_sessions_group ON seller_sessions(group_id);
-
-CREATE TABLE IF NOT EXISTS password_reset_codes (
-  id            SERIAL PRIMARY KEY,
-  group_id      TEXT REFERENCES groups(id) ON DELETE CASCADE,
-  code_hash     TEXT,
-  expires_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  consumed_at   TIMESTAMPTZ,
-  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-ALTER TABLE password_reset_codes ADD COLUMN IF NOT EXISTS group_id      TEXT REFERENCES groups(id) ON DELETE CASCADE;
-ALTER TABLE password_reset_codes ADD COLUMN IF NOT EXISTS code_hash     TEXT;
-ALTER TABLE password_reset_codes ADD COLUMN IF NOT EXISTS expires_at    TIMESTAMPTZ NOT NULL DEFAULT NOW();
-ALTER TABLE password_reset_codes ADD COLUMN IF NOT EXISTS consumed_at   TIMESTAMPTZ;
-ALTER TABLE password_reset_codes ADD COLUMN IF NOT EXISTS created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW();
-CREATE INDEX IF NOT EXISTS idx_password_resets_group ON password_reset_codes(group_id);
-
-CREATE TABLE IF NOT EXISTS kyc_submissions (
-  id                      TEXT PRIMARY KEY,
-  group_id                TEXT REFERENCES groups(id) ON DELETE CASCADE,
-  doc_type                TEXT, -- national_id | drivers_license | passport
-  id_front_url            TEXT,
-  id_back_url             TEXT,
-  proof_of_address_url    TEXT,
-  selfie_url              TEXT,
-  status                  TEXT NOT NULL DEFAULT 'pending', -- pending | verified | rejected
-  rejection_reason        TEXT,
-  reviewed_by             TEXT,
-  reviewed_at             TIMESTAMPTZ,
-  created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-ALTER TABLE kyc_submissions ADD COLUMN IF NOT EXISTS group_id             TEXT REFERENCES groups(id) ON DELETE CASCADE;
-ALTER TABLE kyc_submissions ADD COLUMN IF NOT EXISTS doc_type             TEXT;
-ALTER TABLE kyc_submissions ADD COLUMN IF NOT EXISTS id_front_url         TEXT;
-ALTER TABLE kyc_submissions ADD COLUMN IF NOT EXISTS id_back_url          TEXT;
-ALTER TABLE kyc_submissions ADD COLUMN IF NOT EXISTS proof_of_address_url TEXT;
-ALTER TABLE kyc_submissions ADD COLUMN IF NOT EXISTS selfie_url           TEXT;
-ALTER TABLE kyc_submissions ADD COLUMN IF NOT EXISTS status               TEXT NOT NULL DEFAULT 'pending';
-ALTER TABLE kyc_submissions ADD COLUMN IF NOT EXISTS rejection_reason     TEXT;
-ALTER TABLE kyc_submissions ADD COLUMN IF NOT EXISTS reviewed_by          TEXT;
-ALTER TABLE kyc_submissions ADD COLUMN IF NOT EXISTS reviewed_at          TIMESTAMPTZ;
-ALTER TABLE kyc_submissions ADD COLUMN IF NOT EXISTS created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW();
-CREATE INDEX IF NOT EXISTS idx_kyc_group ON kyc_submissions(group_id, created_at);
-
-CREATE TABLE IF NOT EXISTS deposits (
-  id              TEXT PRIMARY KEY,
-  group_id        TEXT REFERENCES groups(id) ON DELETE CASCADE,
-  reference       TEXT,
-  method          TEXT, -- crypto | bank
-  asset           TEXT,
-  network         TEXT,
-  amount          NUMERIC(18,2) NOT NULL DEFAULT 0,
-  status          TEXT NOT NULL DEFAULT 'held_in_vault', -- held_in_vault | verified | rejected
-  rejection_reason TEXT,
-  reviewed_by     TEXT,
-  reviewed_at     TIMESTAMPTZ,
-  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-ALTER TABLE deposits ADD COLUMN IF NOT EXISTS group_id          TEXT REFERENCES groups(id) ON DELETE CASCADE;
-ALTER TABLE deposits ADD COLUMN IF NOT EXISTS reference         TEXT;
-ALTER TABLE deposits ADD COLUMN IF NOT EXISTS method            TEXT;
-ALTER TABLE deposits ADD COLUMN IF NOT EXISTS asset             TEXT;
-ALTER TABLE deposits ADD COLUMN IF NOT EXISTS network           TEXT;
-ALTER TABLE deposits ADD COLUMN IF NOT EXISTS amount            NUMERIC(18,2) NOT NULL DEFAULT 0;
-ALTER TABLE deposits ADD COLUMN IF NOT EXISTS status            TEXT NOT NULL DEFAULT 'held_in_vault';
-ALTER TABLE deposits ADD COLUMN IF NOT EXISTS rejection_reason  TEXT;
-ALTER TABLE deposits ADD COLUMN IF NOT EXISTS reviewed_by       TEXT;
-ALTER TABLE deposits ADD COLUMN IF NOT EXISTS reviewed_at       TIMESTAMPTZ;
-ALTER TABLE deposits ADD COLUMN IF NOT EXISTS created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW();
-CREATE INDEX IF NOT EXISTS idx_deposits_group ON deposits(group_id, created_at);
-
-CREATE TABLE IF NOT EXISTS withdrawal_requests (
-  id                TEXT PRIMARY KEY,
-  group_id          TEXT REFERENCES groups(id) ON DELETE CASCADE,
-  reference         TEXT,
-  method            TEXT, -- crypto | bank
-  asset             TEXT,
-  network           TEXT,
-  destination       JSONB,
-  amount            NUMERIC(18,2) NOT NULL DEFAULT 0, -- always in the group's own account currency (the ledger amount)
-  amount_currency   CHAR(3),                          -- = the account currency at time of request
-  entered_amount    NUMERIC(18,2),                     -- what the seller actually typed, if different (crypto only)
-  entered_currency  CHAR(3),                           -- currency the seller chose to enter the amount in (crypto only)
-  amount_usd_equiv  NUMERIC(18,2),                      -- informational USD reference shown at request time
-  status            TEXT NOT NULL DEFAULT 'pending', -- pending | held_in_vault | processing | completed | rejected | failed
-  status_reason     TEXT,
-  status_history    JSONB NOT NULL DEFAULT '[]',
-  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS group_id          TEXT REFERENCES groups(id) ON DELETE CASCADE;
-ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS reference         TEXT;
-ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS method            TEXT;
-ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS asset             TEXT;
-ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS network           TEXT;
-ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS destination       JSONB;
-ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS amount            NUMERIC(18,2) NOT NULL DEFAULT 0;
-ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS amount_currency   CHAR(3);
-ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS entered_amount    NUMERIC(18,2);
-ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS entered_currency  CHAR(3);
-ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS amount_usd_equiv  NUMERIC(18,2);
-ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS status            TEXT NOT NULL DEFAULT 'pending';
-ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS status_reason     TEXT;
-ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS status_history    JSONB NOT NULL DEFAULT '[]';
-ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW();
-ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW();
-CREATE INDEX IF NOT EXISTS idx_withdrawals_group ON withdrawal_requests(group_id, created_at);
-
-CREATE TABLE IF NOT EXISTS balances (
-  group_id      TEXT PRIMARY KEY REFERENCES groups(id) ON DELETE CASCADE,
-  available     NUMERIC(18,2) NOT NULL DEFAULT 0,
-  held          NUMERIC(18,2) NOT NULL DEFAULT 0,
-  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-ALTER TABLE balances ADD COLUMN IF NOT EXISTS available   NUMERIC(18,2) NOT NULL DEFAULT 0;
-ALTER TABLE balances ADD COLUMN IF NOT EXISTS held        NUMERIC(18,2) NOT NULL DEFAULT 0;
-ALTER TABLE balances ADD COLUMN IF NOT EXISTS updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW();
