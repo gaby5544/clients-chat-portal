@@ -150,6 +150,33 @@ ever do add a real new dependency to this project by hand-editing
 `package.json`, always run `npm install` locally and commit the updated
 `package-lock.json` in the same commit — `npm ci` will not do this for you.
 
+**Deploy fix, 2026-09-28:** the next boot crash-looped on
+`Failed to initialize data store: error: column "created_at" does not
+exist`, failing partway through building an index. Cause: `schema.sql`
+creates the new tables with `CREATE TABLE IF NOT EXISTS`, which is a no-op
+if a table by that name already exists — and on this database, one or more
+of `seller_sessions` / `password_reset_codes` / `kyc_submissions` /
+`deposits` / `withdrawal_requests` / `balances` apparently already existed
+(most likely a leftover from an earlier, different attempt at this same
+feature set) without the columns this version expects, so the `CREATE
+INDEX ... (group_id, created_at)` right after it failed. Fixed by giving
+every one of those tables an explicit `ALTER TABLE ... ADD COLUMN IF NOT
+EXISTS ...` for each of its columns, right after its `CREATE TABLE`, the
+same defensive pattern already used for the columns added to the
+pre-existing `groups` table. This backfills any pre-existing version of
+these tables safely no matter what subset of columns it already had. One
+tradeoff: a few columns that were `NOT NULL` (`group_id`, `method`,
+`doc_type`, etc.) are now nullable at the database level, because a
+same-named pre-existing table could have rows with no value to backfill
+into a newly-required column — the application code still always supplies
+these when it writes a row, this just removes the database-level
+constraint as a safety margin against unknown pre-existing data. **This
+wasn't tested against a real Postgres instance** (see the testing note
+above) — if it still fails after redeploying, the fastest way to see
+what's actually different is to connect to the database directly (e.g.
+`psql $DATABASE_URL -c "\d deposits"`) and compare against the column list
+in `schema.sql`.
+
 ## What changed in the original rebuild
 
 **Fixed event mismatches** (frontend and backend were using different event
