@@ -909,7 +909,12 @@ function fmtDate(iso) { return new Date(iso).toLocaleDateString(undefined, { mon
 // is downscaled and re-compressed client-side before it's ever sent.
 // Non-images (PDFs) are sent as-is.
 function compressImageFile(file, maxDim = 1600, quality = 0.82) {
-  return new Promise((resolve) => {
+  return new Promise((resolveRaw) => {
+    // Never let a browser that can't decode an image leave the seller stuck
+    // on "Uploading..." forever — after 8s just send the original file.
+    let settled = false;
+    const resolve = (f) => { if (!settled) { settled = true; resolveRaw(f); } };
+    setTimeout(() => resolve(file), 8000);
     if (!file.type.startsWith('image/') || file.type === 'image/gif') return resolve(file);
     const img = new Image();
     const reader = new FileReader();
@@ -949,7 +954,10 @@ async function uploadRawFile(rawFile) {
     let data;
     try { data = await res.json(); }
     catch { return { ok: false, error: `Server returned an unexpected response (HTTP ${res.status}). Your hosting platform may be blocking large uploads.` }; }
-    if (!res.ok) return { ok: false, error: data.error || `Upload failed (HTTP ${res.status}).` };
+    if (!res.ok) {
+      const msg = /type not allowed/i.test(data.error || '') ? 'That file type isn\'t supported — please use a JPG, PNG or PDF.' : (data.error || `Upload failed (HTTP ${res.status}).`);
+      return { ok: false, error: msg };
+    }
     return { ok: true, url: data.fileUrl };
   } catch (err) {
     return { ok: false, error: 'Network error during upload — check your connection and try again.' };
@@ -1048,6 +1056,10 @@ function openTxAccountView() {
   renderTxDepositsAndWithdrawals();
   setTxAccountNav('dashboard');
 }
+document.addEventListener('click', (e) => {
+  const sidebar = document.querySelector('.tx-sidebar');
+  if (sidebar && sidebar.classList.contains('open') && !sidebar.contains(e.target) && !e.target.closest('.tx-mobile-nav-btn')) sidebar.classList.remove('open');
+});
 function closeTxAccountView() { el('txAccountView').classList.add('hidden'); document.querySelector('.tx-sidebar').classList.remove('open'); }
 function toggleTxSidebar() { document.querySelector('.tx-sidebar').classList.toggle('open'); }
 const TX_NAV_TITLES = {
@@ -1113,8 +1125,35 @@ function renderTxAccountUI() {
   if (el('txVerifyIdentityAction')) el('txVerifyIdentityAction').style.display = a.kyc.status === 'verified' ? 'none' : 'block';
 
   const kycOk = a.kyc.status === 'verified';
-  if (el('txWithdrawKycLock')) el('txWithdrawKycLock').style.display = kycOk ? 'none' : 'block';
+  const banner = {
+    not_submitted: { cls: '', text: 'Verify your identity to unlock withdrawals.', btn: 'Verify Now' },
+    pending: { cls: 'info', text: 'Your documents are under review. We\'ll notify you as soon as they\'re approved.', btn: null },
+    rejected: { cls: 'bad', text: `Your verification was not approved${a.kyc.rejectionReason ? ': ' + a.kyc.rejectionReason : '.'}`, btn: 'Resubmit' },
+    verified: null
+  }[a.kyc.status];
+  const bannerEl = el('txKycBanner');
+  if (bannerEl) {
+    bannerEl.classList.toggle('hidden', !banner);
+    if (banner) {
+      bannerEl.className = 'tx-kyc-banner' + (banner.cls ? ' ' + banner.cls : '');
+      el('txKycBannerText').textContent = banner.text;
+      el('txKycBannerBtn').style.display = banner.btn ? '' : 'none';
+      if (banner.btn) el('txKycBannerBtn').innerHTML = `<i class="fa-solid fa-upload"></i> ${banner.btn}`;
+    }
+  }
+  const lockEl = el('txWithdrawKycLock');
+  if (lockEl) {
+    lockEl.style.display = kycOk ? 'none' : 'flex';
+    lockEl.className = 'tx-kyc-banner' + (banner && banner.cls ? ' ' + banner.cls : '');
+    if (banner) {
+      el('txWithdrawKycLockText').textContent = a.kyc.status === 'not_submitted' ? 'Identity verification is required before you can withdraw.' : banner.text;
+      el('txWithdrawKycLockBtn').style.display = banner.btn ? '' : 'none';
+      if (banner.btn) el('txWithdrawKycLockBtn').innerHTML = `<i class="fa-solid fa-upload"></i> ${banner.btn}`;
+    }
+  }
   if (el('txWithdrawForm')) el('txWithdrawForm').style.display = kycOk ? 'flex' : 'none';
+  if (el('txWithdrawSubmitRow')) el('txWithdrawSubmitRow').style.display = kycOk ? 'flex' : 'none';
+  if (el('txIdentityCardHint')) el('txIdentityCardHint').textContent = { not_submitted: 'Tap to verify', pending: 'Under review', rejected: 'Tap to resubmit', verified: 'Verified ✓' }[a.kyc.status] || '';
 
   if (el('txSideGroupName')) el('txSideGroupName').textContent = a.fullName || 'Your Account';
   if (el('txAvatar')) el('txAvatar').textContent = (a.fullName || '?').trim().split(/\s+/).map(w => w[0]).slice(0, 2).join('').toUpperCase();
@@ -1169,10 +1208,25 @@ function txKycStepsForDocType() {
   steps.push('proofAddress', 'selfie');
   return steps;
 }
+function handleTxIdentityCardClick() {
+  const status = sellerAccountState ? sellerAccountState.kyc.status : 'not_submitted';
+  if (status === 'pending') return toast('Your documents are under review — we\'ll notify you once they\'re approved.');
+  if (status === 'verified') return toast('Your identity is verified.');
+  openTxKycWizard();
+}
 function openTxKycWizard() {
+  const status = sellerAccountState ? sellerAccountState.kyc.status : 'not_submitted';
+  if (status === 'pending') return toast('Your documents are already under review.');
+  if (status === 'verified') return toast('Your identity is already verified.');
   txKycUploads = { idFront: null, idBack: null, proofAddress: null, selfie: null };
   txKycStep = 0;
-  ['txKycIdFront', 'txKycIdBack', 'txKycProofAddress', 'txKycSelfie'].forEach(id => { el(id).value = ''; });
+  ['txKycIdFront', 'txKycIdBack', 'txKycProofAddress', 'txKycSelfie'].forEach(id => {
+    el(id).value = '';
+    const zone = el(id + 'Zone'); zone.classList.remove('done', 'failed');
+    el(id + 'Preview').classList.add('hidden'); el(id + 'Preview').removeAttribute('src');
+    el(id + 'Name').textContent = id === 'txKycSelfie' ? 'Opens your camera · JPG or PNG' : 'JPG, PNG or PDF · up to 15MB';
+    zone.querySelector('.tx-upload-title').textContent = 'Tap to upload';
+  });
   ['txWizStep1Status', 'txWizStep2Status', 'txWizStep3Status', 'txWizStep4Status'].forEach(id => { el(id).textContent = ''; el(id).className = 'tx-wizard-status'; });
   el('txKycWizardModal').classList.remove('hidden');
   renderTxKycWizard();
@@ -1207,17 +1261,28 @@ async function handleTxKycFileChosen(inputEl, key) {
   const file = inputEl.files[0];
   if (!file) return;
   const stepNum = { idFront: 1, idBack: 2, proofAddress: 3, selfie: 4 }[key];
+  const inputId = { idFront: 'txKycIdFront', idBack: 'txKycIdBack', proofAddress: 'txKycProofAddress', selfie: 'txKycSelfie' }[key];
   const statusEl = el(`txWizStep${stepNum}Status`);
+  const zone = el(inputId + 'Zone'), preview = el(inputId + 'Preview'), nameEl = el(inputId + 'Name');
+  zone.classList.remove('done', 'failed');
+  nameEl.textContent = file.name;
+  if (file.type.startsWith('image/')) { preview.src = URL.createObjectURL(file); preview.classList.remove('hidden'); }
+  else preview.classList.add('hidden');
   statusEl.textContent = 'Uploading...'; statusEl.className = 'tx-wizard-status busy';
   const result = await uploadRawFile(file);
   if (result.ok) {
     txKycUploads[key] = result.url;
+    zone.classList.add('done');
+    zone.querySelector('.tx-upload-title').textContent = 'Uploaded — tap to replace';
     statusEl.textContent = '✓ Uploaded'; statusEl.className = 'tx-wizard-status ok';
   } else {
     txKycUploads[key] = null;
+    zone.classList.add('failed');
+    zone.querySelector('.tx-upload-title').textContent = 'Failed — tap to try again';
     statusEl.textContent = '✗ ' + result.error; statusEl.className = 'tx-wizard-status bad';
     toast(result.error, true);
   }
+  inputEl.value = ''; // so choosing the very same file again (e.g. a retry) still fires a change event
 }
 function currentWizStepKey() {
   const steps = txKycStepsForDocType();

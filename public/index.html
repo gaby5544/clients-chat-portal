@@ -448,21 +448,25 @@
         </div>
       </div>
       <div class="tx-topbar-right">
-        <div class="tx-currency-pill"><i class="fa-solid fa-coins"></i> Account currency: <b id="txCcyLabel">—</b></div>
+        <div class="tx-currency-pill clickable" onclick="setTxAccountNav('profile')"><i class="fa-solid fa-coins"></i> Account currency: <b id="txCcyLabel">—</b></div>
         <button class="icon-btn" id="txBellBtn" onclick="setTxAccountNav('transactions')" title="Recent activity"><i class="fa-solid fa-bell"></i><span class="badge-dot hidden" id="txBellDot"></span></button>
-        <div class="tx-avatar" id="txAvatar">?</div>
+        <div class="tx-avatar clickable" id="txAvatar" onclick="setTxAccountNav('profile')">?</div>
       </div>
     </div>
 
     <div class="tx-scroll">
       <!-- DASHBOARD -->
       <div class="tx-page" id="txPageDashboard">
+        <div class="tx-kyc-banner hidden" id="txKycBanner">
+          <div class="tx-kyc-banner-text"><i class="fa-solid fa-id-card"></i> <span id="txKycBannerText">Verify your identity to unlock withdrawals.</span></div>
+          <button class="send-btn tx-kyc-banner-btn" id="txKycBannerBtn" onclick="openTxKycWizard()"><i class="fa-solid fa-upload"></i> Verify Now</button>
+        </div>
         <div class="tx-stats-row">
-          <div class="tx-stat-card"><div class="tx-stat-icon cyan"><i class="fa-solid fa-wallet"></i></div><div class="tx-stat-label">Available Balance</div><div class="tx-stat-value" id="txAvailableBalance">0.00</div></div>
-          <div class="tx-stat-card"><div class="tx-stat-icon amber"><i class="fa-solid fa-lock"></i></div><div class="tx-stat-label">Held in Vault</div><div class="tx-stat-value" id="txHeldBalance">0.00</div><div class="tx-stat-note" id="txHeldNote">Nothing in review</div></div>
-          <div class="tx-stat-card"><div class="tx-stat-icon violet"><i class="fa-solid fa-arrow-down"></i></div><div class="tx-stat-label">Total Deposited</div><div class="tx-stat-value" id="txTotalDeposited">0.00</div></div>
-          <div class="tx-stat-card"><div class="tx-stat-icon cyan"><i class="fa-solid fa-arrow-up"></i></div><div class="tx-stat-label">Last Withdrawal</div><div class="tx-stat-value" id="txLastWithdrawal" style="font-size:1.05rem;">—</div><div class="tx-stat-note" id="txLastWithdrawalNote">No withdrawals yet</div></div>
-          <div class="tx-stat-card"><div class="tx-stat-icon amber"><i class="fa-solid fa-file-circle-question"></i></div><div class="tx-stat-label">Identity Status</div><div id="txKycBadgeSmall" class="tx-status-badge">Not submitted</div></div>
+          <div class="tx-stat-card clickable" onclick="setTxAccountNav('withdraw')"><div class="tx-stat-icon cyan"><i class="fa-solid fa-wallet"></i></div><div class="tx-stat-label">Available Balance</div><div class="tx-stat-value" id="txAvailableBalance">0.00</div></div>
+          <div class="tx-stat-card clickable" onclick="setTxAccountNav('transactions')"><div class="tx-stat-icon amber"><i class="fa-solid fa-lock"></i></div><div class="tx-stat-label">Held in Vault</div><div class="tx-stat-value" id="txHeldBalance">0.00</div><div class="tx-stat-note" id="txHeldNote">Nothing in review</div></div>
+          <div class="tx-stat-card clickable" onclick="openTxDepositModal()"><div class="tx-stat-icon violet"><i class="fa-solid fa-arrow-down"></i></div><div class="tx-stat-label">Total Deposited</div><div class="tx-stat-value" id="txTotalDeposited">0.00</div><div class="tx-stat-note">Tap to record a deposit</div></div>
+          <div class="tx-stat-card clickable" onclick="setTxAccountNav('transactions')"><div class="tx-stat-icon cyan"><i class="fa-solid fa-arrow-up"></i></div><div class="tx-stat-label">Last Withdrawal</div><div class="tx-stat-value" id="txLastWithdrawal" style="font-size:1.05rem;">—</div><div class="tx-stat-note" id="txLastWithdrawalNote">No withdrawals yet</div></div>
+          <div class="tx-stat-card clickable" id="txIdentityCard" onclick="handleTxIdentityCardClick()"><div class="tx-stat-icon amber"><i class="fa-solid fa-file-circle-question"></i></div><div class="tx-stat-label">Identity Status</div><div id="txKycBadgeSmall" class="tx-status-badge">Not submitted</div><div class="tx-stat-note" id="txIdentityCardHint">Tap to verify</div></div>
         </div>
 
         <div class="tx-two-col">
@@ -505,7 +509,10 @@
       <div class="tx-page hidden" id="txPageWithdraw">
         <div class="tx-panel" style="max-width:560px;">
           <div class="tx-panel-head"><span>Withdraw funds</span></div>
-          <div id="txWithdrawKycLock" class="tx-status-badge disabled" style="display:none; margin-bottom:14px;">Identity verification required before you can withdraw.</div>
+          <div id="txWithdrawKycLock" class="tx-kyc-banner" style="display:none; margin-bottom:14px;">
+            <div class="tx-kyc-banner-text"><i class="fa-solid fa-id-card"></i> <span id="txWithdrawKycLockText">Identity verification required before you can withdraw.</span></div>
+            <button class="send-btn tx-kyc-banner-btn" id="txWithdrawKycLockBtn" onclick="openTxKycWizard()"><i class="fa-solid fa-upload"></i> Verify Now</button>
+          </div>
           <div class="create-group-form" id="txWithdrawForm">
             <label class="branding-field">Method
               <select id="txWithdrawMethod" class="message-input" style="width:100%;" onchange="toggleTxWithdrawFields()">
@@ -535,7 +542,7 @@
             </div>
             <label class="branding-field">Amount<input type="number" id="txWdAmount" class="message-input" style="width:100%;" placeholder="0.00" min="0" step="0.01"></label>
           </div>
-          <div style="display:flex; justify-content:flex-end; margin-top:14px;">
+          <div id="txWithdrawSubmitRow" style="display:flex; justify-content:flex-end; margin-top:14px;">
             <button class="send-btn" onclick="submitTxWithdrawal()"><i class="fa-solid fa-arrow-up"></i> Request Withdrawal</button>
           </div>
         </div>
@@ -616,24 +623,48 @@
 
       <div class="tx-wizard-step hidden" id="txWizStep1">
         <div class="tx-wizard-title" id="txWizStep1Title">ID — Front</div>
-        <input type="file" id="txKycIdFront" accept="image/*,.pdf" class="message-input" style="width:100%;" onchange="handleTxKycFileChosen(this,'idFront')">
+        <label class="tx-upload-zone" for="txKycIdFront" id="txKycIdFrontZone">
+          <img class="tx-upload-preview hidden" id="txKycIdFrontPreview" alt="">
+          <i class="fa-solid fa-cloud-arrow-up tx-upload-icon"></i>
+          <span class="tx-upload-title">Tap to upload</span>
+          <span class="tx-upload-hint" id="txKycIdFrontName">JPG, PNG or PDF · up to 15MB</span>
+        </label>
+        <input type="file" id="txKycIdFront" accept="image/*,.pdf" class="tx-file-hidden" onchange="handleTxKycFileChosen(this,'idFront')">
         <div class="tx-wizard-status" id="txWizStep1Status"></div>
       </div>
       <div class="tx-wizard-step hidden" id="txWizStep2">
         <div class="tx-wizard-title">ID — Back</div>
-        <input type="file" id="txKycIdBack" accept="image/*,.pdf" class="message-input" style="width:100%;" onchange="handleTxKycFileChosen(this,'idBack')">
+        <label class="tx-upload-zone" for="txKycIdBack" id="txKycIdBackZone">
+          <img class="tx-upload-preview hidden" id="txKycIdBackPreview" alt="">
+          <i class="fa-solid fa-cloud-arrow-up tx-upload-icon"></i>
+          <span class="tx-upload-title">Tap to upload</span>
+          <span class="tx-upload-hint" id="txKycIdBackName">JPG, PNG or PDF · up to 15MB</span>
+        </label>
+        <input type="file" id="txKycIdBack" accept="image/*,.pdf" class="tx-file-hidden" onchange="handleTxKycFileChosen(this,'idBack')">
         <div class="tx-wizard-status" id="txWizStep2Status"></div>
       </div>
       <div class="tx-wizard-step hidden" id="txWizStep3">
         <div class="tx-wizard-title">Proof of Address</div>
         <p style="font-size:0.72rem; color:var(--text-faint); margin:0 0 8px;">A recent utility bill or bank statement showing your name and address.</p>
-        <input type="file" id="txKycProofAddress" accept="image/*,.pdf" class="message-input" style="width:100%;" onchange="handleTxKycFileChosen(this,'proofAddress')">
+        <label class="tx-upload-zone" for="txKycProofAddress" id="txKycProofAddressZone">
+          <img class="tx-upload-preview hidden" id="txKycProofAddressPreview" alt="">
+          <i class="fa-solid fa-cloud-arrow-up tx-upload-icon"></i>
+          <span class="tx-upload-title">Tap to upload</span>
+          <span class="tx-upload-hint" id="txKycProofAddressName">JPG, PNG or PDF · up to 15MB</span>
+        </label>
+        <input type="file" id="txKycProofAddress" accept="image/*,.pdf" class="tx-file-hidden" onchange="handleTxKycFileChosen(this,'proofAddress')">
         <div class="tx-wizard-status" id="txWizStep3Status"></div>
       </div>
       <div class="tx-wizard-step hidden" id="txWizStep4">
         <div class="tx-wizard-title">Selfie</div>
         <p style="font-size:0.72rem; color:var(--text-faint); margin:0 0 8px;">A clear photo of your face, taken just now.</p>
-        <input type="file" id="txKycSelfie" accept="image/*" class="message-input" style="width:100%;" onchange="handleTxKycFileChosen(this,'selfie')">
+        <label class="tx-upload-zone" for="txKycSelfie" id="txKycSelfieZone">
+          <img class="tx-upload-preview hidden" id="txKycSelfiePreview" alt="">
+          <i class="fa-solid fa-cloud-arrow-up tx-upload-icon"></i>
+          <span class="tx-upload-title">Tap to upload</span>
+          <span class="tx-upload-hint" id="txKycSelfieName">Opens your camera · JPG or PNG</span>
+        </label>
+        <input type="file" id="txKycSelfie" accept="image/*" capture="user" class="tx-file-hidden" onchange="handleTxKycFileChosen(this,'selfie')">
         <div class="tx-wizard-status" id="txWizStep4Status"></div>
       </div>
       <div class="tx-wizard-step hidden" id="txWizStep5">

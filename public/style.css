@@ -732,3 +732,50 @@ body.role-super_admin button.drawer-tab.super-admin-only { display: block !impor
 @media (max-width: 480px) {
   .tx-stats-row { grid-template-columns: 1fr 1fr; }
 }
+
+/* ---- Transaction Account: scroll fix + tappable elements + upload zones ---- */
+.tx-view { height: 100vh; height: 100dvh; }
+.tx-main { min-height: 0; }
+.tx-scroll { min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+.clickable { cursor: pointer; transition: transform .12s ease, border-color .12s ease, background .12s ease; -webkit-tap-highlight-color: transparent; }
+.tx-stat-card.clickable:hover, .tx-stat-card.clickable:active { border-color: var(--border-glow); transform: translateY(-1px); }
+.tx-currency-pill.clickable:hover, .tx-avatar.clickable:hover { filter: brightness(1.15); }
+
+.tx-kyc-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  padding: 14px 16px; margin-bottom: 18px; border-radius: var(--radius-md);
+  background: rgba(245,165,36,0.10); border: 1px solid rgba(245,165,36,0.35);
+}
+.tx-kyc-banner.info { background: rgba(56,189,248,0.10); border-color: rgba(56,189,248,0.35); }
+.tx-kyc-banner.bad { background: rgba(251,84,121,0.10); border-color: rgba(251,84,121,0.35); }
+.tx-kyc-banner-text { flex: 1; min-width: 200px; font-size: 0.84rem; font-weight: 700; color: var(--text-main); line-height: 1.4; }
+.tx-kyc-banner-text i { margin-right: 6px; color: var(--accent-amber); }
+.tx-kyc-banner.info .tx-kyc-banner-text i { color: var(--accent-cyan); }
+.tx-kyc-banner.bad .tx-kyc-banner-text i { color: var(--accent-rose); }
+.tx-kyc-banner-btn { white-space: nowrap; }
+.tx-kyc-banner.hidden { display: none; }
+
+.tx-file-hidden { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; pointer-events: none; }
+.tx-upload-zone {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; text-align: center;
+  min-height: 150px; padding: 18px; border: 2px dashed var(--border-glow); border-radius: var(--radius-md);
+  background: rgba(56,189,248,0.05); cursor: pointer; -webkit-tap-highlight-color: transparent;
+  transition: background .15s ease, border-color .15s ease;
+}
+.tx-upload-zone:hover, .tx-upload-zone:active { background: rgba(56,189,248,0.12); border-color: var(--accent-cyan); }
+.tx-upload-zone.done { border-style: solid; border-color: var(--accent-emerald); background: rgba(34,211,165,0.08); }
+.tx-upload-zone.failed { border-color: var(--accent-rose); background: rgba(251,84,121,0.08); }
+.tx-upload-icon { font-size: 1.8rem; color: var(--accent-cyan); }
+.tx-upload-zone.done .tx-upload-icon { color: var(--accent-emerald); }
+.tx-upload-title { font-weight: 800; font-size: 0.92rem; color: var(--text-main); }
+.tx-upload-hint { font-size: 0.72rem; color: var(--text-muted); word-break: break-all; }
+.tx-upload-preview { max-width: 100%; max-height: 120px; border-radius: 10px; object-fit: contain; }
+.tx-upload-preview.hidden { display: none; }
+
+@media (max-width: 860px) {
+  .tx-scroll { padding: 16px 16px 140px; } /* generous bottom room so nothing hides behind the phone's browser toolbar */
+  .tx-page-sub { font-size: 0.74rem; }
+  .tx-kyc-banner-btn { width: 100%; justify-content: center; }
+  .tx-stat-card { padding: 14px; }
+  .tx-stat-value { font-size: 1.25rem; }
+}
