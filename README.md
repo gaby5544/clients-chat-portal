@@ -1,46 +1,10 @@
-# Quantum Secure Transaction Desk — v3.1
+# Quantum Secure Transaction Desk — v3.0
 
 Enterprise chat portal: dark-glass UI, PostgreSQL persistence (with
 in-memory dev fallback), transaction board with PDF receipts, multi-admin
 role tiers, announcements, tasks & approvals, live dashboard widgets, push
 notifications, message read receipts, a Branding Center, onboarding, and
 hardened input handling throughout.
-
-## v3.1 additions — invite-only Seller accounts, KYC & withdrawals
-- **Seller registration is invite-only.** A Seller can no longer self-register
-  by opening a guessable `?groupId=...&role=PARTY%20B` link. Only an Admin+
-  can generate a real, single-use invite (Controls tab → "Generate Seller
-  Invite Link", or automatically when a new group is created). Anyone else
-  asking to join as Seller is refused server-side, with no exceptions.
-- **"Create Your Account" popup.** Opening a valid invite link shows a
-  mandatory name + password modal — shown *only* to that Seller — before
-  they can enter the group. Once created, the account persists (localStorage,
-  survives closing the browser) and the link is marked used so it can't be
-  shared or replayed.
-- **"Welcome back" account gate.** Every time a Seller enters — first time or
-  a return visit — they land on a clean "View Your Account" screen before the
-  live chat appears, instead of being dropped straight into it. Buyer and
-  every Admin tier are unaffected.
-- **KYC review, right on the Admin Dashboard.** A Seller submits identity
-  documents from a new verification button (visible only on Seller
-  accounts). Every pending submission is listed — with Verify/Reject
-  buttons — directly on the Dashboard tab the moment an Admin logs in, not
-  tucked behind a separate tab that's easy to miss. Status updates push back
-  to the Seller live.
-- **Withdrawals, gated by KYC.** A Seller can request a withdrawal only once
-  their KYC is `verified` — this is enforced on the server, not just hidden
-  in the UI. Pending requests appear on the Admin Dashboard next to Pending
-  KYC, with Approve/Reject buttons; the Seller sees the decision live.
-- **Refined Seller look.** A distinct serif display font (Fraunces), tighter
-  corners, and a softer shadow apply *only* to a logged-in Seller's view
-  (`body.seller-view`) — Buyer and every Admin tier are visually unchanged.
-  Reuses the app's existing mobile/desktop responsive layout throughout.
-- New tables: `invites`, `kyc_submissions`, `withdrawal_requests`; new
-  columns on `users`: `password_hash` (scrypt-hashed, no new dependency),
-  `kyc_status`.
-- `npm run test:invite-flow` — a 20-check end-to-end test covering invite
-  redemption, reuse prevention, KYC review, and KYC-gated withdrawals,
-  against a live (in-memory is fine) instance of the server.
 
 ## v3.0 additions
 - **Announcements** — Admin+ can post to any combination of groups; each one

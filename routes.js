@@ -5,10 +5,12 @@ const fs = require('fs');
 const crypto = require('crypto');
 const rateLimit = require('express-rate-limit');
 const { store } = require('./db');
-const { validateTransactionForm, escapeHtml } = require('./security');
+const { validateTransactionForm, escapeHtml, isValidEmail, hashPassword, verifyPassword, isStrongEnoughPassword, generateSixDigitCode, hashCode } = require('./security');
 const { generateTransactionPdf } = require('./pdfReceipt');
 const { resolveAdminRole, hasMinRole } = require('./roles');
 const { getPublicKey } = require('./webpush');
+const { notifyPasswordResetCode } = require('./email');
+const { v4: uuidv4 } = require('uuid');
 
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
@@ -47,6 +49,11 @@ const uploadLimiter = rateLimit({ windowMs: 60 * 1000, max: 20, standardHeaders:
 const formLimiter = rateLimit({ windowMs: 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false });
 const exportLimiter = rateLimit({ windowMs: 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false });
 const pdfLimiter = rateLimit({ windowMs: 60 * 1000, max: 15, standardHeaders: true, legacyHeaders: false });
+// Tighter limits for auth endpoints — these are brute-force targets.
+const loginLimiter = rateLimit({ windowMs: 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false });
+const resetLimiter = rateLimit({ windowMs: 60 * 1000, max: 5, standardHeaders: true, legacyHeaders: false });
+const LOGIN_LOCKOUT_AFTER = 6;
+const LOGIN_LOCKOUT_MS = 15 * 60 * 1000; // 15 minutes
 
 function requireAdmin(req, res, next) {
   const key = req.headers['x-admin-key'] || req.query.adminKey;
@@ -165,6 +172,86 @@ function buildRouter() {
     const { logo_url, accent_color, accent_color_2, welcome_message, background_url } = req.body || {};
     const updated = await store.updateBranding({ logo_url, accent_color, accent_color_2, welcome_message, background_url });
     res.json(updated);
+  });
+
+  // ==========================================================================
+  // TRANSACTION ACCOUNT AUTH — Seller login + forgot-password. These run
+  // before any socket/group session exists (a returning Seller may not have
+  // their original invite link handy), so they're plain REST + JSON.
+  // ==========================================================================
+
+  // A generic, timing-consistent "incorrect email or password" for both
+  // "no such account" and "wrong password" — never reveal which was wrong.
+  const BAD_LOGIN = { error: 'Incorrect email or password.' };
+
+  router.post('/api/auth/login', loginLimiter, async (req, res) => {
+    const { email, password } = req.body || {};
+    if (!isValidEmail(email) || typeof password !== 'string' || !password) return res.status(400).json(BAD_LOGIN);
+    const matches = await store.findGroupsBySellerEmail(email.trim());
+    const group = matches[0]; // one seller account per email in this build — see routes.js notes
+    if (!group) return res.status(401).json(BAD_LOGIN);
+    if (group.seller_locked_until && new Date(group.seller_locked_until) > new Date()) {
+      return res.status(423).json({ error: 'Too many failed attempts. Please try again later.' });
+    }
+    if (!verifyPassword(password, group.seller_password_hash)) {
+      const fails = (group.seller_failed_logins || 0) + 1;
+      const fields = { seller_failed_logins: fails };
+      if (fails >= LOGIN_LOCKOUT_AFTER) {
+        fields.seller_locked_until = new Date(Date.now() + LOGIN_LOCKOUT_MS).toISOString();
+        fields.seller_failed_logins = 0;
+      }
+      await store.updateGroup(group.id, fields);
+      return res.status(401).json(BAD_LOGIN);
+    }
+    await store.updateGroup(group.id, { seller_failed_logins: 0, seller_locked_until: null });
+    // Hand back a fresh session token + the group's role-locked params — the
+    // client immediately does the same 'join-room' it would from an invite
+    // link, just without needing the link itself.
+    res.json({ success: true, groupId: group.id, sessionToken: uuidv4(), groupName: group.name });
+  });
+
+  router.post('/api/auth/forgot-password/request', resetLimiter, async (req, res) => {
+    const { email } = req.body || {};
+    // Always return success even if the email isn't found — never reveal
+    // whether an account exists for a given address.
+    if (!isValidEmail(email)) return res.json({ success: true });
+    const matches = await store.findGroupsBySellerEmail(email.trim());
+    const group = matches[0];
+    if (group) {
+      const code = generateSixDigitCode();
+      await store.createPasswordReset({ groupId: group.id, codeHash: hashCode(code), expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString() });
+      await notifyPasswordResetCode(group.email_b, { code, groupName: group.name });
+    }
+    res.json({ success: true });
+  });
+
+  router.post('/api/auth/forgot-password/verify', resetLimiter, async (req, res) => {
+    const { email, code } = req.body || {};
+    if (!isValidEmail(email) || !/^\d{6}$/.test(String(code || ''))) return res.status(400).json({ error: 'Invalid code.' });
+    const matches = await store.findGroupsBySellerEmail(email.trim());
+    const group = matches[0];
+    if (!group) return res.status(400).json({ error: 'Invalid or expired code.' });
+    const reset = await store.getLatestPasswordReset(group.id);
+    if (!reset || new Date(reset.expires_at) < new Date() || reset.code_hash !== hashCode(code)) {
+      return res.status(400).json({ error: 'Invalid or expired code.' });
+    }
+    const resetToken = uuidv4();
+    await store.setPasswordResetToken(reset.id, resetToken);
+    res.json({ success: true, resetToken });
+  });
+
+  router.post('/api/auth/forgot-password/reset', resetLimiter, async (req, res) => {
+    const { email, resetToken, newPassword } = req.body || {};
+    if (!isValidEmail(email) || !resetToken || !isStrongEnoughPassword(newPassword)) {
+      return res.status(400).json({ error: 'Password must be at least 8 characters.' });
+    }
+    const matches = await store.findGroupsBySellerEmail(email.trim());
+    const group = matches[0];
+    if (!group) return res.status(400).json({ error: 'Invalid or expired reset link.' });
+    const consumed = await store.consumePasswordResetByToken(group.id, resetToken);
+    if (!consumed) return res.status(400).json({ error: 'Invalid or expired reset link.' });
+    await store.updateGroup(group.id, { seller_password_hash: hashPassword(newPassword), seller_failed_logins: 0, seller_locked_until: null });
+    res.json({ success: true });
   });
 
   router.get('/api/health', (req, res) => res.json({

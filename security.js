@@ -1,40 +1,33 @@
 // Security utilities: XSS protection, input validation/sanitization, rate limiting.
-
 const crypto = require('crypto');
 
 /**
- * Password hashing for seller accounts (invite-based registration).
- * Uses Node's built-in scrypt — no extra dependency (e.g. bcrypt) required.
- * Stored format: "<hex salt>:<hex hash>".
+ * Password hashing for the seller Transaction Account (scrypt — built into
+ * Node, no extra dependency). Format: "<saltHex>:<hashHex>" so a lost/rotated
+ * work-factor never breaks verification of older hashes.
  */
 function hashPassword(password) {
   const salt = crypto.randomBytes(16).toString('hex');
   const hash = crypto.scryptSync(String(password), salt, 64).toString('hex');
   return `${salt}:${hash}`;
 }
-
-/** Verify a plaintext password against a stored "salt:hash" string. Timing-safe. */
 function verifyPassword(password, stored) {
   if (!stored || typeof stored !== 'string' || !stored.includes(':')) return false;
-  const [salt, hash] = stored.split(':');
-  try {
-    const candidate = crypto.scryptSync(String(password), salt, 64).toString('hex');
-    const a = Buffer.from(hash, 'hex');
-    const b = Buffer.from(candidate, 'hex');
-    if (a.length !== b.length) return false;
-    return crypto.timingSafeEqual(a, b);
-  } catch {
-    return false;
-  }
+  const [salt, hashHex] = stored.split(':');
+  const hash = crypto.scryptSync(String(password), salt, 64);
+  const expected = Buffer.from(hashHex, 'hex');
+  return hash.length === expected.length && crypto.timingSafeEqual(hash, expected);
 }
-
-function isValidPassword(password) {
+function isStrongEnoughPassword(password) {
   return typeof password === 'string' && password.length >= 8 && password.length <= 200;
 }
 
-/** Unguessable single-use invite token — this is the only door a Seller account can walk through. */
-function generateInviteToken() {
-  return crypto.randomBytes(24).toString('hex');
+/** A random 6-digit numeric code for password-reset emails, hashed the same way. */
+function generateSixDigitCode() {
+  return String(crypto.randomInt(0, 1000000)).padStart(6, '0');
+}
+function hashCode(code) {
+  return crypto.createHash('sha256').update(String(code)).digest('hex');
 }
 
 /**
@@ -133,6 +126,7 @@ module.exports = {
   RateLimiter,
   hashPassword,
   verifyPassword,
-  isValidPassword,
-  generateInviteToken
+  isStrongEnoughPassword,
+  generateSixDigitCode,
+  hashCode
 };

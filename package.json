@@ -1,6 +1,6 @@
 {
   "name": "quantum-secure-desk",
-  "version": "3.1.0",
+  "version": "3.0.0",
   "description": "Quantum Secure Transaction Desk - Enterprise Chat Portal",
   "main": "server.js",
   "engines": {
@@ -8,8 +8,7 @@
   },
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js",
-    "test:invite-flow": "node test/invite-kyc-flow.test.js"
+    "dev": "node server.js"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
@@ -22,8 +21,5 @@
     "socket.io": "^4.7.5",
     "uuid": "^9.0.1",
     "web-push": "^3.6.7"
-  },
-  "devDependencies": {
-    "socket.io-client": "^4.7.5"
   }
 }

@@ -2,26 +2,19 @@
 const socket = io();
 
 // ---------------- STATE ----------------
-// Persisted in localStorage (not sessionStorage) so a Seller's account —
-// created once, via invite — survives closing the browser, not just the tab.
-let sessionToken = localStorage.getItem('q_session_token') || ('token-' + Math.random().toString(36).slice(2, 15));
-localStorage.setItem('q_session_token', sessionToken);
+let sessionToken = sessionStorage.getItem('q_session_token') || ('token-' + Math.random().toString(36).slice(2, 15));
+sessionStorage.setItem('q_session_token', sessionToken);
 
 const urlParams = new URLSearchParams(window.location.search);
 let activeGroupId = urlParams.get('groupId') || 'default-group';
-// If the link itself says who the visitor is (?role=PARTY%20A or PARTY%20B),
-// lock them into that role so two people can never both land on "Party A"
-// just because they opened a shared link and forgot to change a dropdown.
-// (Mutable: redeeming a Seller invite below locks this in too, from then on.)
-let urlLockedRole = ['PARTY A', 'PARTY B'].includes(urlParams.get('role')) ? urlParams.get('role') : null;
-
-// A Seller account can ONLY ever be created by opening a real, single-use
-// invite link (?invite=<token>) an Admin generated. Everything else about
-// how a visitor lands in this app (Buyer, Admin) is unchanged.
-const inviteToken = urlParams.get('invite') || null;
-let inviteHandled = false; // true once this invite has been checked/redeemed this page-load
-let kycStatus = 'not_submitted';
-let kycPendingDocs = [];
+// If the link itself says who the visitor is (?role=BUYER or SELLER — the
+// old ?role=PARTY%20A/PARTY%20B form still works for links already sent
+// out), lock them into that role so two people can never both land on the
+// same slot just because they opened a shared link and forgot to change a
+// dropdown. Whichever form is in the URL, only 'PARTY A'/'PARTY B' — never
+// visible to the party — is what's actually sent to the server.
+const ROLE_PARAM_MAP = { BUYER: 'PARTY A', SELLER: 'PARTY B', 'PARTY A': 'PARTY A', 'PARTY B': 'PARTY B' };
+const urlLockedRole = ROLE_PARAM_MAP[urlParams.get('role')] || null;
 
 let isAdminConfirmed = false;
 
@@ -57,9 +50,10 @@ let brandingCache = null;
 let pushSubscribed = false;
 let myRole = null; // 'PARTY A' | 'PARTY B' | null (admin) — as confirmed by the server, not just the dropdown
 let currentGroupCustomNames = { A: 'Buyer', B: 'Seller' };
+let currentGroupEmails = { A: null, B: null };
+let myEmail = localStorage.getItem('q_user_email') || null;
 let lastPresenceUsers = [];
 let pendingInviteLinksGroupId = null; // set right after create-group, consumed once init-state for it arrives
-let pendingSellerInviteToken = null;  // the real, single-use Seller invite generated alongside that new group
 
 const ROLE_LEVEL = { MODERATOR: 1, ADMIN: 2, SUPER_ADMIN: 3 };
 function hasMinRoleClient(role, minRole) {
@@ -166,9 +160,9 @@ function setAdminTab(tab) {
   document.querySelectorAll('.drawer-tab-panel').forEach(p => p.classList.add('hidden'));
   el('tab' + tab.charAt(0).toUpperCase() + tab.slice(1)).classList.remove('hidden');
   if (tab === 'transactions') loadTransactionsList();
-  if (tab === 'controls') { renderAnnouncementGroupChecks(); socket.emit('admin-list-invites', { groupId: activeGroupId }); }
+  if (tab === 'accounts') { socket.emit('admin-get-kyc-queue'); socket.emit('admin-get-deposits-queue'); socket.emit('admin-get-withdrawals-queue'); }
+  if (tab === 'controls') renderAnnouncementGroupChecks();
   if (tab === 'tasks') socket.emit('get-tasks', { groupId: activeGroupId });
-  if (tab === 'kyc') socket.emit('admin-list-kyc');
   if (tab === 'branding') loadBrandingIntoForm();
 }
 
@@ -214,44 +208,7 @@ function joinSession(adminKey = null) {
   socket.emit('join-room', { groupId: activeGroupId, role: selectedRole, adminKey, sessionToken, email });
 }
 
-socket.on('connect', () => {
-  currentSocketId = socket.id;
-  if (inviteToken && !inviteHandled) {
-    // Don't auto-join as anyone yet — validate the invite first. A valid one
-    // shows the "Create your account" popup instead of silently joining.
-    socket.emit('check-invite', { token: inviteToken });
-  } else {
-    joinSession(adminPasskeyMemory);
-  }
-});
-
-// ---------------- INVITE-ONLY SELLER REGISTRATION ----------------
-socket.on('invite-valid', (data) => {
-  el('sellerInviteIntro').textContent =
-    `You've been invited to join "${data.groupName}" as ${data.roleLabel}. Set your name and a password to finish creating your account.`;
-  el('sellerAccountName').value = data.prefillName || '';
-  el('sellerAccountPassword').value = '';
-  el('sellerAccountPasswordConfirm').value = '';
-  el('sellerCreateAccountModal').classList.remove('hidden');
-  setTimeout(() => el('sellerAccountName').focus(), 50);
-});
-
-socket.on('invite-invalid', ({ reason }) => {
-  inviteHandled = true;
-  toast(reason || 'This invite link is not valid.', true);
-  el('sellerCreateAccountModal').classList.add('hidden');
-  joinSession(); // fall back to a normal landing rather than leaving the visitor stuck
-});
-
-function submitSellerCreateAccount() {
-  const displayName = el('sellerAccountName').value.trim();
-  const password = el('sellerAccountPassword').value;
-  const confirmPassword = el('sellerAccountPasswordConfirm').value;
-  if (!displayName) return toast('Please enter your full name.', true);
-  if (password.length < 8) return toast('Password must be at least 8 characters.', true);
-  if (password !== confirmPassword) return toast('Passwords do not match.', true);
-  socket.emit('redeem-invite', { token: inviteToken, sessionToken, displayName, password });
-}
+socket.on('connect', () => { currentSocketId = socket.id; joinSession(adminPasskeyMemory); });
 
 socket.on('error-msg', (msg) => toast(msg, true));
 
@@ -263,35 +220,13 @@ socket.on('init-state', async (data) => {
   currentSocketId = data.socketId;
   activeGroupId = data.group.id;
   currentGroupCustomNames = data.group.customNames || { A: 'Buyer', B: 'Seller' };
+  currentGroupEmails = data.group.emails || { A: null, B: null };
   _myToken = data.sessionToken; // must be set before rendering messages below
   document.body.classList.toggle('is-admin', isAdminConfirmed);
   document.body.classList.remove('role-admin', 'role-super_admin', 'role-moderator');
   if (currentAdminRole) document.body.classList.add('role-' + currentAdminRole.toLowerCase());
   updateRailVisibility();
   updateRoleBadge();
-
-  // The refined look (and the KYC entry point) apply ONLY to a genuine
-  // Seller account — never to Buyer or any Admin tier.
-  const isSeller = !isAdminConfirmed && myRole === 'PARTY B';
-  document.body.classList.toggle('seller-view', isSeller);
-  kycStatus = data.kycStatus || 'not_submitted';
-  if (isSeller) updateKycUi();
-
-  // Captured BEFORE inviteHandled flips below, so the account gate can still
-  // tell "just created" apart from "returning" once we get there.
-  const justCreatedAccount = !!(inviteToken && !inviteHandled);
-
-  if (inviteToken && !inviteHandled) {
-    // This init-state is the result of a just-redeemed invite. Lock the role
-    // in for every future reconnect and swap the one-time link for a durable,
-    // reusable URL — exactly the same shape a Buyer's link already uses —
-    // so reloading later just reconnects this same Seller account normally.
-    inviteHandled = true;
-    urlLockedRole = 'PARTY B';
-    el('sellerCreateAccountModal').classList.add('hidden');
-    const durableUrl = `${window.location.origin}/?groupId=${encodeURIComponent(activeGroupId)}&role=PARTY%20B`;
-    history.replaceState(null, '', durableUrl);
-  }
 
   el('currentGroupName').textContent = data.group.name;
   // Hide the picker entirely once a role is locked in by the link (or for admins) —
@@ -323,24 +258,14 @@ socket.on('init-state', async (data) => {
     loadAdminNotes();
     socket.emit('admin-get-stats');
     socket.emit('get-all-groups'); // server ignores this for non-admins anyway; only bother asking as admin
-    if (hasMinRoleClient(currentAdminRole, 'ADMIN')) {
-      socket.emit('admin-get-dashboard-widgets');
-      // Fetch immediately, not just on a tab click, so Pending KYC / Pending
-      // Withdrawals are sitting right there on Dashboard the moment it opens.
-      socket.emit('admin-list-kyc');
-      socket.emit('admin-list-withdrawals');
-    }
-  } else if (isSeller) {
-    showSellerAccountGate(data.group.name, justCreatedAccount);
+    if (hasMinRoleClient(currentAdminRole, 'ADMIN')) socket.emit('admin-get-dashboard-widgets');
   } else {
     maybeShowOnboarding();
   }
 
   if (pendingInviteLinksGroupId && pendingInviteLinksGroupId === activeGroupId) {
     pendingInviteLinksGroupId = null;
-    const tok = pendingSellerInviteToken;
-    pendingSellerInviteToken = null;
-    openInviteLinksModal(activeGroupId, currentGroupCustomNames.A, currentGroupCustomNames.B, tok);
+    openInviteLinksModal(activeGroupId, currentGroupCustomNames.A, currentGroupCustomNames.B);
   }
 
   // The authoritative presence list for this group arrives moments later via
@@ -608,114 +533,6 @@ async function uploadFile(file) {
 }
 function handleFileInputUpload(input) { if (input.files && input.files[0]) uploadFile(input.files[0]); input.value = ''; }
 
-// ---------------- KYC (Seller-facing: submit, track status) ----------------
-const KYC_LABELS = {
-  not_submitted: { cls: 'not_submitted', html: '<i class="fa-solid fa-circle-info"></i> You have not submitted verification documents yet.' },
-  pending: { cls: 'pending', html: '<i class="fa-solid fa-hourglass-half"></i> Submitted — awaiting Admin review.' },
-  verified: { cls: 'verified', html: '<i class="fa-solid fa-circle-check"></i> Verified by your Admin.' },
-  rejected: { cls: 'rejected', html: '<i class="fa-solid fa-circle-xmark"></i> Rejected — please correct and resubmit.' }
-};
-function updateKycUi() {
-  const banner = el('kycStatusBanner');
-  if (!banner) return;
-  const info = KYC_LABELS[kycStatus] || KYC_LABELS.not_submitted;
-  banner.className = 'kyc-status-banner show ' + info.cls;
-  banner.innerHTML = info.html;
-  const submitSection = el('kycSubmitSection');
-  if (submitSection) submitSection.style.display = (kycStatus === 'pending' || kycStatus === 'verified') ? 'none' : 'block';
-  const dot = el('kycNeedsActionDot');
-  if (dot) dot.classList.toggle('hidden', !(kycStatus === 'not_submitted' || kycStatus === 'rejected'));
-}
-function openKycModal() {
-  el('kycModal').classList.remove('hidden');
-  updateKycUi();
-}
-async function handleKycFileChosen(input) {
-  const file = input.files && input.files[0];
-  input.value = '';
-  if (!file) return;
-  if (file.size > 15 * 1024 * 1024) return toast('File exceeds the 15MB limit.', true);
-  const fd = new FormData();
-  fd.append('file', file);
-  try {
-    const res = await fetch('/api/upload', { method: 'POST', body: fd });
-    const data = await res.json();
-    if (!res.ok) return toast(data.error || 'Upload failed', true);
-    kycPendingDocs.push({ url: data.fileUrl, name: data.fileName, type: el('kycDocType').value });
-    renderKycAttachedList();
-  } catch (err) { toast('Upload failed', true); }
-}
-function renderKycAttachedList() {
-  el('kycAttachedList').innerHTML = kycPendingDocs.map((d, i) => `
-    <div class="kyc-doc-row"><span><i class="fa-solid fa-file"></i> ${escapeHtml(d.name)} <small style="color:var(--text-faint);">(${escapeHtml(d.type)})</small></span>
-      <i class="fa-solid fa-xmark" style="cursor:pointer;" onclick="removeKycDoc(${i})"></i></div>`).join('');
-}
-function removeKycDoc(i) { kycPendingDocs.splice(i, 1); renderKycAttachedList(); }
-function submitKycDocuments() {
-  if (!kycPendingDocs.length) return toast('Attach at least one document first.', true);
-  socket.emit('submit-kyc', { groupId: activeGroupId, documents: kycPendingDocs });
-  kycPendingDocs = [];
-  renderKycAttachedList();
-}
-socket.on('kyc-status-update', ({ status, rejectReason }) => {
-  kycStatus = status;
-  updateKycUi();
-  if (status === 'verified') toast('Your identity verification was approved.');
-  else if (status === 'rejected') toast(`Your submission was rejected.${rejectReason ? ' Reason: ' + rejectReason : ''}`, true);
-  else if (status === 'pending') toast('Documents submitted — awaiting review.');
-});
-
-// ---------------- WITHDRAW FUNDS (Seller-facing — server enforces verified KYC) ----------------
-function openWithdrawModal() {
-  const gate = el('withdrawKycGate');
-  const goVerifyBtn = el('withdrawGoVerifyBtn');
-  const formSection = el('withdrawFormSection');
-  const isVerified = kycStatus === 'verified';
-  gate.style.display = isVerified ? 'none' : 'flex';
-  goVerifyBtn.style.display = isVerified ? 'none' : 'flex';
-  formSection.style.display = isVerified ? 'block' : 'none';
-  el('withdrawModal').classList.remove('hidden');
-  socket.emit('get-my-withdrawals');
-}
-function submitWithdrawalRequest() {
-  const amount = el('withdrawAmount').value.trim();
-  const destination = el('withdrawDestination').value.trim();
-  const note = el('withdrawNote').value.trim();
-  if (!amount) return toast('Enter an amount.', true);
-  if (!destination) return toast('Enter a payout destination.', true);
-  socket.emit('request-withdrawal', { groupId: activeGroupId, amount, destination, note });
-}
-function renderWithdrawHistory(requests) {
-  const container = el('withdrawHistoryList');
-  if (!container) return;
-  if (!requests.length) { container.innerHTML = ''; return; }
-  container.innerHTML = `<div style="font-size:0.72rem; font-weight:800; text-transform:uppercase; color:var(--text-faint); margin-bottom:2px;">Your Requests</div>` +
-    requests.map(w => `
-      <div class="withdraw-history-row">
-        <span><b>${escapeHtml(w.amount)}</b> — ${escapeHtml(w.destination)}</span>
-        <span class="status-pill ${w.status}">${w.status}</span>
-      </div>`).join('');
-}
-socket.on('my-withdrawals', ({ requests }) => renderWithdrawHistory(requests));
-socket.on('withdrawal-blocked', ({ reason }) => {
-  toast(reason || 'Complete identity verification first.', true);
-  el('withdrawKycGate').style.display = 'flex';
-  el('withdrawGoVerifyBtn').style.display = 'flex';
-  el('withdrawFormSection').style.display = 'none';
-});
-socket.on('withdrawal-submitted', () => {
-  toast('Withdrawal request submitted — awaiting Admin review.');
-  el('withdrawAmount').value = '';
-  el('withdrawDestination').value = '';
-  el('withdrawNote').value = '';
-  socket.emit('get-my-withdrawals');
-});
-socket.on('withdrawal-status-update', ({ status, rejectReason }) => {
-  if (status === 'approved') toast('Your withdrawal request was approved.');
-  else if (status === 'rejected') toast(`Your withdrawal request was rejected.${rejectReason ? ' Reason: ' + rejectReason : ''}`, true);
-  socket.emit('get-my-withdrawals');
-});
-
 (function setupDragDrop() {
   const zone = el('messageContainer');
   ['dragenter', 'dragover'].forEach(evt => zone.addEventListener(evt, (e) => { e.preventDefault(); zone.classList.add('drag-active'); }));
@@ -942,9 +759,8 @@ function switchGroup(groupId) {
   joinSession(adminPasskeyMemory);
 }
 
-socket.on('group-created-and-switch', ({ newGroupId, sellerInviteToken }) => {
+socket.on('group-created-and-switch', ({ newGroupId }) => {
   pendingInviteLinksGroupId = newGroupId; // consumed by init-state once we're in the new room
-  pendingSellerInviteToken = sellerInviteToken || null;
   activeGroupId = newGroupId;
   joinSession(adminPasskeyMemory);
 });
@@ -968,6 +784,8 @@ function createNewGroup() {
   el('createGroupNameInput').value = '';
   el('createGroupNameAInput').value = '';
   el('createGroupNameBInput').value = '';
+  el('createGroupEmailAInput').value = '';
+  el('createGroupEmailBInput').value = '';
   el('createGroupModal').classList.remove('hidden');
   el('createGroupNameInput').focus();
 }
@@ -975,9 +793,14 @@ function submitCreateGroupModal() {
   const groupName = el('createGroupNameInput').value.trim();
   const customNameA = el('createGroupNameAInput').value.trim();
   const customNameB = el('createGroupNameBInput').value.trim();
+  const emailA = el('createGroupEmailAInput').value.trim();
+  const emailB = el('createGroupEmailBInput').value.trim();
+  if (emailA && !isValidEmailClient(emailA)) return toast("That doesn't look like a valid buyer email.", true);
+  if (emailB && !isValidEmailClient(emailB)) return toast("That doesn't look like a valid seller email.", true);
   closeModal('createGroupModal');
-  socket.emit('create-group', { groupName, customNameA, customNameB });
+  socket.emit('create-group', { groupName, customNameA, customNameB, emailA, emailB });
 }
+function isValidEmailClient(email) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email); }
 function deleteCurrentGroup() {
   showConfirmModal({ title: 'Delete Group', message: 'Delete the active group? All its messages and transactions will be removed. This cannot be undone.' }, () => {
     socket.emit('delete-group', { groupId: activeGroupId });
@@ -994,12 +817,628 @@ function renameParty(party) {
     socket.emit('rename-party', { groupId: activeGroupId, party, newName });
   });
 }
+function setPartyEmail(party) {
+  const current = (party === 'A' ? currentGroupEmails.A : currentGroupEmails.B) || '';
+  showPromptModal({
+    title: `${party === 'A' ? (currentGroupCustomNames.A || 'Buyer') : (currentGroupCustomNames.B || 'Seller')}'s Email`,
+    message: 'Used only for missed-message alerts, sent once you approve them. Leave blank and save to clear it.',
+    placeholder: 'name@example.com',
+    defaultValue: current
+  }, (value) => {
+    const email = value.trim();
+    if (email && !isValidEmailClient(email)) return toast("That doesn't look like a valid email.", true);
+    socket.emit('admin-set-party-email', { groupId: activeGroupId, party, email });
+  });
+}
+socket.on('party-email-updated', ({ groupId, party, email }) => {
+  if (groupId === activeGroupId) {
+    if (party === 'A') currentGroupEmails.A = email; else currentGroupEmails.B = email;
+  }
+  toast(`${party === 'A' ? 'Buyer' : 'Seller'} email ${email ? 'updated' : 'cleared'}.`);
+});
+socket.on('my-email-updated', ({ email }) => toast(`Your email is set — you'll get alerts at ${email} if you miss a chat.`));
+
+// ---------------- PENDING EMAIL APPROVALS (admin only) ----------------
+let pendingEmailsCache = [];
+function renderPendingEmailsList() {
+  const box = el('pendingEmailsList');
+  if (!box) return;
+  if (!pendingEmailsCache.length) {
+    box.innerHTML = '<p style="font-size:0.78rem; color:var(--text-faint); margin:0;">No pending emails.</p>';
+    return;
+  }
+  box.innerHTML = pendingEmailsCache.map(p => `
+    <div class="invite-link-row" style="flex-wrap:wrap;">
+      <div style="flex:1; min-width:0;">
+        <div style="font-weight:800; font-size:0.78rem;">${escapeHtml(p.groupName)} — to ${escapeHtml(p.toEmail)} (${p.party === 'A' ? 'Buyer' : 'Seller'})</div>
+        <div style="font-size:0.74rem; color:var(--text-muted); margin-top:2px;">From ${escapeHtml(p.fromName)}: "${escapeHtml(p.text)}"</div>
+      </div>
+      <button class="admin-btn" onclick="approvePendingEmail('${p.id}')"><i class="fa-solid fa-check"></i> Approve</button>
+      <button class="admin-btn admin-btn-danger" onclick="rejectPendingEmail('${p.id}')"><i class="fa-solid fa-xmark"></i> Reject</button>
+    </div>`).join('');
+}
+socket.on('pending-emails-list', (list) => { pendingEmailsCache = list; renderPendingEmailsList(); });
+socket.on('pending-email-created', (p) => { pendingEmailsCache.unshift(p); renderPendingEmailsList(); toast(`New missed-message email awaiting your approval (${p.party === 'A' ? 'Buyer' : 'Seller'}).`); });
+socket.on('pending-email-resolved', (p) => { pendingEmailsCache = pendingEmailsCache.filter(x => x.id !== p.id); renderPendingEmailsList(); });
+function approvePendingEmail(id) { socket.emit('admin-approve-pending-email', { id }); }
+function rejectPendingEmail(id) {
+  showConfirmModal({ title: 'Reject Email', message: 'This missed-message email will not be sent. Continue?' }, () => {
+    socket.emit('admin-reject-pending-email', { id });
+  });
+}
+
+// ---------------- SELF-SERVICE EMAIL (Buyer/Seller) ----------------
+// Admin taps the bell-adjacent envelope to jump straight to the Pending
+// Email Approvals panel; Buyer/Seller use it to add or update their own
+// email for missed-message alerts.
+function openEmailSettings() {
+  if (isAdminConfirmed) return openAdminDrawerTab('controls');
+  showPromptModal({
+    title: 'Email Alerts',
+    message: "Add your email and, once the Desk Officer approves it, you'll get an email any time you miss a chat message.",
+    placeholder: 'name@example.com',
+    defaultValue: myEmail || ''
+  }, (value) => {
+    const email = value.trim();
+    if (!isValidEmailClient(email)) return toast("That doesn't look like a valid email.", true);
+    myEmail = email;
+    localStorage.setItem('q_user_email', email);
+    socket.emit('set-my-email', { groupId: activeGroupId, email });
+  });
+}
 function toggleFileLock() { socket.emit('admin-toggle-upload-permission', { groupId: activeGroupId }); }
+
+// =====================================================================
+// TRANSACTION ACCOUNT SYSTEM (client) — Seller registration/KYC/balance/
+// deposits/withdrawals, plus the matching Admin backend queues. Buyer never
+// sees any of this; none of it lives in the general group state.
+// =====================================================================
+let sellerAccountState = null;
+let sellerDeposits = [];
+let sellerWithdrawals = [];
+let kycQueueCache = [];
+let depositsQueueCache = [];
+let withdrawalsQueueCache = [];
+const CCY_SYMBOL = { USD: '$', GBP: '£', EUR: '€' };
+function fmtMoney(amount, ccy) { return `${CCY_SYMBOL[ccy] || ''}${Number(amount || 0).toFixed(2)}${CCY_SYMBOL[ccy] ? '' : ' ' + (ccy || '')}`; }
+function fmtDate(iso) { return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); }
+
+// Large phone-camera photos are the single most common cause of upload
+// failures (a hosting proxy or CDN in front of the app frequently caps
+// request size well below what a raw 8-12MP photo needs) — so every image
+// is downscaled and re-compressed client-side before it's ever sent.
+// Non-images (PDFs) are sent as-is.
+function compressImageFile(file, maxDim = 1600, quality = 0.82) {
+  return new Promise((resolveRaw) => {
+    // Never let a browser that can't decode an image leave the seller stuck
+    // on "Uploading..." forever — after 8s just send the original file.
+    let settled = false;
+    const resolve = (f) => { if (!settled) { settled = true; resolveRaw(f); } };
+    setTimeout(() => resolve(file), 8000);
+    if (!file.type.startsWith('image/') || file.type === 'image/gif') return resolve(file);
+    const img = new Image();
+    const reader = new FileReader();
+    reader.onload = (e) => { img.src = e.target.result; };
+    img.onload = () => {
+      let { width, height } = img;
+      if (width > maxDim || height > maxDim) {
+        const scale = maxDim / Math.max(width, height);
+        width = Math.round(width * scale);
+        height = Math.round(height * scale);
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width; canvas.height = height;
+      canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+      canvas.toBlob((blob) => {
+        if (!blob) return resolve(file); // compression failed for some reason — fall back to the original
+        resolve(new File([blob], file.name.replace(/\.[^.]+$/, '.jpg'), { type: 'image/jpeg' }));
+      }, 'image/jpeg', quality);
+    };
+    img.onerror = () => resolve(file); // not a decodable image — send as-is, server will reject if truly invalid
+    reader.readAsDataURL(file);
+  });
+}
+
+// A generic "upload this file, get back a URL" — unlike uploadFile() this
+// never sends a chat message and is never blocked by the chat file-lock
+// toggle (KYC documents aren't chat attachments). Compresses images first
+// and surfaces the real failure reason instead of a bare "Upload failed".
+async function uploadRawFile(rawFile) {
+  if (!rawFile) return { ok: false, error: 'No file selected.' };
+  const file = await compressImageFile(rawFile);
+  if (file.size > 15 * 1024 * 1024) return { ok: false, error: 'File is too large even after compression (15MB limit).' };
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    const res = await fetch('/api/upload', { method: 'POST', body: fd });
+    let data;
+    try { data = await res.json(); }
+    catch { return { ok: false, error: `Server returned an unexpected response (HTTP ${res.status}). Your hosting platform may be blocking large uploads.` }; }
+    if (!res.ok) {
+      const msg = /type not allowed/i.test(data.error || '') ? 'That file type isn\'t supported — please use a JPG, PNG or PDF.' : (data.error || `Upload failed (HTTP ${res.status}).`);
+      return { ok: false, error: msg };
+    }
+    return { ok: true, url: data.fileUrl };
+  } catch (err) {
+    return { ok: false, error: 'Network error during upload — check your connection and try again.' };
+  }
+}
+
+socket.on('seller-account-state', (acct) => {
+  if (activeGroupId && acct.groupId !== activeGroupId) return;
+  sellerAccountState = acct;
+  renderTxAccountUI();
+  maybeShowTxRegModal();
+});
+socket.on('deposits-list', ({ groupId, deposits }) => { if (groupId === activeGroupId) { sellerDeposits = deposits; renderTxDepositsAndWithdrawals(); } });
+socket.on('withdrawals-list', ({ groupId, withdrawals }) => { if (groupId === activeGroupId) { sellerWithdrawals = withdrawals; renderTxDepositsAndWithdrawals(); } });
+socket.on('deposit-created', (d) => {
+  if (d.groupId === activeGroupId) { sellerDeposits = [d, ...sellerDeposits.filter(x => x.id !== d.id)]; renderTxDepositsAndWithdrawals(); }
+  if (!depositsQueueCache.find(x => x.id === d.id) && d.status === 'held_in_vault') depositsQueueCache = [d, ...depositsQueueCache];
+  renderDepositsQueue();
+});
+socket.on('deposit-updated', (d) => {
+  if (d.groupId === activeGroupId) { sellerDeposits = sellerDeposits.map(x => x.id === d.id ? d : x); renderTxDepositsAndWithdrawals(); }
+});
+socket.on('deposit-resolved', (d) => { depositsQueueCache = depositsQueueCache.filter(x => x.id !== d.id); renderDepositsQueue(); });
+socket.on('withdrawal-created', (w) => {
+  if (w.groupId === activeGroupId) { sellerWithdrawals = [w, ...sellerWithdrawals.filter(x => x.id !== w.id)]; renderTxDepositsAndWithdrawals(); toast('Withdrawal request submitted.'); }
+  if (!withdrawalsQueueCache.find(x => x.id === w.id)) withdrawalsQueueCache = [w, ...withdrawalsQueueCache];
+  renderWithdrawalsQueue();
+});
+socket.on('withdrawal-updated', (w) => {
+  if (w.groupId === activeGroupId) { sellerWithdrawals = sellerWithdrawals.map(x => x.id === w.id ? w : x); renderTxDepositsAndWithdrawals(); }
+  withdrawalsQueueCache = withdrawalsQueueCache.map(x => x.id === w.id ? w : x);
+  renderWithdrawalsQueue();
+});
+socket.on('withdrawal-resolved', (w) => { withdrawalsQueueCache = withdrawalsQueueCache.filter(x => !['completed', 'rejected', 'failed'].includes(x.status) || x.id !== w.id); renderWithdrawalsQueue(); });
+socket.on('transaction-account-created', () => { closeModal('txRegModal'); toast('Your Transaction Account is ready.'); openTxAccountView(); });
+socket.on('kyc-queue-list', (list) => { kycQueueCache = list; renderKycQueue(); });
+socket.on('kyc-submitted', (acct) => {
+  kycQueueCache = [acct, ...kycQueueCache.filter(x => x.groupId !== acct.groupId)];
+  renderKycQueue();
+  toast(`New identity documents submitted for review — ${acct.fullName || acct.groupId}.`);
+  playAdminAlertPing();
+});
+socket.on('kyc-resolved', (acct) => { kycQueueCache = kycQueueCache.filter(x => x.groupId !== acct.groupId); renderKycQueue(); });
+socket.on('deposits-queue-list', (list) => { depositsQueueCache = list; renderDepositsQueue(); });
+socket.on('withdrawals-queue-list', (list) => { withdrawalsQueueCache = list; renderWithdrawalsQueue(); });
+
+// A single red dot on the admin drawer's "Accounts" tab so pending reviews
+// are impossible to miss — updates every time any of the three queues change.
+function updateAccountsTabBadge() {
+  const dot = el('accountsTabDot');
+  if (!dot) return;
+  const count = kycQueueCache.length + depositsQueueCache.length + withdrawalsQueueCache.filter(w => ['pending', 'held_in_vault', 'processing'].includes(w.status)).length;
+  dot.classList.toggle('hidden', count === 0);
+}
+function playAdminAlertPing() { /* placeholder hook — the toast + red dot already cover this; wire a sound here if wanted */ }
+
+// ---- Seller: registration popup ----
+function maybeShowTxRegModal() {
+  if (myRole !== 'PARTY B' || !sellerAccountState) return;
+  el('txAccountBtn').classList.remove('hidden');
+  el('brandMenuTxAccount').classList.remove('hidden');
+  if (sellerAccountState.registered) { closeModal('txRegModal'); return; }
+  el('txRegEmailRow').style.display = sellerAccountState.email ? 'none' : 'flex';
+  el('txRegModal').classList.remove('hidden');
+}
+function submitTxRegistration() {
+  const fullName = el('txRegNameInput').value.trim();
+  const email = el('txRegEmailInput').value.trim();
+  const password = el('txRegPasswordInput').value;
+  const confirm = el('txRegPasswordConfirmInput').value;
+  const currency = el('txRegCurrencyInput').value;
+  if (!fullName) return toast('Please enter your full name.', true);
+  if (!sellerAccountState.email && !isValidEmailClient(email)) return toast("That doesn't look like a valid email.", true);
+  if (password.length < 8) return toast('Password must be at least 8 characters.', true);
+  if (password !== confirm) return toast('Passwords do not match.', true);
+  socket.emit('register-transaction-account', { groupId: activeGroupId, fullName, email, password, currency });
+}
+
+// ---- Seller: full dashboard view ----
+function toggleBrandMenu(force) {
+  const menu = el('brandMenu');
+  if (typeof force === 'boolean') { menu.classList.toggle('hidden', !force); return; }
+  menu.classList.toggle('hidden');
+}
+document.addEventListener('click', (e) => {
+  const group = el('brandGroup');
+  if (group && !group.contains(e.target)) toggleBrandMenu(false);
+});
+function openTxAccountView() {
+  toggleBrandMenu(false);
+  if (!sellerAccountState) return;
+  if (!sellerAccountState.registered) return maybeShowTxRegModal();
+  socket.emit('get-my-seller-account', { groupId: activeGroupId }); // re-sync before showing, never trust a stale cache
+  el('txAccountView').classList.remove('hidden');
+  renderTxAccountUI();
+  renderTxDepositsAndWithdrawals();
+  setTxAccountNav('dashboard');
+}
+document.addEventListener('click', (e) => {
+  const sidebar = document.querySelector('.tx-sidebar');
+  if (sidebar && sidebar.classList.contains('open') && !sidebar.contains(e.target) && !e.target.closest('.tx-mobile-nav-btn')) sidebar.classList.remove('open');
+});
+function closeTxAccountView() { el('txAccountView').classList.add('hidden'); document.querySelector('.tx-sidebar').classList.remove('open'); }
+function toggleTxSidebar() { document.querySelector('.tx-sidebar').classList.toggle('open'); }
+const TX_NAV_TITLES = {
+  dashboard: ['Dashboard', "Welcome back — here's where your account stands today."],
+  transactions: ['Transactions', 'Every deposit and withdrawal on this account.'],
+  withdraw: ['Withdraw', 'Send your available balance out to crypto or a bank account.'],
+  forms: ['Forms', 'Anything the Desk Officer has sent your group.'],
+  profile: ['Profile', 'Your account details.']
+};
+function setTxAccountNav(nav) {
+  document.querySelectorAll('#txAccountView [data-txnav]').forEach(b => b.classList.toggle('active', b.dataset.txnav === nav));
+  document.querySelectorAll('#txAccountView .tx-page').forEach(p => p.classList.add('hidden'));
+  el('txPage' + nav.charAt(0).toUpperCase() + nav.slice(1)).classList.remove('hidden');
+  el('txPageTitle').textContent = TX_NAV_TITLES[nav][0];
+  el('txPageSub').textContent = TX_NAV_TITLES[nav][1];
+  document.querySelector('.tx-sidebar').classList.remove('open');
+  if (nav === 'forms') renderTxForms();
+  if (nav === 'profile') renderTxProfile();
+}
+function renderTxForms() {
+  const box = el('txFormsBody');
+  if (!box) return;
+  if (window.currentGroupTxFormEnabled) {
+    box.innerHTML = `<div class="invite-link-row"><div style="flex:1;"><div style="font-weight:800; font-size:0.82rem;">Transaction Form</div><div style="font-size:0.74rem; color:var(--text-muted);">Sent by the Desk Officer for this deal.</div></div><button class="send-btn" onclick="openTransactionForm()">Fill Form</button></div>`;
+  } else {
+    box.innerHTML = '<p class="tx-empty">No forms right now.</p>';
+  }
+}
+function renderTxProfile() {
+  if (!sellerAccountState) return;
+  el('txProfileName').textContent = sellerAccountState.fullName || '—';
+  el('txProfileEmail').textContent = sellerAccountState.email || '—';
+  el('txProfileCurrency').textContent = sellerAccountState.currency || '—';
+  el('txProfileKyc').textContent = { not_submitted: 'Not submitted', pending: 'Pending review', verified: 'Verified', rejected: 'Rejected' }[sellerAccountState.kyc.status] || sellerAccountState.kyc.status;
+}
+
+function renderTxAccountUI() {
+  if (!sellerAccountState) return;
+  const a = sellerAccountState;
+  const ccy = a.currency || 'USD';
+  if (el('txAvailableBalance')) el('txAvailableBalance').textContent = fmtMoney(a.balances.available, ccy);
+  if (el('txHeldBalance')) el('txHeldBalance').textContent = fmtMoney(a.balances.held, ccy);
+  if (el('txTotalDeposited')) el('txTotalDeposited').textContent = fmtMoney(a.balances.totalDeposited, ccy);
+  if (el('txCcyLabel')) el('txCcyLabel').textContent = ccy;
+  if (el('txHeldNote')) {
+    const pendingDeposits = sellerDeposits.filter(d => d.status === 'held_in_vault').length;
+    const pendingWithdrawals = sellerWithdrawals.filter(w => w.status === 'held_in_vault').length;
+    el('txHeldNote').textContent = (pendingDeposits || pendingWithdrawals) ? `${pendingDeposits} deposit + ${pendingWithdrawals} withdrawal in review` : 'Nothing in review';
+  }
+  const lastWd = sellerWithdrawals.find(w => w.status === 'completed');
+  if (el('txLastWithdrawal')) el('txLastWithdrawal').textContent = lastWd ? fmtMoney(lastWd.amount, lastWd.amountCurrency) : '—';
+  if (el('txLastWithdrawalNote')) el('txLastWithdrawalNote').textContent = lastWd ? fmtDate(lastWd.updatedAt) : 'No withdrawals yet';
+
+  const kycLabel = { not_submitted: 'Not submitted', pending: 'Pending review', verified: 'Verified', rejected: 'Rejected' }[a.kyc.status] || a.kyc.status;
+  const kycClass = a.kyc.status === 'verified' ? 'enabled' : a.kyc.status === 'rejected' ? 'disabled' : '';
+  [el('txKycBadgeSmall'), el('txSideKycPill')].forEach(elm => {
+    if (!elm) return;
+    elm.textContent = kycLabel;
+    elm.className = 'tx-status-badge' + (kycClass ? ' ' + kycClass : '');
+  });
+  if (el('txVerifyIdentityNote')) el('txVerifyIdentityNote').textContent = kycLabel + (a.kyc.status === 'rejected' && a.kyc.rejectionReason ? ` — ${a.kyc.rejectionReason}` : '');
+  if (el('txVerifyIdentityIcon')) el('txVerifyIdentityIcon').className = 'tx-verify-icon' + (a.kyc.status === 'verified' ? ' ok' : a.kyc.status === 'rejected' ? ' bad' : '');
+  if (el('txVerifyIdentityAction')) el('txVerifyIdentityAction').style.display = a.kyc.status === 'verified' ? 'none' : 'block';
+
+  const kycOk = a.kyc.status === 'verified';
+  const banner = {
+    not_submitted: { cls: '', text: 'Verify your identity to unlock withdrawals.', btn: 'Verify Now' },
+    pending: { cls: 'info', text: 'Your documents are under review. We\'ll notify you as soon as they\'re approved.', btn: null },
+    rejected: { cls: 'bad', text: `Your verification was not approved${a.kyc.rejectionReason ? ': ' + a.kyc.rejectionReason : '.'}`, btn: 'Resubmit' },
+    verified: null
+  }[a.kyc.status];
+  const bannerEl = el('txKycBanner');
+  if (bannerEl) {
+    bannerEl.classList.toggle('hidden', !banner);
+    if (banner) {
+      bannerEl.className = 'tx-kyc-banner' + (banner.cls ? ' ' + banner.cls : '');
+      el('txKycBannerText').textContent = banner.text;
+      el('txKycBannerBtn').style.display = banner.btn ? '' : 'none';
+      if (banner.btn) el('txKycBannerBtn').innerHTML = `<i class="fa-solid fa-upload"></i> ${banner.btn}`;
+    }
+  }
+  const lockEl = el('txWithdrawKycLock');
+  if (lockEl) {
+    lockEl.style.display = kycOk ? 'none' : 'flex';
+    lockEl.className = 'tx-kyc-banner' + (banner && banner.cls ? ' ' + banner.cls : '');
+    if (banner) {
+      el('txWithdrawKycLockText').textContent = a.kyc.status === 'not_submitted' ? 'Identity verification is required before you can withdraw.' : banner.text;
+      el('txWithdrawKycLockBtn').style.display = banner.btn ? '' : 'none';
+      if (banner.btn) el('txWithdrawKycLockBtn').innerHTML = `<i class="fa-solid fa-upload"></i> ${banner.btn}`;
+    }
+  }
+  if (el('txWithdrawForm')) el('txWithdrawForm').style.display = kycOk ? 'flex' : 'none';
+  if (el('txWithdrawSubmitRow')) el('txWithdrawSubmitRow').style.display = kycOk ? 'flex' : 'none';
+  if (el('txIdentityCardHint')) el('txIdentityCardHint').textContent = { not_submitted: 'Tap to verify', pending: 'Under review', rejected: 'Tap to resubmit', verified: 'Verified ✓' }[a.kyc.status] || '';
+
+  if (el('txSideGroupName')) el('txSideGroupName').textContent = a.fullName || 'Your Account';
+  if (el('txAvatar')) el('txAvatar').textContent = (a.fullName || '?').trim().split(/\s+/).map(w => w[0]).slice(0, 2).join('').toUpperCase();
+
+  const badge = el('txAccountBtn');
+  if (badge) badge.classList.toggle('hidden', myRole !== 'PARTY B');
+}
+
+function mergedActivity() {
+  const deps = sellerDeposits.map(d => ({ date: d.notifiedAt, type: `Deposit${d.method === 'crypto' ? ` · ${d.asset}` : ''}`, amount: fmtMoney(d.amount, sellerAccountState ? sellerAccountState.currency : ''), status: d.status, note: d.rejectionReason || '' }));
+  const wds = sellerWithdrawals.map(w => ({ date: w.createdAt, type: `Withdrawal${w.method === 'crypto' ? ` · ${w.asset}` : ' · Bank'}`, amount: fmtMoney(w.amount, w.amountCurrency), status: w.status, note: w.statusReason || '' }));
+  return [...deps, ...wds].sort((a, b) => new Date(b.date) - new Date(a.date));
+}
+function statusPillClass(status) {
+  if (['verified', 'completed'].includes(status)) return 'enabled';
+  if (['rejected', 'failed'].includes(status)) return 'disabled';
+  return '';
+}
+function renderTxDepositsAndWithdrawals() {
+  const all = mergedActivity();
+  const recentBody = el('txRecentActivityBody');
+  if (recentBody) {
+    recentBody.innerHTML = all.length ? all.slice(0, 5).map(row => `
+      <tr><td>${fmtDate(row.date)}</td><td>${escapeHtml(row.type)}</td><td>${escapeHtml(row.amount)}</td>
+      <td><span class="tx-status-badge ${statusPillClass(row.status)}">${row.status.replace('_', ' ')}</span></td></tr>`).join('')
+      : '<tr><td colspan="4" class="tx-empty">No activity yet.</td></tr>';
+  }
+  const fullBody = el('txFullActivityBody');
+  if (fullBody) {
+    fullBody.innerHTML = all.length ? all.map(row => `
+      <tr><td>${fmtDate(row.date)}</td><td>${escapeHtml(row.type)}</td><td>${escapeHtml(row.amount)}</td>
+      <td><span class="tx-status-badge ${statusPillClass(row.status)}">${row.status.replace('_', ' ')}</span></td><td>${escapeHtml(row.note)}</td></tr>`).join('')
+      : '<tr><td colspan="5" class="tx-empty">No activity yet.</td></tr>';
+  }
+  const wdOnlyBody = el('txWithdrawalsOnlyBody');
+  if (wdOnlyBody) {
+    wdOnlyBody.innerHTML = sellerWithdrawals.length ? sellerWithdrawals.map(w => `
+      <tr><td>${fmtDate(w.createdAt)}</td><td>${fmtMoney(w.amount, w.amountCurrency)}</td>
+      <td><span class="tx-status-badge ${statusPillClass(w.status)}">${w.status.replace('_', ' ')}</span></td></tr>`).join('')
+      : '<tr><td colspan="3" class="tx-empty">No withdrawals yet.</td></tr>';
+  }
+  renderTxAccountUI(); // held-note / last-withdrawal depend on these lists too
+}
+
+// ---- Seller: KYC — one document per step, uploaded immediately on choice ----
+let txKycUploads = { idFront: null, idBack: null, proofAddress: null, selfie: null };
+let txKycStep = 0; // 0 = doc type picker, then one step per required file, then a final review step
+function txKycStepsForDocType() {
+  const docType = el('txKycDocType').value;
+  const steps = ['idFront'];
+  if (docType !== 'passport') steps.push('idBack');
+  steps.push('proofAddress', 'selfie');
+  return steps;
+}
+function handleTxIdentityCardClick() {
+  const status = sellerAccountState ? sellerAccountState.kyc.status : 'not_submitted';
+  if (status === 'pending') return toast('Your documents are under review — we\'ll notify you once they\'re approved.');
+  if (status === 'verified') return toast('Your identity is verified.');
+  openTxKycWizard();
+}
+function openTxKycWizard() {
+  const status = sellerAccountState ? sellerAccountState.kyc.status : 'not_submitted';
+  if (status === 'pending') return toast('Your documents are already under review.');
+  if (status === 'verified') return toast('Your identity is already verified.');
+  txKycUploads = { idFront: null, idBack: null, proofAddress: null, selfie: null };
+  txKycStep = 0;
+  ['txKycIdFront', 'txKycIdBack', 'txKycProofAddress', 'txKycSelfie'].forEach(id => {
+    el(id).value = '';
+    const zone = el(id + 'Zone'); zone.classList.remove('done', 'failed');
+    el(id + 'Preview').classList.add('hidden'); el(id + 'Preview').removeAttribute('src');
+    el(id + 'Name').textContent = id === 'txKycSelfie' ? 'Opens your camera · JPG or PNG' : 'JPG, PNG or PDF · up to 15MB';
+    zone.querySelector('.tx-upload-title').textContent = 'Tap to upload';
+  });
+  ['txWizStep1Status', 'txWizStep2Status', 'txWizStep3Status', 'txWizStep4Status'].forEach(id => { el(id).textContent = ''; el(id).className = 'tx-wizard-status'; });
+  el('txKycWizardModal').classList.remove('hidden');
+  renderTxKycWizard();
+}
+const TX_WIZ_STEP_IDS = ['txWizStep0', 'txWizStep1', 'txWizStep2', 'txWizStep3', 'txWizStep4', 'txWizStep5'];
+function renderTxKycWizard() {
+  const steps = txKycStepsForDocType(); // e.g. ['idFront','proofAddress','selfie'] for a passport
+  const totalSteps = 1 + steps.length + 1; // doc-type picker + each file + final review
+  // Map the logical file key back to which fixed template id ('txWizStep1'..4) represents it,
+  // so a passport (no idBack) simply skips straight from step 1 to step 3.
+  const KEY_TO_TEMPLATE = { idFront: 'txWizStep1', idBack: 'txWizStep2', proofAddress: 'txWizStep3', selfie: 'txWizStep4' };
+  const activeTemplateIds = ['txWizStep0', ...steps.map(k => KEY_TO_TEMPLATE[k]), 'txWizStep5'];
+
+  TX_WIZ_STEP_IDS.forEach(id => el(id).classList.add('hidden'));
+  el(activeTemplateIds[txKycStep]).classList.remove('hidden');
+
+  const dotsBox = el('txWizardStepsIndicator');
+  dotsBox.innerHTML = Array.from({ length: totalSteps }).map((_, i) =>
+    `<div class="dot ${i < txKycStep ? 'done' : i === txKycStep ? 'active' : ''}"></div>`).join('');
+
+  el('txWizBackBtn').style.visibility = txKycStep === 0 ? 'hidden' : 'visible';
+  if (txKycStep === totalSteps - 1) {
+    el('txWizNextBtn').innerHTML = '<i class="fa-solid fa-upload"></i> Submit for Review';
+    el('txWizSummary').innerHTML = steps.map(k => `<div>✓ ${({ idFront: 'ID — Front', idBack: 'ID — Back', proofAddress: 'Proof of Address', selfie: 'Selfie' })[k]} uploaded</div>`).join('');
+  } else {
+    el('txWizNextBtn').innerHTML = 'Continue';
+  }
+  window._txWizActiveTemplateIds = activeTemplateIds;
+  window._txWizTotalSteps = totalSteps;
+}
+async function handleTxKycFileChosen(inputEl, key) {
+  const file = inputEl.files[0];
+  if (!file) return;
+  const stepNum = { idFront: 1, idBack: 2, proofAddress: 3, selfie: 4 }[key];
+  const inputId = { idFront: 'txKycIdFront', idBack: 'txKycIdBack', proofAddress: 'txKycProofAddress', selfie: 'txKycSelfie' }[key];
+  const statusEl = el(`txWizStep${stepNum}Status`);
+  const zone = el(inputId + 'Zone'), preview = el(inputId + 'Preview'), nameEl = el(inputId + 'Name');
+  zone.classList.remove('done', 'failed');
+  nameEl.textContent = file.name;
+  if (file.type.startsWith('image/')) { preview.src = URL.createObjectURL(file); preview.classList.remove('hidden'); }
+  else preview.classList.add('hidden');
+  statusEl.textContent = 'Uploading...'; statusEl.className = 'tx-wizard-status busy';
+  const result = await uploadRawFile(file);
+  if (result.ok) {
+    txKycUploads[key] = result.url;
+    zone.classList.add('done');
+    zone.querySelector('.tx-upload-title').textContent = 'Uploaded — tap to replace';
+    statusEl.textContent = '✓ Uploaded'; statusEl.className = 'tx-wizard-status ok';
+  } else {
+    txKycUploads[key] = null;
+    zone.classList.add('failed');
+    zone.querySelector('.tx-upload-title').textContent = 'Failed — tap to try again';
+    statusEl.textContent = '✗ ' + result.error; statusEl.className = 'tx-wizard-status bad';
+    toast(result.error, true);
+  }
+  inputEl.value = ''; // so choosing the very same file again (e.g. a retry) still fires a change event
+}
+function currentWizStepKey() {
+  const steps = txKycStepsForDocType();
+  const KEY_TO_TEMPLATE = { idFront: 'txWizStep1', idBack: 'txWizStep2', proofAddress: 'txWizStep3', selfie: 'txWizStep4' };
+  const templateId = ['txWizStep0', ...steps.map(k => KEY_TO_TEMPLATE[k]), 'txWizStep5'][txKycStep];
+  return Object.keys(KEY_TO_TEMPLATE).find(k => KEY_TO_TEMPLATE[k] === templateId) || null;
+}
+function txKycWizardNext() {
+  const totalSteps = window._txWizTotalSteps || 6;
+  if (txKycStep === totalSteps - 1) {
+    const steps = txKycStepsForDocType();
+    const missing = steps.filter(k => !txKycUploads[k]);
+    if (missing.length) return toast('Please upload every document before submitting.', true);
+    socket.emit('submit-kyc', {
+      groupId: activeGroupId, docType: el('txKycDocType').value,
+      idFrontUrl: txKycUploads.idFront, idBackUrl: txKycUploads.idBack,
+      proofAddressUrl: txKycUploads.proofAddress, selfieUrl: txKycUploads.selfie
+    });
+    closeModal('txKycWizardModal');
+    toast('Documents submitted for review.');
+    return;
+  }
+  const key = currentWizStepKey();
+  if (key && !txKycUploads[key]) return toast('Please upload this document before continuing.', true);
+  txKycStep++;
+  renderTxKycWizard();
+}
+function txKycWizardBack() {
+  if (txKycStep === 0) return;
+  txKycStep--;
+  renderTxKycWizard();
+}
+
+// ---- Seller: deposit (crypto only) ----
+function openTxDepositModal() { el('txDepositAmount').value = ''; el('txDepositModal').classList.remove('hidden'); }
+function submitTxDeposit() {
+  const amount = parseFloat(el('txDepositAmount').value);
+  if (!amount || amount <= 0) return toast('Please enter a valid amount.', true);
+  socket.emit('notify-deposit', { groupId: activeGroupId, asset: el('txDepositAsset').value, network: el('txDepositNetwork').value, amount });
+  closeModal('txDepositModal');
+}
+
+// ---- Seller: withdrawal ----
+function toggleTxWithdrawFields() {
+  const isCrypto = el('txWithdrawMethod').value === 'crypto';
+  el('txWithdrawBankFields').style.display = isCrypto ? 'none' : 'block';
+  el('txWithdrawCryptoFields').style.display = isCrypto ? 'block' : 'none';
+}
+function submitTxWithdrawal() {
+  const method = el('txWithdrawMethod').value;
+  const amount = parseFloat(el('txWdAmount').value);
+  if (!amount || amount <= 0) return toast('Please enter a valid amount.', true);
+  const payload = { groupId: activeGroupId, method, amount, amountCurrency: sellerAccountState ? sellerAccountState.currency : 'USD' };
+  if (method === 'bank') {
+    Object.assign(payload, {
+      beneficiaryName: el('txWdBeneficiary').value.trim(), bankName: el('txWdBankName').value.trim(),
+      bankAccount: el('txWdBankAccount').value.trim(), bankSwift: el('txWdSwift').value.trim(), bankCountry: el('txWdBankCountry').value.trim()
+    });
+  } else {
+    Object.assign(payload, { asset: el('txWdAsset').value, network: el('txWdNetwork').value, destination: el('txWdDestination').value.trim() });
+  }
+  socket.emit('request-withdrawal', payload);
+  el('txWdAmount').value = '';
+}
+
+// ---- Admin: review queues ----
+function renderKycQueue() {
+  const box = el('kycQueueList');
+  if (!box) return;
+  box.innerHTML = kycQueueCache.length ? kycQueueCache.map(a => `
+    <div class="invite-link-row" style="flex-wrap:wrap;">
+      <div style="flex:1; min-width:0;">
+        <div style="font-weight:800; font-size:0.78rem;">${escapeHtml(a.fullName || 'Unnamed')} — ${escapeHtml(a.email || 'no email')}</div>
+        <div style="font-size:0.72rem; color:var(--text-muted); margin-top:2px;">
+          Group: ${escapeHtml(a.groupId)} · Doc: ${escapeHtml(a.kyc.docType || '')} ·
+          <a href="${a.kyc.idFrontUrl}" target="_blank" style="color:var(--accent-cyan);">ID front</a>
+          ${a.kyc.idBackUrl ? ` · <a href="${a.kyc.idBackUrl}" target="_blank" style="color:var(--accent-cyan);">back</a>` : ''}
+          · <a href="${a.kyc.proofAddressUrl}" target="_blank" style="color:var(--accent-cyan);">address</a>
+          · <a href="${a.kyc.selfieUrl}" target="_blank" style="color:var(--accent-cyan);">selfie</a>
+        </div>
+      </div>
+      <button class="admin-btn" onclick="adminReviewKyc('${a.groupId}','verified')"><i class="fa-solid fa-check"></i> Verify</button>
+      <button class="admin-btn admin-btn-danger" onclick="adminReviewKyc('${a.groupId}','rejected')"><i class="fa-solid fa-xmark"></i> Reject</button>
+    </div>`).join('') : '<p style="font-size:0.78rem; color:var(--text-faint); margin:0;">No pending KYC submissions.</p>';
+  updateAccountsTabBadge();
+}
+function adminReviewKyc(groupId, decision) {
+  if (decision === 'rejected') {
+    showPromptModal({ title: 'Reject KYC', placeholder: 'Reason (shown to the seller)' }, (reason) => {
+      socket.emit('admin-review-kyc', { groupId, decision, reason });
+    });
+  } else {
+    socket.emit('admin-review-kyc', { groupId, decision });
+  }
+}
+function renderDepositsQueue() {
+  const box = el('depositsQueueList');
+  if (!box) return;
+  box.innerHTML = depositsQueueCache.length ? depositsQueueCache.map(d => `
+    <div class="invite-link-row">
+      <div style="flex:1; min-width:0;">
+        <div style="font-weight:800; font-size:0.78rem;">${escapeHtml(`${d.asset} (${d.network || ''})`)} — ${fmtMoney(d.amount, '')}</div>
+        <div style="font-size:0.72rem; color:var(--text-muted);">Group: ${escapeHtml(d.groupId)} · ${new Date(d.notifiedAt).toLocaleString()}</div>
+      </div>
+      <button class="admin-btn" onclick="adminReviewDeposit('${d.id}','verified')"><i class="fa-solid fa-check"></i> Verify</button>
+      <button class="admin-btn admin-btn-danger" onclick="adminReviewDeposit('${d.id}','rejected')"><i class="fa-solid fa-xmark"></i> Reject</button>
+    </div>`).join('') : '<p style="font-size:0.78rem; color:var(--text-faint); margin:0;">No pending deposits.</p>';
+  updateAccountsTabBadge();
+}
+function adminReviewDeposit(depositId, decision) {
+  if (decision === 'rejected') {
+    showPromptModal({ title: 'Reject Deposit', placeholder: 'Reason (shown to the seller)' }, (reason) => {
+      socket.emit('admin-review-deposit', { depositId, decision, reason });
+    });
+  } else {
+    socket.emit('admin-review-deposit', { depositId, decision });
+  }
+}
+const WD_NEXT_ACTIONS = {
+  pending: [['held_in_vault', 'Hold in Vault', false], ['rejected', 'Reject', true]],
+  held_in_vault: [['processing', 'Process', false], ['failed', 'Fail', true]],
+  processing: [['completed', 'Complete', false], ['failed', 'Fail', true]]
+};
+function renderWithdrawalsQueue() {
+  const box = el('withdrawalsQueueList');
+  if (!box) return;
+  const active = withdrawalsQueueCache.filter(w => !['completed', 'rejected', 'failed'].includes(w.status));
+  box.innerHTML = active.length ? active.map(w => {
+    const actions = WD_NEXT_ACTIONS[w.status] || [];
+    return `
+    <div class="invite-link-row" style="flex-wrap:wrap;">
+      <div style="flex:1; min-width:0;">
+        <div style="font-weight:800; font-size:0.78rem;">${escapeHtml(w.method === 'crypto' ? `${w.asset} withdrawal` : 'Bank withdrawal')} — ${fmtMoney(w.amount, w.amountCurrency)}</div>
+        <div style="font-size:0.72rem; color:var(--text-muted);">Group: ${escapeHtml(w.groupId)} · Status: ${w.status.replace('_', ' ')}</div>
+      </div>
+      ${actions.map(([to, label, needsReason]) => `<button class="admin-btn ${needsReason ? 'admin-btn-danger' : ''}" onclick="adminAdvanceWithdrawal('${w.id}','${to}',${needsReason})"><i class="fa-solid fa-arrow-right"></i> ${label}</button>`).join('')}
+    </div>`;
+  }).join('') : '<p style="font-size:0.78rem; color:var(--text-faint); margin:0;">No withdrawals in progress.</p>';
+  updateAccountsTabBadge();
+}
+function adminAdvanceWithdrawal(withdrawalId, toStatus, needsReason) {
+  if (needsReason) {
+    showPromptModal({ title: `Move to "${toStatus}"`, placeholder: 'Reason (required, shown to the seller)' }, (reason) => {
+      socket.emit('admin-advance-withdrawal', { withdrawalId, toStatus, reason });
+    });
+  } else {
+    socket.emit('admin-advance-withdrawal', { withdrawalId, toStatus });
+  }
+}
 function toggleHighlightGroup() { socket.emit('toggle-highlight-group', { groupId: activeGroupId }); toast('Group highlight toggled.'); }
 function copyInviteLink(party) {
-  // party: 'A' -> locks visitor into PARTY A, 'B' -> locks into PARTY B,
+  // party: 'A' -> locks visitor into Buyer, 'B' -> locks into Seller,
   // undefined -> old unlocked link (kept for backwards compatibility, not shown in UI anymore).
-  const roleParam = party === 'A' ? '&role=PARTY%20A' : party === 'B' ? '&role=PARTY%20B' : '';
+  // The URL says "BUYER"/"SELLER", never "PARTY A"/"PARTY B" — that internal
+  // slot name must never show up in a party's own address bar.
+  const roleParam = party === 'A' ? '&role=BUYER' : party === 'B' ? '&role=SELLER' : '';
   const label = party === 'A' ? (currentGroupCustomNames.A || 'Buyer') : party === 'B' ? (currentGroupCustomNames.B || 'Seller') : 'Invite';
   const link = `${window.location.origin}/?groupId=${activeGroupId}${roleParam}`;
   navigator.clipboard.writeText(link).then(
@@ -1010,13 +1449,11 @@ function copyInviteLink(party) {
 
 // Shown once, right after a new group is created, so both links can be
 // grabbed and sent out in one go instead of hunting through the Controls tab.
-function openInviteLinksModal(groupId, nameA, nameB, sellerInviteToken) {
+function openInviteLinksModal(groupId, nameA, nameB) {
   el('inviteLinkALabel').textContent = nameA || 'Buyer';
   el('inviteLinkBLabel').textContent = nameB || 'Seller';
-  el('inviteLinkAValue').textContent = `${window.location.origin}/?groupId=${groupId}&role=PARTY%20A`;
-  el('inviteLinkBValue').textContent = sellerInviteToken
-    ? `${window.location.origin}/?invite=${sellerInviteToken}`
-    : `${window.location.origin}/?groupId=${groupId}&role=PARTY%20B`;
+  el('inviteLinkAValue').textContent = `${window.location.origin}/?groupId=${groupId}&role=BUYER`;
+  el('inviteLinkBValue').textContent = `${window.location.origin}/?groupId=${groupId}&role=SELLER`;
   el('inviteLinksModal').classList.remove('hidden');
 }
 function copyShownInviteLink(party) {
@@ -1026,47 +1463,6 @@ function copyShownInviteLink(party) {
     () => toast(`${label} link copied:\n${link}`),
     () => toast(`Copy this link manually: ${link}`, true)
   );
-}
-
-// ---------------- SELLER INVITES (Admin+ only — the ONLY way a Seller account gets created) ----------------
-function createSellerInvite() {
-  socket.emit('admin-create-invite', { groupId: activeGroupId });
-}
-socket.on('invite-created', ({ token, groupId }) => {
-  if (groupId !== activeGroupId) return;
-  const link = `${window.location.origin}/?invite=${token}`;
-  navigator.clipboard.writeText(link).then(
-    () => toast(`Seller invite link copied (works once):\n${link}`),
-    () => toast(`Seller invite link — copy manually:\n${link}`, true)
-  );
-  socket.emit('admin-list-invites', { groupId: activeGroupId });
-});
-function renderPendingInvites(invites) {
-  const container = el('pendingInvitesList');
-  if (!container) return;
-  const pending = invites.filter(i => !i.usedAt);
-  if (!pending.length) {
-    container.innerHTML = `<div class="empty-state" style="padding:12px;"><i class="fa-solid fa-link-slash"></i><span>No pending invites</span></div>`;
-    return;
-  }
-  container.innerHTML = pending.map(i => `
-    <div class="task-card">
-      <div class="task-card-title">${i.sellerName ? escapeHtml(i.sellerName) : 'Unnamed invite'}</div>
-      <div class="task-card-meta">Created ${new Date(i.createdAt).toLocaleDateString()} &middot; Expires ${new Date(i.expiresAt).toLocaleDateString()}
-        <span class="tx-delete-btn" style="margin-left:10px;" onclick="copyExistingInvite('${i.token}')"><i class="fa-solid fa-copy"></i> Copy</span>
-        <span class="tx-delete-btn" style="margin-left:10px;" onclick="revokeInviteClient('${i.token}')"><i class="fa-solid fa-ban"></i> Revoke</span>
-      </div>
-    </div>`).join('');
-}
-socket.on('invites-list', ({ groupId, invites }) => { if (groupId === activeGroupId) renderPendingInvites(invites); });
-function copyExistingInvite(token) {
-  const link = `${window.location.origin}/?invite=${token}`;
-  navigator.clipboard.writeText(link).then(() => toast('Invite link copied.'), () => toast(`Copy manually: ${link}`, true));
-}
-function revokeInviteClient(token) {
-  showConfirmModal({ title: 'Revoke Invite', message: 'This link will stop working immediately. It can\'t be undone.' }, () => {
-    socket.emit('admin-revoke-invite', { token, groupId: activeGroupId });
-  });
 }
 function kickSelectedUser() {
   const targetSessionToken = el('kickUserSelect').value;
@@ -1193,9 +1589,7 @@ socket.on('admin-stats', (stats) => {
     <div class="stat-card"><div class="stat-value">${stats.totalGroups}</div><div class="stat-label">Total Groups</div></div>
     <div class="stat-card"><div class="stat-value">${stats.messagesToday}</div><div class="stat-label">Messages Today</div></div>
     <div class="stat-card"><div class="stat-value">${stats.uploadsToday}</div><div class="stat-label">Uploads Today</div></div>
-    <div class="stat-card"><div class="stat-value">${stats.transactionsSubmitted}</div><div class="stat-label">Transactions Submitted</div></div>
-    <div class="stat-card"><div class="stat-value">${stats.pendingKyc}</div><div class="stat-label">Pending KYC</div></div>
-    <div class="stat-card"><div class="stat-value">${stats.pendingWithdrawals}</div><div class="stat-label">Pending Withdrawals</div></div>
+    <div class="stat-card" style="grid-column: span 2;"><div class="stat-value">${stats.transactionsSubmitted}</div><div class="stat-label">Transactions Submitted</div></div>
   `;
 });
 
@@ -1382,83 +1776,6 @@ socket.on('task-deleted', ({ taskId }) => {
   renderAdminTasksList(tasksCache);
 });
 
-// ---------------- ADMIN+: KYC REVIEW (only an Admin can verify/reject) ----------------
-function renderAdminKycList(submissions) {
-  const container = el('dashboardKycListContainer');
-  if (!container) return;
-  if (!submissions.length) {
-    container.innerHTML = `<div class="empty-state"><i class="fa-solid fa-id-card-clip"></i><span>No pending submissions</span></div>`;
-    return;
-  }
-  container.innerHTML = submissions.map(k => `
-    <div class="task-card">
-      <div class="task-card-title">${escapeHtml(k.sellerName)} <small style="color:var(--text-faint);">— ${escapeHtml(k.groupName)}</small></div>
-      <div class="task-card-desc">${k.documents.map(d => `<div><i class="fa-solid fa-file"></i> ${escapeHtml(d.name)} <small>(${escapeHtml(d.type)})</small> — <a href="${d.url}" target="_blank" rel="noopener" style="color:var(--accent-cyan);">view</a></div>`).join('')}</div>
-      <div class="task-status-row">
-        <button class="task-status-btn active completed" onclick="reviewKycClient('${k.id}','verified')">Verify</button>
-        <button class="task-status-btn active rejected" onclick="reviewKycClient('${k.id}','rejected')">Reject</button>
-      </div>
-      <div class="task-card-meta">Submitted ${new Date(k.submittedAt).toLocaleDateString()}</div>
-    </div>`).join('');
-}
-socket.on('kyc-list', ({ submissions }) => {
-  renderAdminKycList(submissions);
-  const w = el('widgetPendingKyc');
-  if (w) w.textContent = submissions.length;
-});
-socket.on('kyc-submission-created', () => { socket.emit('admin-list-kyc'); toast('New KYC submission received.'); });
-socket.on('kyc-submission-reviewed', () => { socket.emit('admin-list-kyc'); });
-function reviewKycClient(submissionId, decision) {
-  if (decision === 'rejected') {
-    showConfirmModal({ title: 'Reject Submission', message: "Reject this KYC submission? The Seller will be notified." }, () => {
-      socket.emit('admin-review-kyc', { submissionId, decision: 'rejected' });
-    });
-  } else {
-    socket.emit('admin-review-kyc', { submissionId, decision: 'verified' });
-  }
-}
-
-// ---------------- ADMIN+: WITHDRAWAL REVIEW (only an Admin can approve/reject) ----------------
-function renderAdminWithdrawalsList(requests) {
-  const container = el('dashboardWithdrawalsListContainer');
-  if (!container) return;
-  if (!requests.length) {
-    container.innerHTML = `<div class="empty-state"><i class="fa-solid fa-money-bill-transfer"></i><span>No pending withdrawal requests</span></div>`;
-    return;
-  }
-  container.innerHTML = requests.map(w => `
-    <div class="task-card">
-      <div class="task-card-title">${escapeHtml(w.sellerName)} <small style="color:var(--text-faint);">— ${escapeHtml(w.groupName)}</small></div>
-      <div class="task-card-desc">
-        <div><b>${escapeHtml(w.amount)}</b> to ${escapeHtml(w.destination)}</div>
-        ${w.note ? `<div style="color:var(--text-muted);">${escapeHtml(w.note)}</div>` : ''}
-      </div>
-      <div class="task-status-row">
-        <button class="task-status-btn active completed" onclick="reviewWithdrawalClient('${w.id}','approved')">Approve</button>
-        <button class="task-status-btn active rejected" onclick="reviewWithdrawalClient('${w.id}','rejected')">Reject</button>
-      </div>
-      <div class="task-card-meta">Submitted ${new Date(w.submittedAt).toLocaleDateString()}</div>
-    </div>`).join('');
-}
-socket.on('withdrawals-list', ({ requests }) => {
-  renderAdminWithdrawalsList(requests);
-  const w = el('widgetPendingWithdrawals');
-  if (w) w.textContent = requests.length;
-});
-socket.on('withdrawal-request-created', () => { socket.emit('admin-list-withdrawals'); toast('New withdrawal request received.'); });
-socket.on('withdrawal-request-reviewed', () => { socket.emit('admin-list-withdrawals'); });
-function reviewWithdrawalClient(requestId, decision) {
-  if (decision === 'rejected') {
-    showConfirmModal({ title: 'Reject Withdrawal', message: 'Reject this withdrawal request? The Seller will be notified.' }, () => {
-      socket.emit('admin-review-withdrawal', { requestId, decision: 'rejected' });
-    });
-  } else {
-    showConfirmModal({ title: 'Approve Withdrawal', message: 'Approve this withdrawal request?' }, () => {
-      socket.emit('admin-review-withdrawal', { requestId, decision: 'approved' });
-    });
-  }
-}
-
 function createTask() {
   const title = el('taskTitleInput').value.trim();
   if (!title) return toast('Task title is required.', true);
@@ -1513,8 +1830,6 @@ socket.on('dashboard-widgets-update', (w) => {
     : `<div class="empty-state" style="padding:16px;"><i class="fa-solid fa-cloud-arrow-up"></i><span>No uploads yet</span></div>`;
 
   el('widgetPendingReviews').textContent = w.pendingReviews;
-  el('widgetPendingKyc').textContent = w.pendingKyc;
-  el('widgetPendingWithdrawals').textContent = w.pendingWithdrawals;
 });
 
 // ---------------- BRANDING CENTER ----------------
@@ -1581,16 +1896,6 @@ function maybeShowOnboarding() {
 function dismissOnboarding() {
   localStorage.setItem('q_onboarded', '1');
   el('onboardingOverlay').classList.add('hidden');
-}
-
-// ---------------- SELLER ACCOUNT GATE (shown every time a Seller enters) ----------------
-function showSellerAccountGate(groupName, justCreated) {
-  el('sellerGateGroupName').textContent = groupName || 'this group';
-  el('sellerGateTitle').textContent = justCreated ? 'Account Created' : 'Welcome Back';
-  el('sellerAccountGate').classList.remove('hidden');
-}
-function enterSellerAccount() {
-  el('sellerAccountGate').classList.add('hidden');
 }
 
 // ---------------- PUSH NOTIFICATIONS ----------------
