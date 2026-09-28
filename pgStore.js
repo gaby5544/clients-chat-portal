@@ -92,31 +92,11 @@ class PgStore {
     return rows;
   }
 
-  async findGroupsBySellerEmail(email) {
-    const { rows } = await this.pool.query(
-      `SELECT * FROM groups WHERE lower(email_b) = lower($1) AND seller_registered = TRUE`,
-      [email]
-    );
-    return rows;
-  }
-
   async updateGroup(groupId, fields) {
     const map = {
       name: 'name', custom_name_a: 'custom_name_a', custom_name_b: 'custom_name_b',
-      email_a: 'email_a', email_b: 'email_b',
-      buyer_session_token: 'buyer_session_token', seller_session_token: 'seller_session_token',
       file_uploads_enabled: 'file_uploads_enabled', highlighted: 'highlighted',
-      transaction_form_enabled: 'transaction_form_enabled', banner_url: 'banner_url',
-      // Transaction Account (seller registration/KYC/balance)
-      seller_registered: 'seller_registered', seller_full_name: 'seller_full_name',
-      seller_password_hash: 'seller_password_hash', seller_currency: 'seller_currency',
-      currency_locked_at: 'currency_locked_at', seller_failed_logins: 'seller_failed_logins',
-      seller_locked_until: 'seller_locked_until', kyc_status: 'kyc_status', kyc_doc_type: 'kyc_doc_type',
-      kyc_id_front_url: 'kyc_id_front_url', kyc_id_back_url: 'kyc_id_back_url',
-      kyc_proof_address_url: 'kyc_proof_address_url', kyc_selfie_url: 'kyc_selfie_url',
-      kyc_submitted_at: 'kyc_submitted_at', kyc_reviewed_by: 'kyc_reviewed_by', kyc_reviewed_at: 'kyc_reviewed_at',
-      kyc_rejection_reason: 'kyc_rejection_reason', balance_available: 'balance_available',
-      balance_held: 'balance_held', total_deposited: 'total_deposited'
+      transaction_form_enabled: 'transaction_form_enabled', banner_url: 'banner_url'
     };
     const keys = Object.keys(fields).filter(k => map[k]);
     if (keys.length === 0) return this.getGroup(groupId);
@@ -455,130 +435,6 @@ class PgStore {
     return rows;
   }
 
-  // ---------- PENDING EMAILS (missed-message alerts awaiting admin approval) ----------
-  async createPendingEmail(rec) {
-    const id = uuid();
-    const { rows } = await this.pool.query(
-      `INSERT INTO pending_emails (id, group_id, party, to_email, from_name, group_name, message_text)
-       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-      [id, rec.groupId, rec.party, rec.toEmail, rec.fromName, rec.groupName, rec.messageText]
-    );
-    return rows[0];
-  }
-  async getPendingEmails(status = 'pending') {
-    const { rows } = await this.pool.query(`SELECT * FROM pending_emails WHERE status=$1 ORDER BY created_at DESC`, [status]);
-    return rows;
-  }
-  async getPendingEmailById(id) {
-    const { rows } = await this.pool.query(`SELECT * FROM pending_emails WHERE id=$1`, [id]);
-    return rows[0] || null;
-  }
-  async resolvePendingEmail(id, status) {
-    const { rows } = await this.pool.query(
-      `UPDATE pending_emails SET status=$2, resolved_at=NOW() WHERE id=$1 RETURNING *`,
-      [id, status]
-    );
-    return rows[0] || null;
-  }
-
-  // ---------- PASSWORD RESETS (Transaction Account) ----------
-  async createPasswordReset(rec) {
-    const { rows } = await this.pool.query(
-      `INSERT INTO password_resets (id, group_id, code_hash, expires_at) VALUES ($1,$2,$3,$4) RETURNING *`,
-      [uuid(), rec.groupId, rec.codeHash, rec.expiresAt]
-    );
-    return rows[0];
-  }
-  async getLatestPasswordReset(groupId) {
-    const { rows } = await this.pool.query(
-      `SELECT * FROM password_resets WHERE group_id=$1 AND consumed_at IS NULL ORDER BY created_at DESC LIMIT 1`,
-      [groupId]
-    );
-    return rows[0] || null;
-  }
-  async setPasswordResetToken(id, resetToken) {
-    const { rows } = await this.pool.query(
-      `UPDATE password_resets SET reset_token=$2 WHERE id=$1 RETURNING *`,
-      [id, resetToken]
-    );
-    return rows[0] || null;
-  }
-  async consumePasswordResetByToken(groupId, resetToken) {
-    const { rows } = await this.pool.query(
-      `UPDATE password_resets SET consumed_at=NOW()
-       WHERE group_id=$1 AND reset_token=$2 AND consumed_at IS NULL RETURNING *`,
-      [groupId, resetToken]
-    );
-    return rows[0] || null;
-  }
-
-  // ---------- DEPOSITS ----------
-  async createDeposit(rec) {
-    const { rows } = await this.pool.query(
-      `INSERT INTO deposits (id, group_id, method, asset, network, reference_code, amount)
-       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-      [uuid(), rec.groupId, rec.method, rec.asset || null, rec.network || null, rec.referenceCode || null, rec.amount]
-    );
-    return rows[0];
-  }
-  async getDepositsForGroup(groupId) {
-    const { rows } = await this.pool.query(`SELECT * FROM deposits WHERE group_id=$1 ORDER BY notified_at DESC`, [groupId]);
-    return rows;
-  }
-  async getDepositById(id) {
-    const { rows } = await this.pool.query(`SELECT * FROM deposits WHERE id=$1`, [id]);
-    return rows[0] || null;
-  }
-  async getPendingDeposits() {
-    const { rows } = await this.pool.query(`SELECT * FROM deposits WHERE status='held_in_vault' ORDER BY notified_at ASC`);
-    return rows;
-  }
-  async resolveDeposit(id, { status, verifiedBy, rejectionReason }) {
-    const { rows } = await this.pool.query(
-      `UPDATE deposits SET status=$2, verified_by=$3, verified_at=NOW(), rejection_reason=$4 WHERE id=$1 RETURNING *`,
-      [id, status, verifiedBy || null, rejectionReason || null]
-    );
-    return rows[0] || null;
-  }
-
-  // ---------- WITHDRAWAL REQUESTS ----------
-  async createWithdrawal(rec) {
-    const history = JSON.stringify([{ status: 'pending', at: new Date().toISOString(), by: null, note: 'Submitted by seller' }]);
-    const { rows } = await this.pool.query(
-      `INSERT INTO withdrawal_requests
-        (id, group_id, method, asset, network, destination, beneficiary_name, bank_name, bank_account, bank_swift, bank_country, amount, amount_currency, amount_ledger, status_history)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
-      [uuid(), rec.groupId, rec.method, rec.asset || null, rec.network || null, rec.destination || null,
-       rec.beneficiaryName || null, rec.bankName || null, rec.bankAccount || null, rec.bankSwift || null, rec.bankCountry || null,
-       rec.amount, rec.amountCurrency, rec.amountLedger, history]
-    );
-    return rows[0];
-  }
-  async getWithdrawalsForGroup(groupId) {
-    const { rows } = await this.pool.query(`SELECT * FROM withdrawal_requests WHERE group_id=$1 ORDER BY created_at DESC`, [groupId]);
-    return rows;
-  }
-  async getWithdrawalById(id) {
-    const { rows } = await this.pool.query(`SELECT * FROM withdrawal_requests WHERE id=$1`, [id]);
-    return rows[0] || null;
-  }
-  async getPendingWithdrawals() {
-    const { rows } = await this.pool.query(
-      `SELECT * FROM withdrawal_requests WHERE status NOT IN ('completed','rejected','failed') ORDER BY created_at ASC`
-    );
-    return rows;
-  }
-  async advanceWithdrawal(id, { status, reason, by }) {
-    const { rows } = await this.pool.query(
-      `UPDATE withdrawal_requests
-         SET status=$2, status_reason=$3, updated_at=NOW(),
-             status_history = status_history || $4::jsonb
-       WHERE id=$1 RETURNING *`,
-      [id, status, reason || null, JSON.stringify([{ status, at: new Date().toISOString(), by: by || null, note: reason || null }])]
-    );
-    return rows[0] || null;
-  }
-
   // ---------- BRANDING ----------
   async getBranding() {
     const { rows } = await this.pool.query(`SELECT * FROM branding_settings WHERE id=1`);
@@ -614,6 +470,310 @@ class PgStore {
       recentUploads: recentUploads.map(m => ({ id: m.id, fileName: m.file_name, fileType: m.file_type, sender: m.sender_name, groupId: m.group_id, createdAt: m.created_at })),
       pendingReviews
     };
+  }
+
+  // ==================================================================
+  // SELLER ACCOUNTS, KYC, DEPOSITS & WITHDRAWALS
+  // ==================================================================
+
+  async _ensureBalanceRow(groupId, client = this.pool) {
+    await client.query(
+      `INSERT INTO balances (group_id) VALUES ($1) ON CONFLICT (group_id) DO NOTHING`,
+      [groupId]
+    );
+  }
+
+  // ---------- INVITES / REGISTRATION ----------
+  async createInvite({ email }) {
+    const id = uuid();
+    const inviteToken = uuid();
+    const { rows } = await this.pool.query(
+      `INSERT INTO groups (id, name, owner_email, invite_token, registration_status)
+       VALUES ($1, 'Pending Registration', $2, $3, 'invited') RETURNING *`,
+      [id, email, inviteToken]
+    );
+    return rows[0];
+  }
+
+  async getGroupByInviteToken(token) {
+    const { rows } = await this.pool.query(`SELECT * FROM groups WHERE invite_token=$1`, [token]);
+    return rows[0] || null;
+  }
+
+  async getGroupByOwnerEmail(email) {
+    const { rows } = await this.pool.query(
+      `SELECT * FROM groups WHERE lower(owner_email) = lower($1)`, [email]
+    );
+    return rows[0] || null;
+  }
+
+  async completeRegistration(groupId, { fullName, passwordHash, groupName, currency }) {
+    const { rows } = await this.pool.query(
+      `UPDATE groups SET owner_full_name=$2, owner_password_hash=$3, name=$4, currency=$5,
+         registration_status='active', kyc_status='not_submitted', invite_consumed_at=NOW()
+       WHERE id=$1 RETURNING *`,
+      [groupId, fullName, passwordHash, groupName, currency]
+    );
+    await this._ensureBalanceRow(groupId);
+    return rows[0] || null;
+  }
+
+  async lockCurrencyIfNeeded(groupId) {
+    await this.pool.query(
+      `UPDATE groups SET currency_locked_at = NOW() WHERE id=$1 AND currency_locked_at IS NULL`,
+      [groupId]
+    );
+  }
+
+  async updateSellerProfile(groupId, { fullName }) {
+    const { rows } = await this.pool.query(
+      `UPDATE groups SET owner_full_name = COALESCE($2, owner_full_name) WHERE id=$1 RETURNING *`,
+      [groupId, fullName || null]
+    );
+    return rows[0] || null;
+  }
+
+  // ---------- SESSIONS ----------
+  async createSellerSession(token, groupId, expiresAt) {
+    await this.pool.query(
+      `INSERT INTO seller_sessions (session_token, group_id, expires_at) VALUES ($1,$2,$3)`,
+      [token, groupId, expiresAt]
+    );
+  }
+  async getSellerSession(token) {
+    const { rows } = await this.pool.query(`SELECT * FROM seller_sessions WHERE session_token=$1`, [token]);
+    return rows[0] || null;
+  }
+  async deleteSellerSession(token) {
+    await this.pool.query(`DELETE FROM seller_sessions WHERE session_token=$1`, [token]);
+  }
+
+  // ---------- PASSWORD RESET ----------
+  async createPasswordResetCode(groupId, codeHash, expiresAt) {
+    const { rows } = await this.pool.query(
+      `INSERT INTO password_reset_codes (group_id, code_hash, expires_at) VALUES ($1,$2,$3) RETURNING *`,
+      [groupId, codeHash, expiresAt]
+    );
+    return rows[0];
+  }
+  async findValidResetCode(groupId, codeHash) {
+    const { rows } = await this.pool.query(
+      `SELECT * FROM password_reset_codes
+       WHERE group_id=$1 AND code_hash=$2 AND consumed_at IS NULL AND expires_at > NOW()
+       ORDER BY created_at DESC LIMIT 1`,
+      [groupId, codeHash]
+    );
+    return rows[0] || null;
+  }
+  async consumeResetCode(groupId, codeHash) {
+    const { rowCount } = await this.pool.query(
+      `UPDATE password_reset_codes SET consumed_at=NOW()
+       WHERE id = (
+         SELECT id FROM password_reset_codes
+         WHERE group_id=$1 AND code_hash=$2 AND consumed_at IS NULL AND expires_at > NOW()
+         ORDER BY created_at DESC LIMIT 1
+       )`,
+      [groupId, codeHash]
+    );
+    return rowCount > 0;
+  }
+  async setOwnerPassword(groupId, passwordHash) {
+    const { rows } = await this.pool.query(
+      `UPDATE groups SET owner_password_hash=$2 WHERE id=$1 RETURNING *`,
+      [groupId, passwordHash]
+    );
+    return rows[0] || null;
+  }
+
+  // ---------- KYC ----------
+  async createKycSubmission(sub) {
+    const id = uuid();
+    const { rows } = await this.pool.query(
+      `INSERT INTO kyc_submissions (id, group_id, doc_type, id_front_url, id_back_url, proof_of_address_url, selfie_url, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'pending') RETURNING *`,
+      [id, sub.groupId, sub.docType, sub.idFrontUrl, sub.idBackUrl || null, sub.proofOfAddressUrl, sub.selfieUrl]
+    );
+    await this.pool.query(`UPDATE groups SET kyc_status='pending' WHERE id=$1`, [sub.groupId]);
+    return rows[0];
+  }
+  async getKycSubmissions(groupId) {
+    const { rows } = await this.pool.query(`SELECT * FROM kyc_submissions WHERE group_id=$1 ORDER BY created_at DESC`, [groupId]);
+    return rows;
+  }
+  async getKycSubmissionById(id) {
+    const { rows } = await this.pool.query(`SELECT * FROM kyc_submissions WHERE id=$1`, [id]);
+    return rows[0] || null;
+  }
+  async getKycQueue() {
+    const { rows } = await this.pool.query(
+      `SELECT k.*, g.name AS group_name, g.owner_email
+       FROM kyc_submissions k JOIN groups g ON g.id = k.group_id
+       WHERE k.status='pending'
+       ORDER BY k.created_at ASC`
+    );
+    return rows;
+  }
+  async reviewKyc(submissionId, { status, reviewedBy, rejectionReason }) {
+    const { rows } = await this.pool.query(
+      `UPDATE kyc_submissions SET status=$2, reviewed_by=$3, reviewed_at=NOW(), rejection_reason=$4
+       WHERE id=$1 RETURNING *`,
+      [submissionId, status, reviewedBy || null, rejectionReason || null]
+    );
+    const sub = rows[0];
+    if (!sub) return null;
+    const { rows: grows } = await this.pool.query(
+      `UPDATE groups SET kyc_status=$2 WHERE id=$1 RETURNING *`,
+      [sub.group_id, status]
+    );
+    return { submission: sub, groupId: sub.group_id, group: grows[0] };
+  }
+
+  // ---------- DEPOSITS ----------
+  async createDeposit(dep) {
+    const id = uuid();
+    const reference = `DEP-${id.slice(0, 6).toUpperCase()}`;
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query(
+        `INSERT INTO deposits (id, group_id, reference, method, asset, network, amount, status)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,'held_in_vault') RETURNING *`,
+        [id, dep.groupId, reference, dep.method, dep.asset || null, dep.network || null, dep.amount]
+      );
+      await this._ensureBalanceRow(dep.groupId, client);
+      await client.query(
+        `UPDATE balances SET held = held + $2, updated_at=NOW() WHERE group_id=$1`,
+        [dep.groupId, dep.amount]
+      );
+      await client.query('COMMIT');
+      return { ...rows[0], amount: Number(rows[0].amount) };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+  async getDeposits(groupId) {
+    const { rows } = await this.pool.query(`SELECT * FROM deposits WHERE group_id=$1 ORDER BY created_at DESC`, [groupId]);
+    return rows.map(r => ({ ...r, amount: Number(r.amount) }));
+  }
+  async getDepositQueue() {
+    const { rows } = await this.pool.query(
+      `SELECT d.*, g.name AS group_name FROM deposits d JOIN groups g ON g.id = d.group_id
+       WHERE d.status='held_in_vault' ORDER BY d.created_at ASC`
+    );
+    return rows.map(r => ({ ...r, amount: Number(r.amount) }));
+  }
+  async getTotalDeposited(groupId) {
+    const { rows } = await this.pool.query(
+      `SELECT COALESCE(SUM(amount), 0) AS total FROM deposits WHERE group_id=$1 AND status != 'rejected'`,
+      [groupId]
+    );
+    return Number(rows[0].total);
+  }
+  async reviewDeposit(depositId, { status, reviewedBy, rejectionReason }) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const { rows: drows } = await client.query(`SELECT * FROM deposits WHERE id=$1 FOR UPDATE`, [depositId]);
+      const dep = drows[0];
+      if (!dep) { await client.query('ROLLBACK'); return null; }
+      if (dep.status !== 'held_in_vault') { await client.query('ROLLBACK'); return { deposit: dep, groupId: dep.group_id, noop: true }; }
+      await client.query(`UPDATE balances SET held = held - $2, updated_at=NOW() WHERE group_id=$1`, [dep.group_id, dep.amount]);
+      if (status === 'verified') {
+        await client.query(`UPDATE balances SET available = available + $2, updated_at=NOW() WHERE group_id=$1`, [dep.group_id, dep.amount]);
+      }
+      const { rows: updated } = await client.query(
+        `UPDATE deposits SET status=$2, reviewed_by=$3, reviewed_at=NOW(), rejection_reason=$4 WHERE id=$1 RETURNING *`,
+        [depositId, status, reviewedBy || null, rejectionReason || null]
+      );
+      const { rows: grows } = await client.query(`SELECT * FROM groups WHERE id=$1`, [dep.group_id]);
+      await client.query('COMMIT');
+      return { deposit: { ...updated[0], amount: Number(updated[0].amount) }, groupId: dep.group_id, group: grows[0] };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  // ---------- WITHDRAWALS ----------
+  async createWithdrawal(w) {
+    const id = uuid();
+    const reference = `WD-${id.slice(0, 6).toUpperCase()}`;
+    const history = JSON.stringify([{ status: 'pending', at: new Date().toISOString(), byAdminId: null, note: null }]);
+    const { rows } = await this.pool.query(
+      `INSERT INTO withdrawal_requests (id, group_id, reference, method, asset, network, destination, amount, amount_currency, entered_amount, entered_currency, amount_usd_equiv, status, status_history)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'pending',$13) RETURNING *`,
+      [id, w.groupId, reference, w.method, w.asset || null, w.network || null,
+        w.destination ? JSON.stringify(w.destination) : null, w.amount, w.amountCurrency,
+        w.enteredAmount != null ? w.enteredAmount : null, w.enteredCurrency || null, w.amountUsdEquiv || null, history]
+    );
+    return { ...rows[0], amount: Number(rows[0].amount) };
+  }
+  async getWithdrawals(groupId) {
+    const { rows } = await this.pool.query(`SELECT * FROM withdrawal_requests WHERE group_id=$1 ORDER BY created_at DESC`, [groupId]);
+    return rows.map(r => ({ ...r, amount: Number(r.amount) }));
+  }
+  async getWithdrawalQueue() {
+    const { rows } = await this.pool.query(
+      `SELECT w.*, g.name AS group_name FROM withdrawal_requests w JOIN groups g ON g.id = w.group_id
+       WHERE w.status NOT IN ('completed','rejected','failed') ORDER BY w.created_at ASC`
+    );
+    return rows.map(r => ({ ...r, amount: Number(r.amount) }));
+  }
+  async advanceWithdrawal(withdrawalId, { status, reason, adminId }) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const { rows: wrows } = await client.query(`SELECT * FROM withdrawal_requests WHERE id=$1 FOR UPDATE`, [withdrawalId]);
+      const wd = wrows[0];
+      if (!wd) { await client.query('ROLLBACK'); return null; }
+      const prev = wd.status;
+      const TERMINAL = ['completed', 'rejected', 'failed'];
+      if (TERMINAL.includes(prev)) { await client.query('ROLLBACK'); return { withdrawal: wd, groupId: wd.group_id, noop: true }; }
+      const amount = Number(wd.amount);
+      const isReturn = (prev === 'held_in_vault' || prev === 'processing') && (status === 'rejected' || status === 'failed');
+      if (prev === 'pending' && status === 'held_in_vault') {
+        await client.query(`UPDATE balances SET available = available - $2, held = held + $2, updated_at=NOW() WHERE group_id=$1`, [wd.group_id, amount]);
+      } else if (prev === 'held_in_vault' && status === 'processing') {
+        // no balance movement
+      } else if (prev === 'processing' && status === 'completed') {
+        await client.query(`UPDATE balances SET held = held - $2, updated_at=NOW() WHERE group_id=$1`, [wd.group_id, amount]);
+      } else if (isReturn) {
+        await client.query(`UPDATE balances SET held = held - $2, available = available + $2, updated_at=NOW() WHERE group_id=$1`, [wd.group_id, amount]);
+      } else if (prev === 'pending' && (status === 'rejected' || status === 'failed')) {
+        // funds were never moved
+      } else {
+        await client.query('ROLLBACK');
+        throw new Error(`Invalid withdrawal transition: ${prev} -> ${status}`);
+      }
+      const newHistoryEntry = { status, at: new Date().toISOString(), byAdminId: adminId || null, note: reason || null };
+      const { rows: updated } = await client.query(
+        `UPDATE withdrawal_requests
+         SET status=$2, status_reason=$3, status_history = status_history || $4::jsonb, updated_at=NOW()
+         WHERE id=$1 RETURNING *`,
+        [withdrawalId, status, reason || null, JSON.stringify([newHistoryEntry])]
+      );
+      const { rows: grows } = await client.query(`SELECT * FROM groups WHERE id=$1`, [wd.group_id]);
+      await client.query('COMMIT');
+      return { withdrawal: { ...updated[0], amount: Number(updated[0].amount) }, groupId: wd.group_id, group: grows[0] };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  // ---------- BALANCES ----------
+  async getBalances(groupId) {
+    await this._ensureBalanceRow(groupId);
+    const { rows } = await this.pool.query(`SELECT * FROM balances WHERE group_id=$1`, [groupId]);
+    const b = rows[0];
+    return { available: Number(b.available), held: Number(b.held), updated_at: b.updated_at };
   }
 }
 

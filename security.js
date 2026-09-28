@@ -1,34 +1,4 @@
 // Security utilities: XSS protection, input validation/sanitization, rate limiting.
-const crypto = require('crypto');
-
-/**
- * Password hashing for the seller Transaction Account (scrypt — built into
- * Node, no extra dependency). Format: "<saltHex>:<hashHex>" so a lost/rotated
- * work-factor never breaks verification of older hashes.
- */
-function hashPassword(password) {
-  const salt = crypto.randomBytes(16).toString('hex');
-  const hash = crypto.scryptSync(String(password), salt, 64).toString('hex');
-  return `${salt}:${hash}`;
-}
-function verifyPassword(password, stored) {
-  if (!stored || typeof stored !== 'string' || !stored.includes(':')) return false;
-  const [salt, hashHex] = stored.split(':');
-  const hash = crypto.scryptSync(String(password), salt, 64);
-  const expected = Buffer.from(hashHex, 'hex');
-  return hash.length === expected.length && crypto.timingSafeEqual(hash, expected);
-}
-function isStrongEnoughPassword(password) {
-  return typeof password === 'string' && password.length >= 8 && password.length <= 200;
-}
-
-/** A random 6-digit numeric code for password-reset emails, hashed the same way. */
-function generateSixDigitCode() {
-  return String(crypto.randomInt(0, 1000000)).padStart(6, '0');
-}
-function hashCode(code) {
-  return crypto.createHash('sha256').update(String(code)).digest('hex');
-}
 
 /**
  * Escape HTML special characters so user-generated text can never be
@@ -123,10 +93,5 @@ module.exports = {
   isValidEmail,
   isNonEmptyString,
   validateTransactionForm,
-  RateLimiter,
-  hashPassword,
-  verifyPassword,
-  isStrongEnoughPassword,
-  generateSixDigitCode,
-  hashCode
+  RateLimiter
 };
