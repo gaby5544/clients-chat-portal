@@ -274,6 +274,11 @@
 
     <div class="drawer-tab-panel hidden" id="tabAccounts">
       <div class="admin-section admin-plus-only">
+        <span class="admin-section-label"><i class="fa-solid fa-vault"></i> FUNDS DESK — ANY SELLER</span>
+        <p style="font-size:0.76rem; color:var(--text-muted); margin:0 0 8px;">Record incoming payments and control withdrawal status for any registered seller across every group.</p>
+        <div id="fundsDeskList"><p style="font-size:0.78rem; color:var(--text-faint); margin:0;">Loading sellers…</p></div>
+      </div>
+      <div class="admin-section admin-plus-only">
         <span class="admin-section-label"><i class="fa-solid fa-id-card-clip"></i> KYC REVIEW QUEUE</span>
         <p style="font-size:0.76rem; color:var(--text-muted); margin:0 0 8px;">Every submission is reviewed manually — nothing is ever auto-approved.</p>
         <div id="kycQueueList"><p style="font-size:0.78rem; color:var(--text-faint); margin:0;">No pending KYC submissions.</p></div>
@@ -392,6 +397,91 @@
   </div>
 </div>
 
+<!-- FUNDS DESK — one seller's full ledger (admin/super admin only) -->
+<div class="modal-overlay hidden" id="fundsDeskModal">
+  <div class="modal-box wide">
+    <div class="modal-header">
+      <span><i class="fa-solid fa-vault"></i> <span id="ledgerModalTitle">Seller Ledger</span></span>
+      <i class="fa-solid fa-xmark" onclick="closeFundsDeskModal()"></i>
+    </div>
+    <div class="modal-body">
+      <div class="ledger-stats-row">
+        <div class="ledger-stat emerald"><div class="ledger-stat-label">Available</div><div class="ledger-stat-value" id="ledgerAvailable">—</div></div>
+        <div class="ledger-stat amber"><div class="ledger-stat-label">Held in Vault</div><div class="ledger-stat-value" id="ledgerHeld">—</div></div>
+        <div class="ledger-stat"><div class="ledger-stat-label">Total Deposited</div><div class="ledger-stat-value" id="ledgerTotal">—</div></div>
+      </div>
+      <button class="send-btn" style="width:100%; justify-content:center; margin-bottom:6px;" onclick="openRecordFundsModal()"><i class="fa-solid fa-circle-plus"></i> Record Incoming Funds</button>
+
+      <div class="ledger-section-label"><span><i class="fa-solid fa-arrow-down"></i> Incoming Funds</span></div>
+      <div id="ledgerIncomingList"><p class="ledger-empty">No incoming funds recorded yet.</p></div>
+
+      <div class="ledger-section-label"><span><i class="fa-solid fa-arrow-up"></i> Withdrawals</span></div>
+      <div id="ledgerWithdrawalsList"><p class="ledger-empty">No withdrawals yet.</p></div>
+    </div>
+  </div>
+</div>
+
+<!-- RECORD INCOMING FUNDS (admin/super admin only) -->
+<div class="modal-overlay hidden" id="recordFundsModal">
+  <div class="modal-box wide">
+    <div class="modal-header"><span><i class="fa-solid fa-circle-plus"></i> Record Incoming Funds</span><i class="fa-solid fa-xmark" onclick="closeModal('recordFundsModal')"></i></div>
+    <div class="modal-body">
+      <p style="color:var(--text-muted); font-size:0.8rem; margin:0 0 14px;">This credits (or holds) funds directly on <b id="recordFundsSellerLabel">this seller's</b> account and appears on their dashboard immediately.</p>
+      <div class="create-group-form">
+        <label class="branding-field">Payer / Payer Company Name<input type="text" id="rfPayerName" class="message-input" style="width:100%;" placeholder="e.g. Jude Mensah"></label>
+        <div style="display:flex; gap:12px;">
+          <label class="branding-field" style="flex:1;">Payer Email (optional)<input type="email" id="rfPayerEmail" class="message-input" style="width:100%;"></label>
+          <label class="branding-field" style="flex:1;">Payer Country (optional)<input type="text" id="rfPayerCountry" class="message-input" style="width:100%;" placeholder="e.g. Ghana"></label>
+        </div>
+        <label class="branding-field">Payment For (purpose)<textarea id="rfPurpose" class="admin-notes-area" style="width:100%; height:56px;" placeholder="e.g. Payment for 10kg gold bullion order #A17"></textarea></label>
+        <div style="display:flex; gap:12px;">
+          <label class="branding-field" style="flex:1;">Method
+            <select id="rfMethod" class="message-input" style="width:100%;" onchange="toggleRecordFundsFields()">
+              <option value="bank_transfer">Bank Transfer</option>
+              <option value="wire">Wire Transfer (SWIFT)</option>
+              <option value="crypto">Cryptocurrency</option>
+              <option value="card">Card Payment</option>
+              <option value="cheque">Cheque</option>
+              <option value="cash">Cash</option>
+              <option value="other">Other</option>
+            </select>
+          </label>
+          <label class="branding-field" style="flex:1;">Received On<input type="datetime-local" id="rfReceivedAt" class="message-input" style="width:100%;"></label>
+        </div>
+        <div id="rfCryptoFields" style="display:none; gap:12px; flex-direction:row;">
+          <label class="branding-field" style="flex:1;">Asset
+            <select id="rfAsset" class="message-input" style="width:100%;"><option value="USDT">USDT</option><option value="BTC">BTC</option><option value="ETH">ETH</option></select>
+          </label>
+          <label class="branding-field" style="flex:1;">Network (optional)<input type="text" id="rfNetwork" class="message-input" style="width:100%;" placeholder="e.g. TRC20"></label>
+        </div>
+        <div style="display:flex; gap:12px;">
+          <label class="branding-field" style="flex:1;">Amount<input type="number" id="rfAmount" class="message-input" style="width:100%;" placeholder="0.00" min="0" step="0.01"></label>
+          <label class="branding-field" style="flex:1;">Currency
+            <select id="rfCurrency" class="message-input" style="width:100%;">
+              <option value="USD">USD</option><option value="GBP">GBP</option><option value="EUR">EUR</option>
+            </select>
+          </label>
+        </div>
+        <label class="branding-field">Bank Reference / Transaction Hash (optional)<input type="text" id="rfExternalRef" class="message-input" style="width:100%;"></label>
+        <label class="branding-field">Treatment
+          <select id="rfTreatment" class="message-input" style="width:100%;">
+            <option value="credit">Credit to available balance now</option>
+            <option value="hold">Hold in vault (pending clearance)</option>
+          </select>
+        </label>
+        <label class="branding-field">Internal Note (admin-only — never shown to the seller)<textarea id="rfInternalNote" class="admin-notes-area" style="width:100%; height:48px;"></textarea></label>
+        <label style="display:flex; align-items:center; gap:8px; font-size:0.78rem; color:var(--text-muted); cursor:pointer;">
+          <input type="checkbox" id="rfNotifySeller" checked style="width:16px; height:16px;"> Notify the seller (dashboard popup + email/push if offline)
+        </label>
+      </div>
+      <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:16px;">
+        <button class="ghost-btn" onclick="closeModal('recordFundsModal')">Cancel</button>
+        <button class="send-btn" id="rfSubmitBtn" onclick="submitRecordFunds()"><i class="fa-solid fa-check"></i> Record Funds</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- TRANSACTION ACCOUNT — REGISTRATION (seller only; shown the moment they join if not yet registered) -->
 <div class="modal-overlay hidden" id="txRegModal">
   <div class="modal-box wide">
@@ -496,6 +586,11 @@
 
       <!-- TRANSACTIONS (full history) -->
       <div class="tx-page hidden" id="txPageTransactions">
+        <div class="tx-panel" style="margin-bottom:16px;">
+          <div class="tx-panel-head"><span>Incoming payments</span></div>
+          <p style="font-size:0.76rem; color:var(--text-muted); margin:-4px 0 6px;">Funds your Desk Officer has recorded against this account — who paid, and what for.</p>
+          <div id="txIncomingList"><p class="ledger-empty">No incoming payments recorded yet.</p></div>
+        </div>
         <div class="tx-panel">
           <div class="tx-panel-head"><span>All deposits &amp; withdrawals</span></div>
           <table class="tx-table">

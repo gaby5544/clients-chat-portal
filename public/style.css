@@ -704,6 +704,76 @@ body.role-super_admin button.drawer-tab.super-admin-only { display: block !impor
 }
 .tx-status-badge.enabled { background: rgba(34,211,165,0.16); color: var(--accent-emerald); }
 .tx-status-badge.disabled { background: rgba(251,84,121,0.16); color: var(--accent-rose); }
+.tx-status-badge.warn { background: rgba(245,165,36,0.16); color: var(--accent-amber); }
+
+/* ---- Funds Desk (admin: record incoming funds + control withdrawals for any seller) ---- */
+.funds-desk-row {
+  display: flex; align-items: center; gap: 12px; padding: 12px; border-radius: 12px;
+  background: rgba(255,255,255,0.03); border: 1px solid var(--border-soft); margin-bottom: 8px; cursor: pointer;
+  transition: border-color .12s ease, background .12s ease; -webkit-tap-highlight-color: transparent;
+}
+.funds-desk-row:hover, .funds-desk-row:active { border-color: var(--border-glow); background: rgba(56,189,248,0.06); }
+.funds-desk-row.unregistered { opacity: 0.55; cursor: default; }
+.funds-desk-row.unregistered:hover { border-color: var(--border-soft); background: rgba(255,255,255,0.03); }
+.funds-desk-avatar {
+  width: 38px; height: 38px; border-radius: 11px; flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(135deg, var(--accent-violet), var(--accent-cyan)); color: #05070d; font-weight: 800; font-size: 0.84rem;
+}
+.funds-desk-info { flex: 1; min-width: 0; }
+.funds-desk-name { font-weight: 800; font-size: 0.82rem; color: var(--text-main); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.funds-desk-sub { font-size: 0.7rem; color: var(--text-muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.funds-desk-balances { text-align: right; flex-shrink: 0; }
+.funds-desk-avail { font-weight: 800; font-size: 0.92rem; color: var(--accent-emerald); }
+.funds-desk-held-note { font-size: 0.66rem; color: var(--accent-amber); margin-top: 3px; white-space: nowrap; }
+.funds-desk-chevron { color: var(--text-faint); flex-shrink: 0; }
+
+.ledger-stats-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 18px; }
+.ledger-stat { background: rgba(255,255,255,0.03); border: 1px solid var(--border-soft); border-radius: 12px; padding: 12px 14px; }
+.ledger-stat-label { font-size: 0.64rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 5px; }
+.ledger-stat-value { font-size: 1.15rem; font-weight: 800; color: var(--text-main); }
+.ledger-stat.emerald .ledger-stat-value { color: var(--accent-emerald); }
+.ledger-stat.amber .ledger-stat-value { color: var(--accent-amber); }
+
+.ledger-section-label { font-size: 0.72rem; font-weight: 800; color: var(--text-muted); letter-spacing: .3px; margin: 20px 0 10px; text-transform: uppercase; display: flex; align-items: center; justify-content: space-between; }
+.ledger-section-label:first-of-type { margin-top: 0; }
+.ledger-row { padding: 12px; border-radius: 12px; background: rgba(255,255,255,0.03); border: 1px solid var(--border-soft); margin-bottom: 8px; }
+.ledger-row-top { display: flex; align-items: flex-start; gap: 10px; }
+.ledger-row-direction { width: 30px; height: 30px; border-radius: 9px; display: flex; align-items: center; justify-content: center; font-size: 0.78rem; flex-shrink: 0; margin-top: 1px; }
+.ledger-row-direction.in { background: rgba(34,211,165,0.16); color: var(--accent-emerald); }
+.ledger-row-direction.out { background: rgba(139,92,246,0.16); color: var(--accent-violet); }
+.ledger-row-main { flex: 1; min-width: 0; }
+.ledger-row-title-line { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.ledger-row-title { font-weight: 800; font-size: 0.82rem; color: var(--text-main); }
+.ledger-row-amount { font-weight: 800; font-size: 0.9rem; white-space: nowrap; }
+.ledger-row-amount.in { color: var(--accent-emerald); }
+.ledger-row-amount.out { color: var(--accent-violet); }
+.ledger-row-sub { font-size: 0.72rem; color: var(--text-muted); margin-top: 3px; line-height: 1.4; }
+.ledger-row-ref { font-size: 0.66rem; color: var(--text-faint); margin-top: 4px; font-family: monospace; letter-spacing: 0.02em; }
+.ledger-row-actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.ledger-row-note { font-size: 0.72rem; color: var(--text-faint); margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border-soft); }
+.ledger-row-receipt { font-size: 0.7rem; color: var(--accent-cyan); text-decoration: none; font-weight: 700; margin-top: 8px; display: inline-flex; align-items: center; gap: 5px; }
+.ledger-empty { color: var(--text-faint); text-align: center; padding: 18px; font-size: 0.8rem; }
+
+/* Seller-side: incoming payments panel (Transactions page) */
+.incoming-row { display: flex; align-items: flex-start; gap: 12px; padding: 13px 0; border-bottom: 1px solid var(--border-soft); }
+.incoming-row:last-child { border-bottom: none; }
+.incoming-icon { width: 32px; height: 32px; border-radius: 9px; background: rgba(34,211,165,0.16); color: var(--accent-emerald); display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 0.8rem; margin-top: 1px; }
+.incoming-icon.held { background: rgba(245,165,36,0.16); color: var(--accent-amber); }
+.incoming-icon.reversed { background: rgba(251,84,121,0.16); color: var(--accent-rose); }
+.incoming-main { flex: 1; min-width: 0; }
+.incoming-top-line { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.incoming-payer { font-weight: 800; font-size: 0.84rem; color: var(--text-main); }
+.incoming-amount { font-weight: 800; font-size: 0.9rem; color: var(--accent-emerald); white-space: nowrap; }
+.incoming-purpose { font-size: 0.78rem; color: var(--text-muted); margin-top: 3px; line-height: 1.4; }
+.incoming-meta { font-size: 0.67rem; color: var(--text-faint); margin-top: 5px; }
+.incoming-receipt { display: inline-flex; align-items: center; gap: 5px; margin-top: 6px; font-size: 0.7rem; color: var(--accent-cyan); text-decoration: none; font-weight: 700; }
+
+@media (max-width: 860px) {
+  .ledger-stats-row { grid-template-columns: 1fr; }
+  .funds-desk-row { flex-wrap: wrap; }
+  .funds-desk-balances { text-align: left; margin-left: 50px; }
+  .incoming-top-line { flex-direction: column; align-items: flex-start; gap: 2px; }
+}
 
 /* KYC step-by-step wizard */
 .tx-wizard-steps { display: flex; gap: 6px; margin-bottom: 18px; }

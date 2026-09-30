@@ -91,7 +91,7 @@ function notifyDepositStatus(toEmail, { groupName, amount, status, reason }) {
 }
 
 function notifyWithdrawalStatus(toEmail, { groupName, amount, currency, status, reason }) {
-  const labels = { held_in_vault: 'Held in Vault', processing: 'Processing', completed: 'Completed', rejected: 'Failed / Declined', failed: 'Failed / Declined' };
+  const labels = { pending: 'Pending review', held_in_vault: 'Held in Vault', processing: 'Processing', completed: 'Completed', rejected: 'Declined', failed: 'Declined' };
   return sendEmail(
     toEmail,
     `Withdrawal update — ${groupName}`,
@@ -99,7 +99,17 @@ function notifyWithdrawalStatus(toEmail, { groupName, amount, currency, status, 
   );
 }
 
+function notifyIncomingFunds(toEmail, { groupName, amountText, payerName, purpose, status, reason }) {
+  const lines = {
+    credited: `Funds of ${amountText} from ${payerName} have been received and credited to your Transaction Account for "${groupName}".\n\nPayment for: ${purpose}`,
+    held_in_vault: `Funds of ${amountText} from ${payerName} have been received for "${groupName}" and are held in the vault pending clearance. They will move to your available balance once released.\n\nPayment for: ${purpose}`,
+    released: `Funds of ${amountText} from ${payerName} have cleared and are now available in your Transaction Account for "${groupName}".\n\nPayment for: ${purpose}`,
+    reversed: `A payment of ${amountText} from ${payerName} on "${groupName}" has been reversed.${reason ? `\n\nReason: ${reason}` : ''}\n\nPayment for: ${purpose}`
+  };
+  return sendEmail(toEmail, `Incoming funds update — ${groupName}`, lines[status] || `Your incoming funds status is now: ${status}`);
+}
+
 module.exports = {
   sendEmail, notifyOfflineMessage, notifyTransactionSubmitted,
-  notifyPasswordResetCode, notifyKycStatus, notifyDepositStatus, notifyWithdrawalStatus
+  notifyPasswordResetCode, notifyKycStatus, notifyDepositStatus, notifyWithdrawalStatus, notifyIncomingFunds
 };

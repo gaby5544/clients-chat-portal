@@ -133,6 +133,25 @@ class PgStore {
     await this.pool.query(`DELETE FROM groups WHERE id=$1`, [groupId]);
   }
 
+  // Atomic, guarded balance change in ONE statement: it applies only if no
+  // balance would drop below zero, so two admins acting at once can never
+  // overdraw an account. Returns the updated group row, or null if not applied.
+  async adjustBalances(groupId, { available = 0, held = 0, total = 0 } = {}) {
+    const { rows } = await this.pool.query(
+      `UPDATE groups SET
+         balance_available = balance_available + $2::numeric,
+         balance_held      = balance_held      + $3::numeric,
+         total_deposited   = total_deposited   + $4::numeric
+       WHERE id = $1
+         AND balance_available + $2::numeric >= 0
+         AND balance_held      + $3::numeric >= 0
+         AND total_deposited   + $4::numeric >= 0
+       RETURNING *`,
+      [groupId, available, held, total]
+    );
+    return rows[0] || null;
+  }
+
   // ---------- MESSAGES ----------
   async insertMessage(msg) {
     const { rows } = await this.pool.query(
@@ -568,13 +587,52 @@ class PgStore {
     );
     return rows;
   }
-  async advanceWithdrawal(id, { status, reason, by }) {
+  async advanceWithdrawal(id, { status, reason, by, expectedStatus }) {
     const { rows } = await this.pool.query(
       `UPDATE withdrawal_requests
          SET status=$2, status_reason=$3, updated_at=NOW(),
              status_history = status_history || $4::jsonb
-       WHERE id=$1 RETURNING *`,
-      [id, status, reason || null, JSON.stringify([{ status, at: new Date().toISOString(), by: by || null, note: reason || null }])]
+       WHERE id=$1 AND ($5::text IS NULL OR status = $5::text) RETURNING *`,
+      [id, status, reason || null, JSON.stringify([{ status, at: new Date().toISOString(), by: by || null, note: reason || null }]), expectedStatus || null]
+    );
+    return rows[0] || null;
+  }
+
+  // ---------- INCOMING FUNDS (recorded by the Desk against a seller) ----------
+  async createIncomingFunds(rec) {
+    const history = JSON.stringify([{ status: rec.status, at: new Date().toISOString(), by: rec.recordedBy || null, note: rec.historyNote || null }]);
+    const { rows } = await this.pool.query(
+      `INSERT INTO incoming_funds
+        (id, group_id, payer_name, payer_email, payer_country, purpose, method, asset, network, external_ref,
+         amount, amount_currency, amount_ledger, fx_rate, received_at, status, status_history, proof_url, internal_note, recorded_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17::jsonb,$18,$19,$20) RETURNING *`,
+      [uuid(), rec.groupId, rec.payerName, rec.payerEmail || null, rec.payerCountry || null, rec.purpose, rec.method,
+       rec.asset || null, rec.network || null, rec.externalRef || null,
+       rec.amount, rec.amountCurrency, rec.amountLedger, rec.fxRate,
+       rec.receivedAt || new Date().toISOString(), rec.status, history,
+       rec.proofUrl || null, rec.internalNote || null, rec.recordedBy || null]
+    );
+    return rows[0];
+  }
+  async getIncomingFundsForGroup(groupId) {
+    const { rows } = await this.pool.query(`SELECT * FROM incoming_funds WHERE group_id=$1 ORDER BY received_at DESC, created_at DESC`, [groupId]);
+    return rows;
+  }
+  async getIncomingFundsById(id) {
+    const { rows } = await this.pool.query(`SELECT * FROM incoming_funds WHERE id=$1`, [id]);
+    return rows[0] || null;
+  }
+  async getIncomingFundsByStatus(status) {
+    const { rows } = await this.pool.query(`SELECT * FROM incoming_funds WHERE status=$1`, [status]);
+    return rows;
+  }
+  async advanceIncomingFunds(id, { status, reason, by, expectedStatus }) {
+    const { rows } = await this.pool.query(
+      `UPDATE incoming_funds
+         SET status=$2, status_reason=$3, updated_at=NOW(),
+             status_history = status_history || $4::jsonb
+       WHERE id=$1 AND ($5::text IS NULL OR status = $5::text) RETURNING *`,
+      [id, status, reason || null, JSON.stringify([{ status, at: new Date().toISOString(), by: by || null, note: reason || null }]), expectedStatus || null]
     );
     return rows[0] || null;
   }

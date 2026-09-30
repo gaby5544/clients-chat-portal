@@ -160,7 +160,7 @@ function setAdminTab(tab) {
   document.querySelectorAll('.drawer-tab-panel').forEach(p => p.classList.add('hidden'));
   el('tab' + tab.charAt(0).toUpperCase() + tab.slice(1)).classList.remove('hidden');
   if (tab === 'transactions') loadTransactionsList();
-  if (tab === 'accounts') { socket.emit('admin-get-kyc-queue'); socket.emit('admin-get-deposits-queue'); socket.emit('admin-get-withdrawals-queue'); }
+  if (tab === 'accounts') { socket.emit('admin-get-kyc-queue'); socket.emit('admin-get-deposits-queue'); socket.emit('admin-get-withdrawals-queue'); socket.emit('admin-get-funds-overview'); }
   if (tab === 'controls') renderAnnouncementGroupChecks();
   if (tab === 'tasks') socket.emit('get-tasks', { groupId: activeGroupId });
   if (tab === 'branding') loadBrandingIntoForm();
@@ -896,9 +896,13 @@ function toggleFileLock() { socket.emit('admin-toggle-upload-permission', { grou
 let sellerAccountState = null;
 let sellerDeposits = [];
 let sellerWithdrawals = [];
+let sellerIncoming = [];
 let kycQueueCache = [];
 let depositsQueueCache = [];
 let withdrawalsQueueCache = [];
+let fundsOverviewCache = [];
+let fundsDeskGroupId = null;
+let fundsDeskLedgerCache = null;
 const CCY_SYMBOL = { USD: '$', GBP: '£', EUR: '€' };
 function fmtMoney(amount, ccy) { return `${CCY_SYMBOL[ccy] || ''}${Number(amount || 0).toFixed(2)}${CCY_SYMBOL[ccy] ? '' : ' ' + (ccy || '')}`; }
 function fmtDate(iso) { return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); }
@@ -910,11 +914,11 @@ function fmtDate(iso) { return new Date(iso).toLocaleDateString(undefined, { mon
 // Non-images (PDFs) are sent as-is.
 function compressImageFile(file, maxDim = 1600, quality = 0.82) {
   return new Promise((resolveRaw) => {
-    // Never let a browser that can't decode an image leave the seller stuck
-    // on "Uploading..." forever — after 8s just send the original file.
+    // Never let a browser that can't decode/encode an image leave the seller stuck
+    // on "Uploading..." forever — after 4s just send the original file.
     let settled = false;
     const resolve = (f) => { if (!settled) { settled = true; resolveRaw(f); } };
-    setTimeout(() => resolve(file), 8000);
+    setTimeout(() => resolve(file), 4000);
     if (!file.type.startsWith('image/') || file.type === 'image/gif') return resolve(file);
     const img = new Image();
     const reader = new FileReader();
@@ -972,6 +976,8 @@ socket.on('seller-account-state', (acct) => {
 });
 socket.on('deposits-list', ({ groupId, deposits }) => { if (groupId === activeGroupId) { sellerDeposits = deposits; renderTxDepositsAndWithdrawals(); } });
 socket.on('withdrawals-list', ({ groupId, withdrawals }) => { if (groupId === activeGroupId) { sellerWithdrawals = withdrawals; renderTxDepositsAndWithdrawals(); } });
+socket.on('incoming-list', ({ groupId, incoming }) => { if (groupId === activeGroupId) { sellerIncoming = incoming; renderTxDepositsAndWithdrawals(); } });
+socket.on('seller-notice', (notice) => { toast(`${notice.title} — ${notice.body}`); });
 socket.on('deposit-created', (d) => {
   if (d.groupId === activeGroupId) { sellerDeposits = [d, ...sellerDeposits.filter(x => x.id !== d.id)]; renderTxDepositsAndWithdrawals(); }
   if (!depositsQueueCache.find(x => x.id === d.id) && d.status === 'held_in_vault') depositsQueueCache = [d, ...depositsQueueCache];
@@ -1003,6 +1009,20 @@ socket.on('kyc-submitted', (acct) => {
 socket.on('kyc-resolved', (acct) => { kycQueueCache = kycQueueCache.filter(x => x.groupId !== acct.groupId); renderKycQueue(); });
 socket.on('deposits-queue-list', (list) => { depositsQueueCache = list; renderDepositsQueue(); });
 socket.on('withdrawals-queue-list', (list) => { withdrawalsQueueCache = list; renderWithdrawalsQueue(); });
+socket.on('funds-overview', (list) => { fundsOverviewCache = list; renderFundsDesk(); });
+socket.on('funds-desk-summary', (summary) => {
+  fundsOverviewCache = [summary, ...fundsOverviewCache.filter(x => x.groupId !== summary.groupId)];
+  renderFundsDesk();
+});
+socket.on('funds-desk-ledger', (ledger) => {
+  if (ledger.groupId !== fundsDeskGroupId) return;
+  fundsDeskLedgerCache = ledger;
+  renderFundsDeskModal();
+});
+socket.on('incoming-funds-recorded', () => {
+  closeModal('recordFundsModal');
+  toast('Incoming funds recorded — the seller\'s account has been updated.');
+});
 
 // A single red dot on the admin drawer's "Accounts" tab so pending reviews
 // are impossible to miss — updates every time any of the three queues change.
@@ -1106,8 +1126,13 @@ function renderTxAccountUI() {
   if (el('txCcyLabel')) el('txCcyLabel').textContent = ccy;
   if (el('txHeldNote')) {
     const pendingDeposits = sellerDeposits.filter(d => d.status === 'held_in_vault').length;
+    const pendingIncoming = sellerIncoming.filter(i => i.status === 'held_in_vault').length;
     const pendingWithdrawals = sellerWithdrawals.filter(w => w.status === 'held_in_vault').length;
-    el('txHeldNote').textContent = (pendingDeposits || pendingWithdrawals) ? `${pendingDeposits} deposit + ${pendingWithdrawals} withdrawal in review` : 'Nothing in review';
+    const parts = [];
+    if (pendingDeposits) parts.push(`${pendingDeposits} deposit`);
+    if (pendingIncoming) parts.push(`${pendingIncoming} incoming payment`);
+    if (pendingWithdrawals) parts.push(`${pendingWithdrawals} withdrawal`);
+    el('txHeldNote').textContent = parts.length ? `${parts.join(' + ')} in review` : 'Nothing in review';
   }
   const lastWd = sellerWithdrawals.find(w => w.status === 'completed');
   if (el('txLastWithdrawal')) el('txLastWithdrawal').textContent = lastWd ? fmtMoney(lastWd.amount, lastWd.amountCurrency) : '—';
@@ -1165,11 +1190,15 @@ function renderTxAccountUI() {
 function mergedActivity() {
   const deps = sellerDeposits.map(d => ({ date: d.notifiedAt, type: `Deposit${d.method === 'crypto' ? ` · ${d.asset}` : ''}`, amount: fmtMoney(d.amount, sellerAccountState ? sellerAccountState.currency : ''), status: d.status, note: d.rejectionReason || '' }));
   const wds = sellerWithdrawals.map(w => ({ date: w.createdAt, type: `Withdrawal${w.method === 'crypto' ? ` · ${w.asset}` : ' · Bank'}`, amount: fmtMoney(w.amount, w.amountCurrency), status: w.status, note: w.statusReason || '' }));
-  return [...deps, ...wds].sort((a, b) => new Date(b.date) - new Date(a.date));
+  // Full purpose text is shown in the dedicated Incoming Payments panel above
+  // this table; keep this row's note short so the NOTE column doesn't get
+  // cramped with long text on a narrow (mobile) screen.
+  const inc = sellerIncoming.map(i => ({ date: i.receivedAt, type: `Payment · ${i.payerName}`, amount: `+${fmtMoney(i.amount, i.amountCurrency)}`, status: i.status, note: i.statusReason || '' }));
+  return [...deps, ...wds, ...inc].sort((a, b) => new Date(b.date) - new Date(a.date));
 }
 function statusPillClass(status) {
-  if (['verified', 'completed'].includes(status)) return 'enabled';
-  if (['rejected', 'failed'].includes(status)) return 'disabled';
+  if (['verified', 'completed', 'credited'].includes(status)) return 'enabled';
+  if (['rejected', 'failed', 'reversed'].includes(status)) return 'disabled';
   return '';
 }
 function renderTxDepositsAndWithdrawals() {
@@ -1178,21 +1207,37 @@ function renderTxDepositsAndWithdrawals() {
   if (recentBody) {
     recentBody.innerHTML = all.length ? all.slice(0, 5).map(row => `
       <tr><td>${fmtDate(row.date)}</td><td>${escapeHtml(row.type)}</td><td>${escapeHtml(row.amount)}</td>
-      <td><span class="tx-status-badge ${statusPillClass(row.status)}">${row.status.replace('_', ' ')}</span></td></tr>`).join('')
+      <td><span class="tx-status-badge ${statusPillClass(row.status)}">${row.status.replace(/_/g, ' ')}</span></td></tr>`).join('')
       : '<tr><td colspan="4" class="tx-empty">No activity yet.</td></tr>';
   }
   const fullBody = el('txFullActivityBody');
   if (fullBody) {
     fullBody.innerHTML = all.length ? all.map(row => `
       <tr><td>${fmtDate(row.date)}</td><td>${escapeHtml(row.type)}</td><td>${escapeHtml(row.amount)}</td>
-      <td><span class="tx-status-badge ${statusPillClass(row.status)}">${row.status.replace('_', ' ')}</span></td><td>${escapeHtml(row.note)}</td></tr>`).join('')
+      <td><span class="tx-status-badge ${statusPillClass(row.status)}">${row.status.replace(/_/g, ' ')}</span></td><td>${escapeHtml(row.note)}</td></tr>`).join('')
       : '<tr><td colspan="5" class="tx-empty">No activity yet.</td></tr>';
+  }
+  const incomingBox = el('txIncomingList');
+  if (incomingBox) {
+    incomingBox.innerHTML = sellerIncoming.length ? sellerIncoming.map(i => {
+      const iconCls = i.status === 'credited' ? '' : i.status === 'reversed' ? 'reversed' : 'held';
+      const icon = i.status === 'credited' ? 'fa-arrow-down' : i.status === 'reversed' ? 'fa-rotate-left' : 'fa-lock';
+      return `<div class="incoming-row">
+        <div class="incoming-icon ${iconCls}"><i class="fa-solid ${icon}"></i></div>
+        <div class="incoming-main">
+          <div class="incoming-top-line"><span class="incoming-payer">${escapeHtml(i.payerName)}</span><span class="incoming-amount">+${fmtMoney(i.amount, i.amountCurrency)}</span></div>
+          <div class="incoming-purpose">${escapeHtml(i.purpose)}</div>
+          <div class="incoming-meta">${fmtDate(i.receivedAt)} · <span class="tx-status-badge ${statusPillClass(i.status)}" style="padding:2px 8px; font-size:0.62rem;">${escapeHtml(INCOMING_STATUS_LABEL[i.status] || i.status)}</span>${i.statusReason ? ` · ${escapeHtml(i.statusReason)}` : ''}</div>
+          ${i.receiptUrl ? `<a class="incoming-receipt" href="${i.receiptUrl}" target="_blank"><i class="fa-solid fa-file-invoice"></i> Download receipt</a>` : ''}
+        </div>
+      </div>`;
+    }).join('') : '<p class="ledger-empty">No incoming payments recorded yet.</p>';
   }
   const wdOnlyBody = el('txWithdrawalsOnlyBody');
   if (wdOnlyBody) {
     wdOnlyBody.innerHTML = sellerWithdrawals.length ? sellerWithdrawals.map(w => `
       <tr><td>${fmtDate(w.createdAt)}</td><td>${fmtMoney(w.amount, w.amountCurrency)}</td>
-      <td><span class="tx-status-badge ${statusPillClass(w.status)}">${w.status.replace('_', ' ')}</span></td></tr>`).join('')
+      <td><span class="tx-status-badge ${statusPillClass(w.status)}">${w.status.replace(/_/g, ' ')}</span></td></tr>`).join('')
       : '<tr><td colspan="3" class="tx-empty">No withdrawals yet.</td></tr>';
   }
   renderTxAccountUI(); // held-note / last-withdrawal depend on these lists too
@@ -1406,21 +1451,22 @@ const WD_NEXT_ACTIONS = {
   held_in_vault: [['processing', 'Process', false], ['failed', 'Fail', true]],
   processing: [['completed', 'Complete', false], ['failed', 'Fail', true]]
 };
+function withdrawalRowActionsHtml(w) {
+  const actions = WD_NEXT_ACTIONS[w.status] || [];
+  return actions.map(([to, label, needsReason]) => `<button class="admin-btn ${needsReason ? 'admin-btn-danger' : ''}" onclick="adminAdvanceWithdrawal('${w.id}','${to}',${needsReason})"><i class="fa-solid fa-arrow-right"></i> ${label}</button>`).join('');
+}
 function renderWithdrawalsQueue() {
   const box = el('withdrawalsQueueList');
   if (!box) return;
   const active = withdrawalsQueueCache.filter(w => !['completed', 'rejected', 'failed'].includes(w.status));
-  box.innerHTML = active.length ? active.map(w => {
-    const actions = WD_NEXT_ACTIONS[w.status] || [];
-    return `
+  box.innerHTML = active.length ? active.map(w => `
     <div class="invite-link-row" style="flex-wrap:wrap;">
       <div style="flex:1; min-width:0;">
         <div style="font-weight:800; font-size:0.78rem;">${escapeHtml(w.method === 'crypto' ? `${w.asset} withdrawal` : 'Bank withdrawal')} — ${fmtMoney(w.amount, w.amountCurrency)}</div>
-        <div style="font-size:0.72rem; color:var(--text-muted);">Group: ${escapeHtml(w.groupId)} · Status: ${w.status.replace('_', ' ')}</div>
+        <div style="font-size:0.72rem; color:var(--text-muted);">Group: ${escapeHtml(w.groupId)} · Status: ${w.status.replace(/_/g, ' ')}</div>
       </div>
-      ${actions.map(([to, label, needsReason]) => `<button class="admin-btn ${needsReason ? 'admin-btn-danger' : ''}" onclick="adminAdvanceWithdrawal('${w.id}','${to}',${needsReason})"><i class="fa-solid fa-arrow-right"></i> ${label}</button>`).join('')}
-    </div>`;
-  }).join('') : '<p style="font-size:0.78rem; color:var(--text-faint); margin:0;">No withdrawals in progress.</p>';
+      ${withdrawalRowActionsHtml(w)}
+    </div>`).join('') : '<p style="font-size:0.78rem; color:var(--text-faint); margin:0;">No withdrawals in progress.</p>';
   updateAccountsTabBadge();
 }
 function adminAdvanceWithdrawal(withdrawalId, toStatus, needsReason) {
@@ -1431,6 +1477,150 @@ function adminAdvanceWithdrawal(withdrawalId, toStatus, needsReason) {
   } else {
     socket.emit('admin-advance-withdrawal', { withdrawalId, toStatus });
   }
+}
+
+// ---- Funds Desk: record incoming funds + control withdrawals for ANY seller ----
+const INCOMING_STATUS_LABEL = { credited: 'Credited', held_in_vault: 'Held in Vault', reversed: 'Reversed' };
+const METHOD_LABEL = { bank_transfer: 'Bank transfer', wire: 'Wire transfer', crypto: 'Crypto', card: 'Card', cheque: 'Cheque', cash: 'Cash', other: 'Other', bank: 'Bank transfer' };
+function initialsOfName(name) { return (name || '?').trim().split(/\s+/).map(w => w[0]).slice(0, 2).join('').toUpperCase(); }
+
+function renderFundsDesk() {
+  const box = el('fundsDeskList');
+  if (!box) return;
+  if (!fundsOverviewCache.length) { box.innerHTML = '<p style="font-size:0.78rem; color:var(--text-faint); margin:0;">No groups yet.</p>'; return; }
+  const sorted = [...fundsOverviewCache].sort((a, b) => (b.registered - a.registered) || a.sellerName.localeCompare(b.sellerName));
+  box.innerHTML = sorted.map(s => {
+    if (!s.registered) {
+      return `<div class="funds-desk-row unregistered">
+        <div class="funds-desk-avatar">${escapeHtml(initialsOfName(s.sellerName))}</div>
+        <div class="funds-desk-info"><div class="funds-desk-name">${escapeHtml(s.sellerName)}</div><div class="funds-desk-sub">${escapeHtml(s.groupName)} · Awaiting Transaction Account registration</div></div>
+      </div>`;
+    }
+    const notes = [];
+    if (s.activeWithdrawals) notes.push(`${s.activeWithdrawals} withdrawal${s.activeWithdrawals > 1 ? 's' : ''} in progress`);
+    if (s.heldIncoming) notes.push(`${s.heldIncoming} held`);
+    return `<div class="funds-desk-row" onclick="openFundsDeskModal('${s.groupId}')">
+      <div class="funds-desk-avatar">${escapeHtml(initialsOfName(s.sellerName))}</div>
+      <div class="funds-desk-info">
+        <div class="funds-desk-name">${escapeHtml(s.sellerName)}</div>
+        <div class="funds-desk-sub">${escapeHtml(s.groupName)} · ${escapeHtml(s.currency || '')} · KYC: ${escapeHtml((s.kycStatus || '').replace(/_/g, ' '))}</div>
+      </div>
+      <div class="funds-desk-balances">
+        <div class="funds-desk-avail">${fmtMoney(s.balances.available, s.currency)}</div>
+        ${notes.length ? `<div class="funds-desk-held-note">${escapeHtml(notes.join(' · '))}</div>` : ''}
+      </div>
+      <i class="fa-solid fa-chevron-right funds-desk-chevron"></i>
+    </div>`;
+  }).join('');
+}
+
+function openFundsDeskModal(groupId) {
+  fundsDeskGroupId = groupId;
+  fundsDeskLedgerCache = null;
+  el('ledgerModalTitle').textContent = 'Loading…';
+  el('ledgerIncomingList').innerHTML = '<p class="ledger-empty">Loading…</p>';
+  el('ledgerWithdrawalsList').innerHTML = '<p class="ledger-empty">Loading…</p>';
+  el('fundsDeskModal').classList.remove('hidden');
+  socket.emit('admin-get-seller-ledger', { groupId });
+}
+function closeFundsDeskModal() { el('fundsDeskModal').classList.add('hidden'); fundsDeskGroupId = null; fundsDeskLedgerCache = null; }
+
+function incomingRowActionsHtml(i) {
+  const btns = [];
+  if (i.status === 'held_in_vault') btns.push(`<button class="admin-btn" onclick="adminUpdateIncoming('${i.id}','release')"><i class="fa-solid fa-check"></i> Release</button>`);
+  if (['held_in_vault', 'credited'].includes(i.status)) btns.push(`<button class="admin-btn admin-btn-danger" onclick="adminUpdateIncoming('${i.id}','reverse')"><i class="fa-solid fa-rotate-left"></i> Reverse</button>`);
+  return btns.join('');
+}
+function renderFundsDeskModal() {
+  const ledger = fundsDeskLedgerCache;
+  if (!ledger) return;
+  const ccy = ledger.account.currency || '';
+  el('ledgerModalTitle').textContent = `${ledger.account.fullName || 'Seller'} — ${ledger.account.groupName}`;
+  el('ledgerAvailable').textContent = fmtMoney(ledger.account.balances.available, ccy);
+  el('ledgerHeld').textContent = fmtMoney(ledger.account.balances.held, ccy);
+  el('ledgerTotal').textContent = fmtMoney(ledger.account.balances.totalDeposited, ccy);
+
+  const incBox = el('ledgerIncomingList');
+  incBox.innerHTML = ledger.incoming.length ? ledger.incoming.map(i => `
+    <div class="ledger-row">
+      <div class="ledger-row-top">
+        <div class="ledger-row-direction in"><i class="fa-solid fa-arrow-down"></i></div>
+        <div class="ledger-row-main">
+          <div class="ledger-row-title-line"><span class="ledger-row-title">${escapeHtml(i.payerName)}</span><span class="ledger-row-amount in">+${fmtMoney(i.amount, i.amountCurrency)}</span></div>
+          <div class="ledger-row-sub">${escapeHtml(i.purpose)}</div>
+          <div class="ledger-row-sub">${escapeHtml(METHOD_LABEL[i.method] || i.method)}${i.asset ? ` · ${escapeHtml(i.asset)}` : ''} · ${fmtDate(i.receivedAt)} · <span class="tx-status-badge ${i.status === 'credited' ? 'enabled' : i.status === 'reversed' ? 'disabled' : 'warn'}" style="padding:2px 8px; font-size:0.64rem;">${escapeHtml(INCOMING_STATUS_LABEL[i.status] || i.status)}</span></div>
+          <div class="ledger-row-ref">${escapeHtml(i.ref)}${i.externalRef ? ` · Ref: ${escapeHtml(i.externalRef)}` : ''}</div>
+          ${i.internalNote ? `<div class="ledger-row-note"><i class="fa-solid fa-note-sticky"></i> ${escapeHtml(i.internalNote)}</div>` : ''}
+          <div class="ledger-row-actions">${incomingRowActionsHtml(i)}</div>
+        </div>
+      </div>
+    </div>`).join('') : '<p class="ledger-empty">No incoming funds recorded yet.</p>';
+
+  const wdBox = el('ledgerWithdrawalsList');
+  wdBox.innerHTML = ledger.withdrawals.length ? ledger.withdrawals.map(w => `
+    <div class="ledger-row">
+      <div class="ledger-row-top">
+        <div class="ledger-row-direction out"><i class="fa-solid fa-arrow-up"></i></div>
+        <div class="ledger-row-main">
+          <div class="ledger-row-title-line"><span class="ledger-row-title">${escapeHtml(w.method === 'crypto' ? `${w.asset} withdrawal` : 'Bank withdrawal')}</span><span class="ledger-row-amount out">−${fmtMoney(w.amount, w.amountCurrency)}</span></div>
+          <div class="ledger-row-sub">${w.method === 'crypto' ? escapeHtml(w.destination || '') : `${escapeHtml(w.beneficiaryName || '')} · ${escapeHtml(w.bankName || '')}`}</div>
+          <div class="ledger-row-sub">${fmtDate(w.createdAt)} · <span class="tx-status-badge ${statusPillClass(w.status)}" style="padding:2px 8px; font-size:0.64rem;">${escapeHtml(w.status.replace(/_/g, ' '))}</span></div>
+          <div class="ledger-row-ref">${escapeHtml(w.ref)}</div>
+          ${w.statusReason ? `<div class="ledger-row-note"><i class="fa-solid fa-note-sticky"></i> ${escapeHtml(w.statusReason)}</div>` : ''}
+          <div class="ledger-row-actions">${withdrawalRowActionsHtml(w)}</div>
+        </div>
+      </div>
+    </div>`).join('') : '<p class="ledger-empty">No withdrawals yet.</p>';
+}
+
+function adminUpdateIncoming(id, action) {
+  if (action === 'reverse') {
+    showPromptModal({ title: 'Reverse Incoming Funds', placeholder: 'Reason (required, shown to the seller)' }, (reason) => {
+      socket.emit('admin-update-incoming-funds', { id, action, reason });
+    });
+  } else {
+    socket.emit('admin-update-incoming-funds', { id, action });
+  }
+}
+
+function openRecordFundsModal() {
+  if (!fundsDeskGroupId) return;
+  const s = fundsOverviewCache.find(x => x.groupId === fundsDeskGroupId);
+  el('recordFundsSellerLabel').textContent = s ? s.sellerName : 'this seller\'s';
+  ['rfPayerName', 'rfPayerEmail', 'rfPayerCountry', 'rfPurpose', 'rfExternalRef', 'rfInternalNote'].forEach(id => { el(id).value = ''; });
+  el('rfMethod').value = 'bank_transfer';
+  el('rfAsset').value = 'USDT'; el('rfNetwork').value = '';
+  el('rfAmount').value = '';
+  el('rfCurrency').value = (s && s.currency) || 'USD';
+  el('rfTreatment').value = 'credit';
+  el('rfReceivedAt').value = '';
+  el('rfNotifySeller').checked = true;
+  toggleRecordFundsFields();
+  el('recordFundsModal').classList.remove('hidden');
+}
+function toggleRecordFundsFields() {
+  el('rfCryptoFields').style.display = el('rfMethod').value === 'crypto' ? 'flex' : 'none';
+}
+function submitRecordFunds() {
+  if (!fundsDeskGroupId) return;
+  const payerName = el('rfPayerName').value.trim();
+  const purpose = el('rfPurpose').value.trim();
+  const method = el('rfMethod').value;
+  const amount = parseFloat(el('rfAmount').value);
+  if (!payerName) return toast('Please enter who the payment is from.', true);
+  if (!purpose) return toast('Please describe what the payment is for.', true);
+  if (!Number.isFinite(amount) || amount <= 0) return toast('Please enter a valid amount.', true);
+  const payload = {
+    groupId: fundsDeskGroupId, payerName, purpose, method,
+    payerEmail: el('rfPayerEmail').value.trim(), payerCountry: el('rfPayerCountry').value.trim(),
+    amount, amountCurrency: el('rfCurrency').value,
+    externalRef: el('rfExternalRef').value.trim(), internalNote: el('rfInternalNote').value.trim(),
+    treatment: el('rfTreatment').value, notifySeller: el('rfNotifySeller').checked
+  };
+  if (method === 'crypto') { payload.asset = el('rfAsset').value; payload.network = el('rfNetwork').value.trim(); }
+  const receivedAt = el('rfReceivedAt').value;
+  if (receivedAt) payload.receivedAt = new Date(receivedAt).toISOString();
+  socket.emit('admin-record-incoming-funds', payload);
 }
 function toggleHighlightGroup() { socket.emit('toggle-highlight-group', { groupId: activeGroupId }); toast('Group highlight toggled.'); }
 function copyInviteLink(party) {

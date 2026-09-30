@@ -278,3 +278,39 @@ CREATE TABLE IF NOT EXISTS withdrawal_requests (
 );
 CREATE INDEX IF NOT EXISTS idx_withdrawals_group ON withdrawal_requests(group_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_withdrawals_status ON withdrawal_requests(status);
+
+-- ============================================================================
+-- INCOMING FUNDS — payments the Desk records against a seller's Transaction
+-- Account (who paid, what for, how much). Only admins can create/change these;
+-- the seller only ever sees them. Balances move exactly like deposits:
+--   'credited'      -> counted in balance_available
+--   'held_in_vault' -> counted in balance_held until an admin releases it
+--   'reversed'      -> backed out of whichever balance held it (reason required)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS incoming_funds (
+  id              TEXT PRIMARY KEY,
+  group_id        TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+  payer_name      TEXT NOT NULL,
+  payer_email     TEXT,
+  payer_country   TEXT,
+  purpose         TEXT NOT NULL,
+  method          TEXT NOT NULL,          -- bank_transfer | wire | crypto | card | cheque | cash | other
+  asset           TEXT,                   -- crypto only
+  network         TEXT,                   -- crypto only
+  external_ref    TEXT,                   -- bank reference / transaction hash
+  amount          NUMERIC(18,2) NOT NULL, -- as received, in amount_currency
+  amount_currency TEXT NOT NULL,
+  amount_ledger   NUMERIC(18,2) NOT NULL, -- converted to the seller's ledger currency at recording time
+  fx_rate         NUMERIC(18,8) NOT NULL DEFAULT 1,
+  received_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  status          TEXT NOT NULL DEFAULT 'credited', -- credited | held_in_vault | reversed
+  status_reason   TEXT,
+  status_history  JSONB NOT NULL DEFAULT '[]',
+  proof_url       TEXT,                   -- admin-only
+  internal_note   TEXT,                   -- admin-only
+  recorded_by     TEXT,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_incoming_group ON incoming_funds(group_id, received_at);
+CREATE INDEX IF NOT EXISTS idx_incoming_status ON incoming_funds(status);

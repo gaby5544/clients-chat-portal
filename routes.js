@@ -6,7 +6,8 @@ const crypto = require('crypto');
 const rateLimit = require('express-rate-limit');
 const { store } = require('./db');
 const { validateTransactionForm, escapeHtml, isValidEmail, hashPassword, verifyPassword, isStrongEnoughPassword, generateSixDigitCode, hashCode } = require('./security');
-const { generateTransactionPdf } = require('./pdfReceipt');
+const { generateTransactionPdf, generateFundsReceiptPdf } = require('./pdfReceipt');
+const F = require('./finance');
 const { resolveAdminRole, hasMinRole } = require('./roles');
 const { getPublicKey } = require('./webpush');
 const { notifyPasswordResetCode } = require('./email');
@@ -138,6 +139,26 @@ function buildRouter() {
     generateTransactionPdf(res, tx, group ? group.name : 'Unknown Group');
   });
 
+  // ---- Transaction Account receipts (incoming funds / completed withdrawals) ----
+  // The link is HMAC-signed and only ever handed to the seller who owns the
+  // record (or a finance admin) inside a socket payload — it can't be guessed
+  // or edited to point at someone else's record.
+  router.get('/api/receipts/:kind/:id', pdfLimiter, async (req, res) => {
+    const { kind, id } = req.params;
+    if (!['incoming', 'withdrawal'].includes(kind) || !F.verifyReceiptSig(kind, id, req.query.sig)) {
+      return res.status(404).json({ error: 'Receipt not found' });
+    }
+    const rec = kind === 'incoming' ? await store.getIncomingFundsById(id) : await store.getWithdrawalById(id);
+    // A receipt only exists for money that actually landed / actually left.
+    if (!rec || (kind === 'incoming' && rec.status !== 'credited') || (kind === 'withdrawal' && rec.status !== 'completed')) {
+      return res.status(404).json({ error: 'Receipt not found' });
+    }
+    const group = await store.getGroup(rec.group_id);
+    if (!group) return res.status(404).json({ error: 'Receipt not found' });
+    const record = kind === 'incoming' ? F.publicIncoming(rec, false) : F.publicWithdrawal(rec);
+    generateFundsReceiptPdf(res, { kind, record, group });
+  });
+
   // ---- Web Push: subscribe / unsubscribe ----
   router.get('/api/push/vapid-public-key', (req, res) => res.json({ publicKey: getPublicKey() }));
 
@@ -258,7 +279,7 @@ function buildRouter() {
     status: 'ok',
     time: new Date().toISOString(),
     version: require('./package.json').version,
-    build: 'enterprise-features-2026-08'
+    build: 'funds-desk-2026-09'
   }));
 
   return router;

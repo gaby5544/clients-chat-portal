@@ -65,6 +65,7 @@ class MemStore {
     this.passwordResets = new Map(); // id -> reset record
     this.deposits = new Map();       // id -> deposit record
     this.withdrawals = new Map();    // id -> withdrawal record
+    this.incoming = new Map();       // id -> incoming-funds record (recorded by the Desk against a seller)
     this.branding = {
       id: 1, logo_url: null, accent_color: '#38bdf8', accent_color_2: '#8b5cf6',
       welcome_message: 'Welcome to Quantum Secure Transaction Desk.', background_url: null,
@@ -155,6 +156,25 @@ class MemStore {
     this.transactions.delete(groupId);
     this.announcements.delete(groupId);
     this.tasks.delete(groupId);
+    // Mirror Postgres' ON DELETE CASCADE so a deleted group leaves no orphaned money records behind.
+    for (const map of [this.deposits, this.withdrawals, this.incoming, this.passwordResets]) {
+      for (const [id, rec] of map.entries()) if (rec.group_id === groupId) map.delete(id);
+    }
+  }
+
+  // Atomic, guarded balance change. Returns the updated group, or null if the
+  // group is gone or the change would push any balance below zero (so two
+  // admins acting at once can never overdraw an account).
+  async adjustBalances(groupId, { available = 0, held = 0, total = 0 } = {}) {
+    const g = this.groups.get(groupId);
+    if (!g) return null;
+    const r2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+    const a = r2(Number(g.balance_available || 0) + available);
+    const h = r2(Number(g.balance_held || 0) + held);
+    const t = r2(Number(g.total_deposited || 0) + total);
+    if (a < 0 || h < 0 || t < 0) return null;
+    g.balance_available = a; g.balance_held = h; g.total_deposited = t;
+    return g;
   }
 
   // ---------- MESSAGES ----------
@@ -516,14 +536,50 @@ class MemStore {
       .filter(w => !['completed', 'rejected', 'failed'].includes(w.status))
       .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
   }
-  async advanceWithdrawal(id, { status, reason, by }) {
+  async advanceWithdrawal(id, { status, reason, by, expectedStatus }) {
     const w = this.withdrawals.get(id);
     if (!w) return null;
+    if (expectedStatus && w.status !== expectedStatus) return null; // compare-and-set: someone else moved it first
     w.status = status;
     w.status_reason = reason || null;
     w.status_history.push({ status, at: nowIso(), by: by || null, note: reason || null });
     w.updated_at = nowIso();
     return w;
+  }
+
+  // ---------- INCOMING FUNDS (recorded by the Desk against a seller) ----------
+  async createIncomingFunds(rec) {
+    const now = nowIso();
+    const record = {
+      id: uuid(), group_id: rec.groupId, payer_name: rec.payerName, payer_email: rec.payerEmail || null,
+      payer_country: rec.payerCountry || null, purpose: rec.purpose, method: rec.method,
+      asset: rec.asset || null, network: rec.network || null, external_ref: rec.externalRef || null,
+      amount: rec.amount, amount_currency: rec.amountCurrency, amount_ledger: rec.amountLedger, fx_rate: rec.fxRate,
+      received_at: rec.receivedAt || now, status: rec.status, status_reason: null,
+      status_history: [{ status: rec.status, at: now, by: rec.recordedBy || null, note: rec.historyNote || null }],
+      proof_url: rec.proofUrl || null, internal_note: rec.internalNote || null, recorded_by: rec.recordedBy || null,
+      created_at: now, updated_at: now
+    };
+    this.incoming.set(record.id, record);
+    return record;
+  }
+  async getIncomingFundsForGroup(groupId) {
+    return Array.from(this.incoming.values()).filter(i => i.group_id === groupId)
+      .sort((a, b) => new Date(b.received_at) - new Date(a.received_at) || new Date(b.created_at) - new Date(a.created_at));
+  }
+  async getIncomingFundsById(id) { return this.incoming.get(id) || null; }
+  async getIncomingFundsByStatus(status) {
+    return Array.from(this.incoming.values()).filter(i => i.status === status);
+  }
+  async advanceIncomingFunds(id, { status, reason, by, expectedStatus }) {
+    const i = this.incoming.get(id);
+    if (!i) return null;
+    if (expectedStatus && i.status !== expectedStatus) return null; // compare-and-set
+    i.status = status;
+    i.status_reason = reason || null;
+    i.status_history.push({ status, at: nowIso(), by: by || null, note: reason || null });
+    i.updated_at = nowIso();
+    return i;
   }
 
   // ---------- BRANDING ----------

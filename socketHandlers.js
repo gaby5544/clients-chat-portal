@@ -3,24 +3,20 @@ const { escapeHtml, sanitizeText, RateLimiter, hashPassword, verifyPassword, isS
 const { notifyOfflineMessage, notifyTransactionSubmitted, notifyKycStatus, notifyDepositStatus, notifyWithdrawalStatus } = require('./email');
 const { resolveAdminRole, hasMinRole } = require('./roles');
 const { sendPushToUser } = require('./webpush');
+const F = require('./finance');
+const { publicSellerAccount, publicDeposit, publicWithdrawal, CURRENCIES, CRYPTO_ASSETS, convertCurrency } = F;
+const { registerFundsHandlers, pushSellerState, pushAdminLedger, emitSnapshotTo } = require('./fundsHandlers');
 
 const messageLimiter = new RateLimiter({ windowMs: 10000, max: 20 });   // 20 msgs / 10s per socket
 const actionLimiter = new RateLimiter({ windowMs: 10000, max: 30 });    // generic admin/action guard
 const accountActionLimiter = new RateLimiter({ windowMs: 60000, max: 8 }); // registration/KYC/deposit/withdrawal submissions
 setInterval(() => { messageLimiter.sweep(); actionLimiter.sweep(); accountActionLimiter.sweep(); }, 60000).unref();
 
-const CURRENCIES = new Set(['USD', 'GBP', 'EUR']);
-const CRYPTO_ASSETS = new Set(['BTC', 'ETH', 'USDT']);
 const KYC_DOC_TYPES = new Set(['national_id', 'drivers_license', 'passport']);
-// Fixed, illustrative FX rates for converting a withdrawal entered in one
-// currency into the account's ledger currency at submission time (§6 of the
-// blueprint). Replace with a live FX feed before going to production.
-const FX_TO_USD = { USD: 1, GBP: 1.27, EUR: 1.08 };
-function convertCurrency(amount, from, to) {
-  if (from === to) return amount;
-  const usd = amount * (FX_TO_USD[from] || 1);
-  return usd / (FX_TO_USD[to] || 1);
-}
+// CURRENCIES / CRYPTO_ASSETS / FX conversion and the seller-facing payload
+// shapers now live in finance.js (shared with fundsHandlers.js).
+// KYC documents are only ever files this server stored itself.
+const UPLOAD_URL_RE = /^\/uploads\/[A-Za-z0-9._-]+$/;
 
 function nowTime() {
   return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -82,56 +78,6 @@ function publicPendingEmail(p) {
     id: p.id, groupId: p.group_id, party: p.party, toEmail: p.to_email,
     fromName: p.from_name, groupName: p.group_name, text: p.message_text,
     status: p.status, createdAt: p.created_at
-  };
-}
-
-// The Transaction Account's registration/KYC/balance state — sensitive, so
-// this is only ever sent to the seller themselves or to an admin, never
-// folded into the general groupSummary() that everyone in the room gets.
-function publicSellerAccount(g) {
-  return {
-    groupId: g.id,
-    registered: g.seller_registered,
-    fullName: g.seller_full_name || null,
-    email: g.email_b || null,
-    currency: g.seller_currency || null,
-    currencyLocked: !!g.currency_locked_at,
-    kyc: {
-      status: g.kyc_status,
-      docType: g.kyc_doc_type || null,
-      idFrontUrl: g.kyc_id_front_url || null,
-      idBackUrl: g.kyc_id_back_url || null,
-      proofAddressUrl: g.kyc_proof_address_url || null,
-      selfieUrl: g.kyc_selfie_url || null,
-      submittedAt: g.kyc_submitted_at || null,
-      reviewedAt: g.kyc_reviewed_at || null,
-      rejectionReason: g.kyc_rejection_reason || null
-    },
-    balances: {
-      available: Number(g.balance_available || 0),
-      held: Number(g.balance_held || 0),
-      totalDeposited: Number(g.total_deposited || 0)
-    }
-  };
-}
-
-function publicDeposit(d) {
-  return {
-    id: d.id, groupId: d.group_id, method: d.method, asset: d.asset, network: d.network,
-    referenceCode: d.reference_code, amount: Number(d.amount), status: d.status,
-    notifiedAt: d.notified_at, verifiedBy: d.verified_by, verifiedAt: d.verified_at,
-    rejectionReason: d.rejection_reason
-  };
-}
-
-function publicWithdrawal(w) {
-  return {
-    id: w.id, groupId: w.group_id, method: w.method, asset: w.asset, network: w.network,
-    destination: w.destination, beneficiaryName: w.beneficiary_name, bankName: w.bank_name,
-    bankAccount: w.bank_account, bankSwift: w.bank_swift, bankCountry: w.bank_country,
-    amount: Number(w.amount), amountCurrency: w.amount_currency, amountLedger: Number(w.amount_ledger),
-    status: w.status, statusReason: w.status_reason, statusHistory: w.status_history || [],
-    createdAt: w.created_at, updatedAt: w.updated_at
   };
 }
 
@@ -228,6 +174,9 @@ function registerSocketHandlers(io, socket) {
     io.to('admins').emit('pending-email-created', publicPendingEmail(rec));
   }
 
+  // Money movement (incoming funds, withdrawal status control, Funds Desk).
+  registerFundsHandlers(io, socket, { meta, metaHasMinRole, broadcastGroupsList });
+
   // ---------------- JOIN ROOM ----------------
   socket.on('join-room', async ({ groupId, role, adminKey, sessionToken, email }) => {
     try {
@@ -276,6 +225,8 @@ function registerSocketHandlers(io, socket) {
       socket.rooms.forEach(r => { if (r !== socket.id) socket.leave(r); });
       socket.join(groupId);
       if (isAdmin) socket.join('admins');
+      // Money data goes ONLY to Admin / Super Admin (never a Moderator) via this room.
+      if (hasMinRole(adminRole, 'ADMIN')) socket.join('finance-admins');
 
       activeSockets.set(socket.id, { sessionToken, groupId, isAdmin, adminRole, role: isAdmin ? null : safeRole });
 
@@ -287,6 +238,9 @@ function registerSocketHandlers(io, socket) {
       if (!isAdmin) {
         await store.updateGroup(groupId, safeRole === 'PARTY A' ? { buyer_session_token: sessionToken } : { seller_session_token: sessionToken });
         group = await store.getGroup(groupId);
+        // The seller gets a private room for their Transaction Account so
+        // live money updates can never reach the Buyer in the same chat.
+        if (safeRole === 'PARTY B') socket.join(`seller:${groupId}`);
       }
 
       const [messages, pinnedMessages, unreadCounts, announcements, tasks] = await Promise.all([
@@ -324,20 +278,14 @@ function registerSocketHandlers(io, socket) {
         await broadcastDashboardWidgets();
         const pending = await store.getPendingEmails('pending');
         socket.emit('pending-emails-list', pending.map(publicPendingEmail));
-        // Admin viewing this group gets the seller's Transaction Account state
-        // too (KYC/balances/deposits/withdrawals) — never sent to the buyer.
-        socket.emit('seller-account-state', publicSellerAccount(group));
-        const [deps, wds] = await Promise.all([store.getDepositsForGroup(groupId), store.getWithdrawalsForGroup(groupId)]);
-        socket.emit('deposits-list', { groupId, deposits: deps.map(publicDeposit) });
-        socket.emit('withdrawals-list', { groupId, withdrawals: wds.map(publicWithdrawal) });
+        // Admin / Super Admin viewing this group gets the seller's Transaction
+        // Account state too (KYC/balances/ledger) — never a Moderator, never the buyer.
+        if (hasMinRole(adminRole, 'ADMIN')) await emitSnapshotTo(socket, groupId);
       } else if (safeRole === 'PARTY B') {
         // The Seller's own account — this is the popup trigger: the client
         // shows the "Create your Transaction Account" registration modal
         // whenever seller_registered is still false.
-        socket.emit('seller-account-state', publicSellerAccount(group));
-        const [deps, wds] = await Promise.all([store.getDepositsForGroup(groupId), store.getWithdrawalsForGroup(groupId)]);
-        socket.emit('deposits-list', { groupId, deposits: deps.map(publicDeposit) });
-        socket.emit('withdrawals-list', { groupId, withdrawals: wds.map(publicWithdrawal) });
+        await emitSnapshotTo(socket, groupId);
       }
     } catch (err) {
       console.error('[join-room] error:', err);
@@ -736,7 +684,8 @@ function registerSocketHandlers(io, socket) {
     const updated = await store.getGroup(groupId);
     socket.emit('seller-account-state', publicSellerAccount(updated));
     socket.emit('transaction-account-created', { groupId });
-    io.to('admins').emit('seller-account-updated', publicSellerAccount(updated));
+    io.to('finance-admins').emit('seller-account-updated', publicSellerAccount(updated));
+    await pushAdminLedger(io, groupId); // Funds Desk learns about the new account (and its currency) immediately
     await broadcastGroupsList();
   });
 
@@ -749,6 +698,10 @@ function registerSocketHandlers(io, socket) {
     if (!KYC_DOC_TYPES.has(docType)) return socket.emit('error-msg', 'Please select a valid document type.');
     if (!idFrontUrl || !proofAddressUrl || !selfieUrl) return socket.emit('error-msg', 'ID (front), proof of address, and a selfie are all required.');
     if (docType !== 'passport' && !idBackUrl) return socket.emit('error-msg', 'The back of your ID is required for this document type.');
+    // Admins open these links from the review queue, so only files this server
+    // itself stored are accepted (never a javascript:/external URL).
+    const urlsToCheck = [idFrontUrl, proofAddressUrl, selfieUrl].concat(docType !== 'passport' ? [idBackUrl] : []);
+    if (!urlsToCheck.every((u) => typeof u === 'string' && UPLOAD_URL_RE.test(u))) return socket.emit('error-msg', 'One of your documents was not uploaded correctly. Please upload it again.');
 
     await store.updateGroup(groupId, {
       kyc_status: 'pending',
@@ -762,7 +715,8 @@ function registerSocketHandlers(io, socket) {
     });
     const updated = await store.getGroup(groupId);
     socket.emit('seller-account-state', publicSellerAccount(updated));
-    io.to('admins').emit('kyc-submitted', publicSellerAccount(updated));
+    io.to('finance-admins').emit('kyc-submitted', publicSellerAccount(updated));
+    await pushAdminLedger(io, groupId);
   });
 
   socket.on('admin-get-kyc-queue', async () => {
@@ -785,8 +739,12 @@ function registerSocketHandlers(io, socket) {
       kyc_rejection_reason: decision === 'rejected' ? (sanitizeText(reason, 500) || 'Not specified') : null
     });
     const updated = await store.getGroup(groupId);
-    io.to(groupId).emit('seller-account-state', publicSellerAccount(updated));
-    io.to('admins').emit('kyc-resolved', publicSellerAccount(updated));
+    await pushSellerState(io, groupId, {
+      kind: 'kyc',
+      title: decision === 'verified' ? 'Identity verified' : 'Identity verification not approved',
+      body: decision === 'verified' ? 'You can now request withdrawals at any time.' : (updated.kyc_rejection_reason || 'Please resubmit your documents.')
+    });
+    io.to('finance-admins').emit('kyc-resolved', publicSellerAccount(updated));
     if (updated.email_b) await notifyKycStatus(updated.email_b, { groupName: updated.name, status: decision, reason: updated.kyc_rejection_reason });
   });
 
@@ -796,21 +754,18 @@ function registerSocketHandlers(io, socket) {
     if (!group) return;
     if (!accountActionLimiter.allow(meta().sessionToken)) return socket.emit('error-msg', 'Too many attempts — please wait a moment and try again.');
     const amt = Number(amount);
-    if (!Number.isFinite(amt) || amt <= 0) return socket.emit('error-msg', 'Please enter a valid amount.');
+    if (!Number.isFinite(amt) || amt <= 0 || amt > 999999999.99) return socket.emit('error-msg', 'Please enter a valid amount.');
     // Deposits are crypto-only — bank deposit was intentionally removed.
     if (!CRYPTO_ASSETS.has(asset)) return socket.emit('error-msg', 'Please choose a valid asset.');
 
-    const dep = await store.createDeposit({ groupId, method: 'crypto', asset, network: network || null, amount: amt });
+    const depAmt = F.round2(amt);
+    const dep = await store.createDeposit({ groupId, method: 'crypto', asset, network: network || null, amount: depAmt });
     // Recorded immediately as "Held in Vault" — total_deposited moves now,
     // available balance never moves until an admin confirms the funds arrived.
-    await store.updateGroup(groupId, {
-      total_deposited: Number(group.total_deposited || 0) + amt,
-      balance_held: Number(group.balance_held || 0) + amt
-    });
-    const updated = await store.getGroup(groupId);
-    socket.emit('seller-account-state', publicSellerAccount(updated));
+    await store.adjustBalances(groupId, { held: depAmt, total: depAmt });
+    await pushSellerState(io, groupId, null);
     socket.emit('deposit-created', publicDeposit(dep));
-    io.to('admins').emit('deposit-created', publicDeposit(dep));
+    io.to('finance-admins').emit('deposit-created', publicDeposit(dep));
     await broadcastGroupsList();
   });
 
@@ -828,35 +783,26 @@ function registerSocketHandlers(io, socket) {
     const group = await store.getGroup(dep.group_id);
     if (!group) return;
     const m = meta();
-    const amt = Number(dep.amount);
-    if (decision === 'verified') {
-      await store.updateGroup(dep.group_id, {
-        balance_held: Math.max(0, Number(group.balance_held || 0) - amt),
-        balance_available: Number(group.balance_available || 0) + amt
-      });
-    } else {
-      // Rejected: reverse the Total Deposited bump and release the hold —
-      // it never became available.
-      await store.updateGroup(dep.group_id, {
-        balance_held: Math.max(0, Number(group.balance_held || 0) - amt),
-        total_deposited: Math.max(0, Number(group.total_deposited || 0) - amt)
-      });
-    }
+    const amt = F.round2(dep.amount);
+    // Verified: held -> available. Rejected: release the hold and back out the
+    // Total Deposited bump — it never became available.
+    const moved = await store.adjustBalances(dep.group_id, decision === 'verified' ? { held: -amt, available: amt } : { held: -amt, total: -amt });
+    if (!moved) return socket.emit('error-msg', 'The seller\'s held balance does not cover this deposit — please check the ledger.');
     const resolved = await store.resolveDeposit(depositId, { status: decision, verifiedBy: m.sessionToken, rejectionReason: decision === 'rejected' ? (sanitizeText(reason, 500) || 'Not specified') : null });
     const updatedGroup = await store.getGroup(dep.group_id);
-    io.to(dep.group_id).emit('seller-account-state', publicSellerAccount(updatedGroup));
-    io.to(dep.group_id).emit('deposit-updated', publicDeposit(resolved));
-    io.to('admins').emit('deposit-resolved', publicDeposit(resolved));
+    await pushSellerState(io, dep.group_id, {
+      kind: 'deposit',
+      title: decision === 'verified' ? 'Deposit confirmed' : 'Deposit could not be confirmed',
+      body: decision === 'verified' ? `${amt.toFixed(2)} ${updatedGroup.seller_currency || ''} is now available.`.trim() : (resolved.rejection_reason || 'Not specified')
+    });
+    io.to('finance-admins').emit('deposit-resolved', publicDeposit(resolved));
     if (updatedGroup.email_b) await notifyDepositStatus(updatedGroup.email_b, { groupName: updatedGroup.name, amount: `${amt} ${updatedGroup.seller_currency || ''}`.trim(), status: decision, reason: resolved.rejection_reason });
     await broadcastGroupsList();
   });
 
-  // ---- Withdrawals (full state machine — §7 of the blueprint) ----
-  const WITHDRAWAL_TRANSITIONS = {
-    pending: ['held_in_vault', 'rejected'],
-    held_in_vault: ['processing', 'failed'],
-    processing: ['completed', 'failed']
-  };
+  // ---- Withdrawals ----
+  // The admin side of the state machine (pending -> held in vault -> processing
+  // -> completed, or declined) lives in fundsHandlers.js. The seller's request is here.
 
   socket.on('request-withdrawal', async ({ groupId, method, asset, network, destination, beneficiaryName, bankName, bankAccount, bankSwift, bankCountry, amount, amountCurrency }) => {
     const group = await requireSellerOwnGroup(groupId);
@@ -864,7 +810,7 @@ function registerSocketHandlers(io, socket) {
     if (!accountActionLimiter.allow(meta().sessionToken)) return socket.emit('error-msg', 'Too many attempts — please wait a moment and try again.');
     if (group.kyc_status !== 'verified') return socket.emit('error-msg', 'Your identity must be verified before you can withdraw.');
     if (!group.seller_currency) return socket.emit('error-msg', 'Your account currency has not been set yet.');
-    const amt = Number(amount);
+    const amt = F.round2(Number(amount));
     if (!Number.isFinite(amt) || amt <= 0) return socket.emit('error-msg', 'Please enter a valid amount.');
     if (!['crypto', 'bank'].includes(method)) return socket.emit('error-msg', 'Please choose a withdrawal method.');
 
@@ -892,53 +838,14 @@ function registerSocketHandlers(io, socket) {
       amount: amt, amountCurrency: ccy, amountLedger: Math.round(ledgerAmount * 100) / 100
     });
     socket.emit('withdrawal-created', publicWithdrawal(wd));
-    io.to('admins').emit('withdrawal-created', publicWithdrawal(wd));
+    io.to('finance-admins').emit('withdrawal-created', publicWithdrawal(wd));
+    await pushSellerState(io, groupId, null); // keeps the seller's other devices + the Funds Desk in step
   });
 
   socket.on('admin-get-withdrawals-queue', async () => {
     if (!metaHasMinRole('ADMIN')) return;
     const pending = await store.getPendingWithdrawals();
     socket.emit('withdrawals-queue-list', pending.map(publicWithdrawal));
-  });
-
-  socket.on('admin-advance-withdrawal', async ({ withdrawalId, toStatus, reason }) => {
-    if (!metaHasMinRole('ADMIN')) return;
-    const wd = await store.getWithdrawalById(withdrawalId);
-    if (!wd) return;
-    const allowed = WITHDRAWAL_TRANSITIONS[wd.status] || [];
-    if (!allowed.includes(toStatus)) return socket.emit('error-msg', `Cannot move a withdrawal from "${wd.status}" to "${toStatus}".`);
-    if (['rejected', 'failed'].includes(toStatus) && !sanitizeText(reason, 500)) return socket.emit('error-msg', 'A reason is required to decline or fail a withdrawal.');
-    const group = await store.getGroup(wd.group_id);
-    if (!group) return;
-    const m = meta();
-    const amt = Number(wd.amount_ledger);
-
-    if (toStatus === 'held_in_vault') {
-      // Earmark the funds: available -> held.
-      if (amt > Number(group.balance_available || 0)) return socket.emit('error-msg', 'Seller no longer has sufficient available balance for this withdrawal.');
-      await store.updateGroup(wd.group_id, {
-        balance_available: Number(group.balance_available || 0) - amt,
-        balance_held: Number(group.balance_held || 0) + amt
-      });
-    } else if (toStatus === 'completed') {
-      await store.updateGroup(wd.group_id, { balance_held: Math.max(0, Number(group.balance_held || 0) - amt) });
-    } else if (['rejected', 'failed'].includes(toStatus) && wd.status === 'held_in_vault') {
-      // Was already earmarked (held) — return it to available.
-      await store.updateGroup(wd.group_id, {
-        balance_held: Math.max(0, Number(group.balance_held || 0) - amt),
-        balance_available: Number(group.balance_available || 0) + amt
-      });
-    }
-    // A straight pending -> rejected needs no balance movement at all — the
-    // funds were never moved out of available in the first place.
-
-    const updatedWd = await store.advanceWithdrawal(withdrawalId, { status: toStatus, reason: sanitizeText(reason, 500) || null, by: m.sessionToken });
-    const updatedGroup = await store.getGroup(wd.group_id);
-    io.to(wd.group_id).emit('seller-account-state', publicSellerAccount(updatedGroup));
-    io.to(wd.group_id).emit('withdrawal-updated', publicWithdrawal(updatedWd));
-    io.to('admins').emit('withdrawal-resolved', publicWithdrawal(updatedWd));
-    if (updatedGroup.email_b) await notifyWithdrawalStatus(updatedGroup.email_b, { groupName: updatedGroup.name, amount: wd.amount, currency: wd.amount_currency, status: toStatus, reason: updatedWd.status_reason });
-    await broadcastGroupsList();
   });
 
   // Admin inspecting one specific group's full Transaction Account (used
@@ -948,10 +855,7 @@ function registerSocketHandlers(io, socket) {
     if (!metaHasMinRole('ADMIN')) return;
     const group = await store.getGroup(groupId);
     if (!group) return;
-    socket.emit('seller-account-state', publicSellerAccount(group));
-    const [deps, wds] = await Promise.all([store.getDepositsForGroup(groupId), store.getWithdrawalsForGroup(groupId)]);
-    socket.emit('deposits-list', { groupId, deposits: deps.map(publicDeposit) });
-    socket.emit('withdrawals-list', { groupId, withdrawals: wds.map(publicWithdrawal) });
+    await emitSnapshotTo(socket, groupId);
   });
 
   // The Seller's own on-demand refresh — fired every time they open their
@@ -960,10 +864,7 @@ function registerSocketHandlers(io, socket) {
   socket.on('get-my-seller-account', async ({ groupId }) => {
     const group = await requireSellerOwnGroup(groupId);
     if (!group) return;
-    socket.emit('seller-account-state', publicSellerAccount(group));
-    const [deps, wds] = await Promise.all([store.getDepositsForGroup(groupId), store.getWithdrawalsForGroup(groupId)]);
-    socket.emit('deposits-list', { groupId, deposits: deps.map(publicDeposit) });
-    socket.emit('withdrawals-list', { groupId, withdrawals: wds.map(publicWithdrawal) });
+    await emitSnapshotTo(socket, groupId);
   });
 
   // ---------------- ADMIN+: GROUP BANNER (Branding Center) ----------------
