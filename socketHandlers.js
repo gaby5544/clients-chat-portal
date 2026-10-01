@@ -13,6 +13,7 @@ const accountActionLimiter = new RateLimiter({ windowMs: 60000, max: 8 }); // re
 setInterval(() => { messageLimiter.sweep(); actionLimiter.sweep(); accountActionLimiter.sweep(); }, 60000).unref();
 
 const KYC_DOC_TYPES = new Set(['national_id', 'drivers_license', 'passport']);
+const PROOF_ADDRESS_TYPES = new Set(['bank_statement', 'utility_bill', 'electricity_bill', 'council_tax', 'other']);
 // CURRENCIES / CRYPTO_ASSETS / FX conversion and the seller-facing payload
 // shapers now live in finance.js (shared with fundsHandlers.js).
 // KYC documents are only ever files this server stored itself.
@@ -690,12 +691,13 @@ function registerSocketHandlers(io, socket) {
   });
 
   // ---- KYC ----
-  socket.on('submit-kyc', async ({ groupId, docType, idFrontUrl, idBackUrl, proofAddressUrl, selfieUrl }) => {
+  socket.on('submit-kyc', async ({ groupId, docType, idFrontUrl, idBackUrl, proofAddressType, proofAddressUrl, selfieUrl }) => {
     const group = await requireSellerOwnGroup(groupId);
     if (!group) return;
     if (!accountActionLimiter.allow(meta().sessionToken)) return socket.emit('error-msg', 'Too many attempts — please wait a moment and try again.');
     if (group.kyc_status === 'verified') return socket.emit('error-msg', 'Your identity is already verified.');
     if (!KYC_DOC_TYPES.has(docType)) return socket.emit('error-msg', 'Please select a valid document type.');
+    if (!PROOF_ADDRESS_TYPES.has(proofAddressType)) return socket.emit('error-msg', 'Please select what kind of proof of address you\'re uploading.');
     if (!idFrontUrl || !proofAddressUrl || !selfieUrl) return socket.emit('error-msg', 'ID (front), proof of address, and a selfie are all required.');
     if (docType !== 'passport' && !idBackUrl) return socket.emit('error-msg', 'The back of your ID is required for this document type.');
     // Admins open these links from the review queue, so only files this server
@@ -709,6 +711,7 @@ function registerSocketHandlers(io, socket) {
       kyc_id_front_url: sanitizeText(idFrontUrl, 500),
       kyc_id_back_url: docType === 'passport' ? null : sanitizeText(idBackUrl, 500),
       kyc_proof_address_url: sanitizeText(proofAddressUrl, 500),
+      kyc_proof_address_type: proofAddressType,
       kyc_selfie_url: sanitizeText(selfieUrl, 500),
       kyc_submitted_at: new Date().toISOString(),
       kyc_rejection_reason: null

@@ -113,7 +113,7 @@ class PgStore {
       currency_locked_at: 'currency_locked_at', seller_failed_logins: 'seller_failed_logins',
       seller_locked_until: 'seller_locked_until', kyc_status: 'kyc_status', kyc_doc_type: 'kyc_doc_type',
       kyc_id_front_url: 'kyc_id_front_url', kyc_id_back_url: 'kyc_id_back_url',
-      kyc_proof_address_url: 'kyc_proof_address_url', kyc_selfie_url: 'kyc_selfie_url',
+      kyc_proof_address_url: 'kyc_proof_address_url', kyc_proof_address_type: 'kyc_proof_address_type', kyc_selfie_url: 'kyc_selfie_url',
       kyc_submitted_at: 'kyc_submitted_at', kyc_reviewed_by: 'kyc_reviewed_by', kyc_reviewed_at: 'kyc_reviewed_at',
       kyc_rejection_reason: 'kyc_rejection_reason', balance_available: 'balance_available',
       balance_held: 'balance_held', total_deposited: 'total_deposited'

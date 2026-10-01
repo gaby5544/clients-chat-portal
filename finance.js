@@ -75,6 +75,7 @@ function publicSellerAccount(g) {
       idFrontUrl: g.kyc_id_front_url || null,
       idBackUrl: g.kyc_id_back_url || null,
       proofAddressUrl: g.kyc_proof_address_url || null,
+      proofAddressType: g.kyc_proof_address_type || null,
       selfieUrl: g.kyc_selfie_url || null,
       submittedAt: g.kyc_submitted_at || null,
       reviewedAt: g.kyc_reviewed_at || null,

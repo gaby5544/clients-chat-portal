@@ -4,6 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>Quantum Secure Transaction Desk</title>
+<!-- Brand favicon: SVG (scales perfectly on modern browsers) + PNG/apple-touch fallbacks
+     so the logo shows in the browser tab and on a home-screen bookmark on any device. -->
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+CiAgPGRlZnM+CiAgICA8bGluZWFyR3JhZGllbnQgaWQ9ImciIHgxPSIwIiB5MT0iMCIgeDI9IjEiIHkyPSIxIj4KICAgICAgPHN0b3Agb2Zmc2V0PSIwIiBzdG9wLWNvbG9yPSIjMzhiZGY4Ii8+CiAgICAgIDxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iIzhiNWNmNiIvPgogICAgPC9saW5lYXJHcmFkaWVudD4KICA8L2RlZnM+CiAgPHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTYiIGZpbGw9InVybCgjZykiLz4KICA8cGF0aCBkPSJNMzIgMTAgTDQ4IDE3IFYzMCBDNDggNDEgNDEuNSA0OC41IDMyIDUzIEMyMi41IDQ4LjUgMTYgNDEgMTYgMzAgVjE3IFoiCiAgICAgICAgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMDQwNjBjIiBzdHJva2Utd2lkdGg9IjQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz4KICA8cGF0aCBkPSJNMjQgMzEgTDI5LjUgMzcgTDQxIDI0IiBmaWxsPSJub25lIiBzdHJva2U9IiMwNDA2MGMiIHN0cm9rZS13aWR0aD0iNC4yIgogICAgICAgIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPgo8L3N2Zz4K">
+<link rel="icon" type="image/png" sizes="32x32" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAABmJLR0QA/wD/AP+gvaeTAAAFWUlEQVRYhb2XfWyNVxjAf+e8V28/FFVV67ciXVTLbEN1bdFalbCY+AMVlbAmy4KFSLCR7I/RLOnEH0PD6qMkM9QktTBjPjubGlMmVJS2omr9vr33tve+Z39UL7fc917Z5vzzvud53/P8zvOc53nOOYJeLb3MniR0tUQqMoUiTuoECQVCB/n06d5XCAXyBbmr3yKVqBJOVeqnHEXFy4IbnueJnpecY8rcrtu/lpAvdaQXpb7C3fpSF00otWzPioAStwnkHFNmi7L/KBWTn/38X8NdcqUptWbnysACAAlgUfbNrwmOVAh0sXFJQceHACK9zJ4klLr6Km53drRRe34/93/ZBUB8Wh6xE+bjZw72Bu+Wd8vqncJ/hJhUZtssnCz3BW6tv0f1yR3UXtiPw9rmFrx9/IOJHT+fhLQl9B0Y5w3+9JtaJSYftd0QipFG8OZbF6g+vo3HV4+jlA7AoBGpDJuSj1Bw99R2GqoudAeVkEQmZpOQls+QoakGcJA65WLKD7Y2qdP3ZfDHl49x98hXtD24DoA0mYkcN5thk/IJiRrlNsnW2kpun9lOzZVSnA47ACERoxiduZrYN3M8LIloFlmlNuXJ8p+WRqF32TD3CyM2I4+hGYvxDwozDLjO1gbuXCymqnwX1vYGNJM/CzfUeFwSk9Ga6102ALI2/YGmmX2K9oCgMEZnriY5fTn7Po/C6bAZZow0ivae5itcKMDhRCowSbNrvGFwG+W5q1r5CL91dhv7P4uk+mopQn9uvIGXTUZFxmWBD/DqK4epKFsPSqGcDp8NkEYV7nkFRvDHVRf59eAyUIqEcXkMT57ruwFG5bW3C2srSnlw+ZDbfy0P/+LM3oU4HXZiR84gZUbBKxlgMqrtWp8AnF1WdLsVk/TjUsnHKN2Bw9JEQsoSOpoecrp4Hp3WVgbHjiN9zlY0JREKHLaO7grpF2joPWm0sZiDBgLQ1d6IRCMx61MAKo6so6p8N6eL52FpqaPfoOFkzivBTwtw6ei0NgJgNocY7w9GORo0KA6AltobCAXJU1czIiUPpXQula6i+dFNAvoOJnvhdwT6h7jpaHp0E4D+A+IMNieFNMrRsPjxADy+fc41cNysAuKSZj11bxBTc/fTr3/MCzrq7p0FICJ6gkf4S7LAfTKRiTkAVFccQO+0IXTQkKTN3co72RvIXnSIsCGjX4A7u6zcrjwAQHz8NI9wL5UQQqPGEBozFrulkVtnt7nkmvAjKfUTwiPffqn3/ry0HZu1ifA3xhIePsYj3KASPnPZW9PXgxBcP1VIc12l8UFDQeOjSiouFgKC1PT1xvAeDxilyZC4VEa8m4uzy8rPe3OxNNV4hLc311B2cAEOh5XE5FxiIlIN4R5joDdg/IyNhMelYGmpo6woh7/rrr0w5snDaxzek0N720MioycyZdImr/CeGGjxdoYzSTNZC/YREZ9BR3s9R7+dztVzheiddnSHnSvnCzlcMh2LpZ7omAw+mFmCSfp5h+uqVcz/xloudCb4coZTjk5+O/EFlb8XgVIE948GoK2lBhCMGfsRae+t9xEOUolKLWnauhCJeN/7ARIkGrHDphAZM5Enj67T3FhFp72V0LBEcmYWMTopD01oPsGfyveJBVtUP0233REw2AjeWwlOnft3jiMUxMdnu/aAV4A7NYeWLAAWbe6YI3TxvVQIX+DGQesTHE2xZe2OwOUSYPeKwEOaUmuEjno9cHUyVAasArqvZgA7VwYWSJ2FQtH4P8KdmmJLqAycnl8kuoBnt+OetvjLtjB/TEuFk9lCieFCVwP+JbxdKlGtdHXC5NB2ri0233ye9w+6LoVmDXoUKQAAAABJRU5ErkJggg==">
+<link rel="icon" type="image/png" sizes="16x16" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABmJLR0QA/wD/AP+gvaeTAAACXElEQVQ4jYWTX0iTURiHn3O+zZZu6ZzTmK3EP9HCixloiTbIIggviiKKIi8iDLrypvK2LqKrulHBWEmBF0VUUgRKuBKlKCmJyogpOdQYkbQZus3v7OvCnPtE6Oo9533Pc9739zscARDoX/DKlLwp0xzUFA5NgVSwHA20zBo0RUykebxRV+3BNntUBPoXvGJJjGlKFK45uB6ciRbFRMJq22X519kEi0SCmZGHfB8MIgyoDJyjrOYYUtoyFwqdCnty8Zpo6kvEV8ZW8RiR511Mv7pHwbYaqprOI9IwMdjN3NQHKnefobrhAjZr/kqzOUu25siLO8TCozRefMYmV3lm3NKyAAvRSd49usQ30UNNY9tKrVBm6zKWUrgq6kywVJCcmyU285kSbx2GnjLVZLZhMg3CMBum/sQIBU8wHw0jDBDpNaZmuy2FhlBpZt8/JRzqhmSSobstFJX6qWloA5VGQ8vA2vIEq09lszlJxn/iKvXzNdTJQMchLNLG3uYbyLRgcT5Krs1lelqZvSkuryc6HsKRV8KBs/cpKKpi//HbWLBCKsXM5Eu2ePZkSTAwmegs9uHcvJPwSA+FLh/7jnazwWJHUzA+2oPbXY3buWMVNpu4HGubr/JlqJOpj32Z3MSnJ4y96SAQuGKCNQXiVNdiRCq8GSk6xH+MM9B7Gs/WeoQBs5HXHDnci9vpM8GaEjEpldGXDWsKXC4fJ1uHcdg9OPI8tLQMrwODVEa/aL1u5OvWxFups329T2MyLDun8ysH/PJWu4glrbZai05QKvH7/7ARl4oHOeC/HMyd/guqcUjMcmz8rAAAAABJRU5ErkJggg==">
+<link rel="apple-touch-icon" sizes="180x180" href="data:image/png;base64,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">
+<meta name="theme-color" content="#0a0e18">
 <script src="/socket.io/socket.io.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Sora:wght@600;700;800&display=swap" rel="stylesheet">
@@ -436,7 +443,7 @@
         <label class="branding-field">Payment For (purpose)<textarea id="rfPurpose" class="admin-notes-area" style="width:100%; height:56px;" placeholder="e.g. Payment for 10kg gold bullion order #A17"></textarea></label>
         <div style="display:flex; gap:12px;">
           <label class="branding-field" style="flex:1;">Method
-            <select id="rfMethod" class="message-input" style="width:100%;" onchange="toggleRecordFundsFields()">
+            <select id="rfMethod" class="message-input csel" style="width:100%;" onchange="toggleRecordFundsFields()">
               <option value="bank_transfer">Bank Transfer</option>
               <option value="wire">Wire Transfer (SWIFT)</option>
               <option value="crypto">Cryptocurrency</option>
@@ -450,21 +457,21 @@
         </div>
         <div id="rfCryptoFields" style="display:none; gap:12px; flex-direction:row;">
           <label class="branding-field" style="flex:1;">Asset
-            <select id="rfAsset" class="message-input" style="width:100%;"><option value="USDT">USDT</option><option value="BTC">BTC</option><option value="ETH">ETH</option></select>
+            <select id="rfAsset" class="message-input csel" style="width:100%;"><option value="USDT">USDT</option><option value="BTC">BTC</option><option value="ETH">ETH</option></select>
           </label>
           <label class="branding-field" style="flex:1;">Network (optional)<input type="text" id="rfNetwork" class="message-input" style="width:100%;" placeholder="e.g. TRC20"></label>
         </div>
         <div style="display:flex; gap:12px;">
           <label class="branding-field" style="flex:1;">Amount<input type="number" id="rfAmount" class="message-input" style="width:100%;" placeholder="0.00" min="0" step="0.01"></label>
           <label class="branding-field" style="flex:1;">Currency
-            <select id="rfCurrency" class="message-input" style="width:100%;">
+            <select id="rfCurrency" class="message-input csel" style="width:100%;">
               <option value="USD">USD</option><option value="GBP">GBP</option><option value="EUR">EUR</option>
             </select>
           </label>
         </div>
         <label class="branding-field">Bank Reference / Transaction Hash (optional)<input type="text" id="rfExternalRef" class="message-input" style="width:100%;"></label>
         <label class="branding-field">Treatment
-          <select id="rfTreatment" class="message-input" style="width:100%;">
+          <select id="rfTreatment" class="message-input csel" style="width:100%;">
             <option value="credit">Credit to available balance now</option>
             <option value="hold">Hold in vault (pending clearance)</option>
           </select>
@@ -494,7 +501,7 @@
         <label class="branding-field">Password<input type="password" id="txRegPasswordInput" class="message-input" style="width:100%;" placeholder="At least 8 characters"></label>
         <label class="branding-field">Confirm Password<input type="password" id="txRegPasswordConfirmInput" class="message-input" style="width:100%;" placeholder="Re-enter your password"></label>
         <label class="branding-field">Account Currency
-          <select id="txRegCurrencyInput" class="message-input" style="width:100%;">
+          <select id="txRegCurrencyInput" class="message-input csel" style="width:100%;">
             <option value="USD">USD — US Dollar</option>
             <option value="GBP">GBP — British Pound</option>
             <option value="EUR">EUR — Euro</option>
@@ -588,7 +595,6 @@
       <div class="tx-page hidden" id="txPageTransactions">
         <div class="tx-panel" style="margin-bottom:16px;">
           <div class="tx-panel-head"><span>Incoming payments</span></div>
-          <p style="font-size:0.76rem; color:var(--text-muted); margin:-4px 0 6px;">Funds your Desk Officer has recorded against this account — who paid, and what for.</p>
           <div id="txIncomingList"><p class="ledger-empty">No incoming payments recorded yet.</p></div>
         </div>
         <div class="tx-panel">
@@ -610,19 +616,19 @@
           </div>
           <div class="create-group-form" id="txWithdrawForm">
             <label class="branding-field">Method
-              <select id="txWithdrawMethod" class="message-input" style="width:100%;" onchange="toggleTxWithdrawFields()">
+              <select id="txWithdrawMethod" class="message-input csel" style="width:100%;" onchange="toggleTxWithdrawFields()">
                 <option value="crypto">Crypto</option>
                 <option value="bank">Bank Transfer</option>
               </select>
             </label>
             <div id="txWithdrawCryptoFields">
               <label class="branding-field">Asset
-                <select id="txWdAsset" class="message-input" style="width:100%;">
+                <select id="txWdAsset" class="message-input csel" style="width:100%;">
                   <option value="USDT">USDT</option><option value="BTC">BTC</option><option value="ETH">ETH</option>
                 </select>
               </label>
               <label class="branding-field">Network
-                <select id="txWdNetwork" class="message-input" style="width:100%;">
+                <select id="txWdNetwork" class="message-input csel" style="width:100%;">
                   <option value="TRC20">TRC20</option><option value="BEP20">BEP20</option>
                 </select>
               </label>
@@ -680,12 +686,12 @@
       <p style="color:var(--text-muted); font-size:0.78rem; margin:0 0 14px;">This records that you sent crypto — it is not proof of payment. The Desk Officer confirms it on-chain before it becomes available.</p>
       <div class="create-group-form">
         <label class="branding-field">Asset
-          <select id="txDepositAsset" class="message-input" style="width:100%;">
+          <select id="txDepositAsset" class="message-input csel" style="width:100%;">
             <option value="USDT">USDT</option><option value="BTC">BTC</option><option value="ETH">ETH</option>
           </select>
         </label>
         <label class="branding-field">Network
-          <select id="txDepositNetwork" class="message-input" style="width:100%;">
+          <select id="txDepositNetwork" class="message-input csel" style="width:100%;">
             <option value="TRC20">TRC20</option><option value="BEP20">BEP20</option>
           </select>
         </label>
@@ -700,24 +706,37 @@
 
 <!-- TRANSACTION ACCOUNT — KYC STEP-BY-STEP WIZARD (seller only) -->
 <div class="modal-overlay hidden" id="txKycWizardModal">
-  <div class="modal-box">
+  <div class="modal-box wide">
     <div class="modal-header"><span><i class="fa-solid fa-id-card"></i> Verify Your Identity</span><i class="fa-solid fa-xmark" onclick="closeModal('txKycWizardModal')"></i></div>
     <div class="modal-body">
       <div class="tx-wizard-steps" id="txWizardStepsIndicator"></div>
+      <div class="tx-wizard-step-count" id="txWizardStepCount"></div>
 
       <div class="tx-wizard-step" id="txWizStep0">
-        <label class="branding-field">Document Type
-          <select id="txKycDocType" class="message-input" style="width:100%;" onchange="renderTxKycWizard()">
-            <option value="passport">Passport</option>
-            <option value="national_id">National ID Card</option>
-            <option value="drivers_license">Driver's License</option>
-          </select>
-        </label>
-        <p style="font-size:0.76rem; color:var(--text-muted); margin-top:10px;">Choose the document you'll upload, then continue — you'll upload one item at a time.</p>
+        <div class="tx-wizard-step-head">
+          <div class="tx-wizard-step-icon"><i class="fa-solid fa-id-card"></i></div>
+          <div>
+            <div class="tx-wizard-title">Choose your ID document</div>
+            <p class="tx-wizard-sub">Select the government-issued document you'll upload. You'll be asked for the front — and the back, where applicable.</p>
+          </div>
+        </div>
+        <select id="txKycDocType" class="csel-native-hidden">
+          <option value="passport">Passport</option>
+          <option value="national_id">National ID Card</option>
+          <option value="drivers_license">Driver's License</option>
+        </select>
+        <div class="tx-doc-grid" id="txDocTypeGrid">
+          <button type="button" class="tx-doc-card" data-value="passport" onclick="selectTxKycDocType('passport')"><i class="fa-solid fa-passport"></i><span>Passport</span></button>
+          <button type="button" class="tx-doc-card" data-value="national_id" onclick="selectTxKycDocType('national_id')"><i class="fa-solid fa-id-card-clip"></i><span>National ID Card</span></button>
+          <button type="button" class="tx-doc-card" data-value="drivers_license" onclick="selectTxKycDocType('drivers_license')"><i class="fa-solid fa-id-badge"></i><span>Driver's License</span></button>
+        </div>
       </div>
 
       <div class="tx-wizard-step hidden" id="txWizStep1">
-        <div class="tx-wizard-title" id="txWizStep1Title">ID — Front</div>
+        <div class="tx-wizard-step-head">
+          <div class="tx-wizard-step-icon"><i class="fa-solid fa-id-card"></i></div>
+          <div><div class="tx-wizard-title" id="txWizStep1Title">ID — Front</div><p class="tx-wizard-sub">The front side, fully visible, with all four corners in frame.</p></div>
+        </div>
         <label class="tx-upload-zone" for="txKycIdFront" id="txKycIdFrontZone">
           <img class="tx-upload-preview hidden" id="txKycIdFrontPreview" alt="">
           <i class="fa-solid fa-cloud-arrow-up tx-upload-icon"></i>
@@ -728,7 +747,10 @@
         <div class="tx-wizard-status" id="txWizStep1Status"></div>
       </div>
       <div class="tx-wizard-step hidden" id="txWizStep2">
-        <div class="tx-wizard-title">ID — Back</div>
+        <div class="tx-wizard-step-head">
+          <div class="tx-wizard-step-icon"><i class="fa-solid fa-id-card"></i></div>
+          <div><div class="tx-wizard-title">ID — Back</div><p class="tx-wizard-sub">The reverse side, fully visible.</p></div>
+        </div>
         <label class="tx-upload-zone" for="txKycIdBack" id="txKycIdBackZone">
           <img class="tx-upload-preview hidden" id="txKycIdBackPreview" alt="">
           <i class="fa-solid fa-cloud-arrow-up tx-upload-icon"></i>
@@ -738,10 +760,28 @@
         <input type="file" id="txKycIdBack" accept="image/*,.pdf" class="tx-file-hidden" onchange="handleTxKycFileChosen(this,'idBack')">
         <div class="tx-wizard-status" id="txWizStep2Status"></div>
       </div>
+
       <div class="tx-wizard-step hidden" id="txWizStep3">
-        <div class="tx-wizard-title">Proof of Address</div>
-        <p style="font-size:0.72rem; color:var(--text-faint); margin:0 0 8px;">A recent utility bill or bank statement showing your name and address.</p>
-        <label class="tx-upload-zone" for="txKycProofAddress" id="txKycProofAddressZone">
+        <div class="tx-wizard-step-head">
+          <div class="tx-wizard-step-icon"><i class="fa-solid fa-house-chimney"></i></div>
+          <div><div class="tx-wizard-title">Proof of Address</div><p class="tx-wizard-sub">Select the document type, then upload it.</p></div>
+        </div>
+        <select id="txKycProofAddressType" class="csel-native-hidden">
+          <option value="bank_statement">Bank Statement</option>
+          <option value="utility_bill">Utility Bill</option>
+          <option value="electricity_bill">Electricity Bill</option>
+          <option value="council_tax">Council Tax / Local Tax Bill</option>
+          <option value="other">Other Official Document</option>
+        </select>
+        <div class="tx-doc-grid narrow" id="txProofAddressTypeGrid">
+          <button type="button" class="tx-doc-card" data-value="bank_statement" onclick="selectTxKycProofAddressType('bank_statement')"><i class="fa-solid fa-building-columns"></i><span>Bank Statement</span></button>
+          <button type="button" class="tx-doc-card" data-value="utility_bill" onclick="selectTxKycProofAddressType('utility_bill')"><i class="fa-solid fa-droplet"></i><span>Utility Bill</span></button>
+          <button type="button" class="tx-doc-card" data-value="electricity_bill" onclick="selectTxKycProofAddressType('electricity_bill')"><i class="fa-solid fa-bolt"></i><span>Electricity Bill</span></button>
+          <button type="button" class="tx-doc-card" data-value="council_tax" onclick="selectTxKycProofAddressType('council_tax')"><i class="fa-solid fa-landmark"></i><span>Council Tax Bill</span></button>
+          <button type="button" class="tx-doc-card" data-value="other" onclick="selectTxKycProofAddressType('other')"><i class="fa-solid fa-file-lines"></i><span>Other</span></button>
+        </div>
+        <p class="tx-doc-note"><i class="fa-solid fa-circle-info"></i>Must be dated within the last 3 months and clearly show your full name and address.</p>
+        <label class="tx-upload-zone" for="txKycProofAddress" id="txKycProofAddressZone" style="margin-top:14px;">
           <img class="tx-upload-preview hidden" id="txKycProofAddressPreview" alt="">
           <i class="fa-solid fa-cloud-arrow-up tx-upload-icon"></i>
           <span class="tx-upload-title">Tap to upload</span>
@@ -750,9 +790,12 @@
         <input type="file" id="txKycProofAddress" accept="image/*,.pdf" class="tx-file-hidden" onchange="handleTxKycFileChosen(this,'proofAddress')">
         <div class="tx-wizard-status" id="txWizStep3Status"></div>
       </div>
+
       <div class="tx-wizard-step hidden" id="txWizStep4">
-        <div class="tx-wizard-title">Selfie</div>
-        <p style="font-size:0.72rem; color:var(--text-faint); margin:0 0 8px;">A clear photo of your face, taken just now.</p>
+        <div class="tx-wizard-step-head">
+          <div class="tx-wizard-step-icon"><i class="fa-solid fa-camera-retro"></i></div>
+          <div><div class="tx-wizard-title">Selfie</div><p class="tx-wizard-sub">A clear photo of your face, taken just now — good lighting, no sunglasses or hat.</p></div>
+        </div>
         <label class="tx-upload-zone" for="txKycSelfie" id="txKycSelfieZone">
           <img class="tx-upload-preview hidden" id="txKycSelfiePreview" alt="">
           <i class="fa-solid fa-cloud-arrow-up tx-upload-icon"></i>
@@ -762,9 +805,13 @@
         <input type="file" id="txKycSelfie" accept="image/*" capture="user" class="tx-file-hidden" onchange="handleTxKycFileChosen(this,'selfie')">
         <div class="tx-wizard-status" id="txWizStep4Status"></div>
       </div>
+
       <div class="tx-wizard-step hidden" id="txWizStep5">
-        <p style="font-size:0.82rem; margin:0 0 10px;">Everything's uploaded — ready to submit for review.</p>
-        <div id="txWizSummary" style="font-size:0.76rem; color:var(--text-muted);"></div>
+        <div class="tx-wizard-step-head">
+          <div class="tx-wizard-step-icon"><i class="fa-solid fa-circle-check"></i></div>
+          <div><div class="tx-wizard-title">Review &amp; submit</div><p class="tx-wizard-sub">Everything's uploaded — ready to send for review.</p></div>
+        </div>
+        <div id="txWizSummary" style="font-size:0.8rem; color:var(--text-muted); line-height:1.7;"></div>
       </div>
 
       <div style="display:flex; justify-content:space-between; margin-top:18px;">

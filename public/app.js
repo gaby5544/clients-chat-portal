@@ -1246,6 +1246,17 @@ function renderTxDepositsAndWithdrawals() {
 // ---- Seller: KYC — one document per step, uploaded immediately on choice ----
 let txKycUploads = { idFront: null, idBack: null, proofAddress: null, selfie: null };
 let txKycStep = 0; // 0 = doc type picker, then one step per required file, then a final review step
+function syncDocCardSelection(gridId, value) {
+  el(gridId).querySelectorAll('.tx-doc-card').forEach(card => card.classList.toggle('selected', card.dataset.value === value));
+}
+function selectTxKycDocType(value) {
+  el('txKycDocType').value = value;
+  renderTxKycWizard();
+}
+function selectTxKycProofAddressType(value) {
+  el('txKycProofAddressType').value = value;
+  syncDocCardSelection('txProofAddressTypeGrid', value);
+}
 function txKycStepsForDocType() {
   const docType = el('txKycDocType').value;
   const steps = ['idFront'];
@@ -1292,6 +1303,9 @@ function renderTxKycWizard() {
   dotsBox.innerHTML = Array.from({ length: totalSteps }).map((_, i) =>
     `<div class="dot ${i < txKycStep ? 'done' : i === txKycStep ? 'active' : ''}"></div>`).join('');
 
+  syncDocCardSelection('txDocTypeGrid', el('txKycDocType').value);
+  syncDocCardSelection('txProofAddressTypeGrid', el('txKycProofAddressType').value);
+  el('txWizardStepCount').textContent = `Step ${txKycStep + 1} of ${totalSteps}`;
   el('txWizBackBtn').style.visibility = txKycStep === 0 ? 'hidden' : 'visible';
   if (txKycStep === totalSteps - 1) {
     el('txWizNextBtn').innerHTML = '<i class="fa-solid fa-upload"></i> Submit for Review';
@@ -1344,6 +1358,7 @@ function txKycWizardNext() {
     socket.emit('submit-kyc', {
       groupId: activeGroupId, docType: el('txKycDocType').value,
       idFrontUrl: txKycUploads.idFront, idBackUrl: txKycUploads.idBack,
+      proofAddressType: el('txKycProofAddressType').value,
       proofAddressUrl: txKycUploads.proofAddress, selfieUrl: txKycUploads.selfie
     });
     closeModal('txKycWizardModal');
@@ -1405,7 +1420,7 @@ function renderKycQueue() {
           Group: ${escapeHtml(a.groupId)} · Doc: ${escapeHtml(a.kyc.docType || '')} ·
           <a href="${a.kyc.idFrontUrl}" target="_blank" style="color:var(--accent-cyan);">ID front</a>
           ${a.kyc.idBackUrl ? ` · <a href="${a.kyc.idBackUrl}" target="_blank" style="color:var(--accent-cyan);">back</a>` : ''}
-          · <a href="${a.kyc.proofAddressUrl}" target="_blank" style="color:var(--accent-cyan);">address</a>
+          · <a href="${a.kyc.proofAddressUrl}" target="_blank" style="color:var(--accent-cyan);">address${a.kyc.proofAddressType ? ` (${escapeHtml(a.kyc.proofAddressType.replace(/_/g, ' '))})` : ''}</a>
           · <a href="${a.kyc.selfieUrl}" target="_blank" style="color:var(--accent-cyan);">selfie</a>
         </div>
       </div>
@@ -2137,3 +2152,99 @@ loadBranding();
     if (sub) { pushSubscribed = true; el('notifyToggleBtn').classList.add('subscribed'); }
   } catch (err) { /* not fatal — button just shows the unsubscribed state */ }
 })();
+
+// ---------------- CUSTOM SELECT ("csel") ----------------
+// Replaces every targeted <select>'s native options popup (which renders as
+// an unstyled OS list — ugly and inconsistent across browsers/devices) with a
+// branded dropdown. The original <select> is kept in the DOM as the single
+// source of truth: existing onchange="..." handlers and el(id).value reads
+// elsewhere keep working completely unchanged, because selecting a custom
+// option sets select.value and dispatches a real 'change' event on it.
+let cselOpenPanel = null; // {panel, trigger, closeFn} while a dropdown is open, else null
+
+function cselClose() {
+  if (!cselOpenPanel) return;
+  cselOpenPanel.panel.remove();
+  cselOpenPanel.trigger.classList.remove('open');
+  cselOpenPanel = null;
+  window.removeEventListener('scroll', cselClose, true);
+  window.removeEventListener('resize', cselClose, true);
+}
+
+function cselBuildPanel(select, trigger) {
+  const panel = document.createElement('div');
+  panel.className = 'csel-panel';
+  Array.from(select.options).forEach((opt) => {
+    const row = document.createElement('div');
+    row.className = 'csel-option' + (opt.value === select.value ? ' selected' : '');
+    row.textContent = opt.textContent;
+    row.addEventListener('click', () => {
+      select.value = opt.value;
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+      cselSyncTrigger(select, trigger);
+      cselClose();
+    });
+    panel.appendChild(row);
+  });
+
+  // Position as a fixed-position "portal" anchored to the trigger, so it is
+  // never clipped by a modal body's overflow:auto — flip upward if it would
+  // otherwise run off the bottom of the screen.
+  document.body.appendChild(panel); // measure first, off-screen-safe (absolute default until positioned)
+  const tr = trigger.getBoundingClientRect();
+  const panelH = panel.offsetHeight;
+  const spaceBelow = window.innerHeight - tr.bottom;
+  const openUpward = spaceBelow < panelH + 12 && tr.top > panelH + 12;
+  panel.style.left = `${Math.max(8, tr.left)}px`;
+  panel.style.width = `${tr.width}px`;
+  panel.style.top = openUpward ? `${Math.max(8, tr.top - panelH - 6)}px` : `${tr.bottom + 6}px`;
+  return panel;
+}
+
+function cselSyncTrigger(select, trigger) {
+  const label = trigger.querySelector('.csel-trigger-label');
+  const selected = select.options[select.selectedIndex];
+  label.textContent = selected ? selected.textContent : '';
+}
+
+function enhanceSelect(select) {
+  if (!select || select.dataset.cselDone) return;
+  select.dataset.cselDone = '1';
+
+  const wrap = document.createElement('div');
+  wrap.className = 'csel-wrap';
+  select.parentNode.insertBefore(wrap, select);
+  wrap.appendChild(select);
+  select.classList.add('csel-native-hidden');
+
+  const trigger = document.createElement('button');
+  trigger.type = 'button';
+  trigger.className = 'csel-trigger';
+  trigger.innerHTML = '<span class="csel-trigger-label"></span><i class="fa-solid fa-chevron-down csel-trigger-chevron"></i>';
+  wrap.appendChild(trigger);
+  cselSyncTrigger(select, trigger);
+
+  trigger.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const wasOpen = cselOpenPanel && cselOpenPanel.trigger === trigger;
+    cselClose();
+    if (wasOpen) return;
+    const panel = cselBuildPanel(select, trigger);
+    trigger.classList.add('open');
+    cselOpenPanel = { panel, trigger };
+    window.addEventListener('scroll', cselClose, true);
+    window.addEventListener('resize', cselClose, true);
+  });
+
+  // A disabled select (none currently, but future-proof) should look and act disabled.
+  const syncDisabled = () => { trigger.disabled = select.disabled; trigger.style.opacity = select.disabled ? '0.5' : ''; trigger.style.cursor = select.disabled ? 'not-allowed' : 'pointer'; };
+  syncDisabled();
+  new MutationObserver(syncDisabled).observe(select, { attributes: true, attributeFilter: ['disabled'] });
+}
+
+function initCustomSelects() {
+  document.querySelectorAll('select.csel').forEach(enhanceSelect);
+}
+document.addEventListener('click', cselClose);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') cselClose(); });
+initCustomSelects();

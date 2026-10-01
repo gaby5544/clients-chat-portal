@@ -218,6 +218,7 @@ ALTER TABLE groups ADD COLUMN IF NOT EXISTS kyc_doc_type             TEXT;   -- 
 ALTER TABLE groups ADD COLUMN IF NOT EXISTS kyc_id_front_url         TEXT;
 ALTER TABLE groups ADD COLUMN IF NOT EXISTS kyc_id_back_url          TEXT;
 ALTER TABLE groups ADD COLUMN IF NOT EXISTS kyc_proof_address_url    TEXT;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS kyc_proof_address_type   TEXT;   -- bank_statement|utility_bill|electricity_bill|council_tax|other
 ALTER TABLE groups ADD COLUMN IF NOT EXISTS kyc_selfie_url           TEXT;
 ALTER TABLE groups ADD COLUMN IF NOT EXISTS kyc_submitted_at         TIMESTAMPTZ;
 ALTER TABLE groups ADD COLUMN IF NOT EXISTS kyc_reviewed_by          TEXT;
