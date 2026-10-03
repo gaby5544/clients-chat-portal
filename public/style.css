@@ -491,9 +491,10 @@ body.is-admin .admin-only { display: flex !important; }
   .chat-header { padding: 10px 14px; flex-wrap: wrap; row-gap: 8px; }
   .brand-title { font-size: 0.82rem; }
   .brand-subtitle { font-size: 0.7rem; max-width: 40vw; }
-  .header-actions { gap: 6px; }
+  .header-actions { gap: 6px; flex-wrap: wrap; justify-content: flex-end; flex-shrink: 1; }
+  .presence-cluster { flex-basis: 100%; justify-content: flex-end; }
   .presence-badge { font-size: 0.66rem; padding: 5px 8px; }
-  .presence-badge span { max-width: 22vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .presence-badge span { max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   .chat-messages { padding: 14px; }
   .message { max-width: 86%; font-size: 0.86rem; }
@@ -520,8 +521,8 @@ body.is-admin .admin-only { display: flex !important; }
 }
 
 @media (max-width: 480px) {
-  .header-actions .presence-badge span { display: none; }
-  .header-actions .presence-badge { padding: 6px; }
+  .header-actions .presence-badge { padding: 5px 8px; }
+  .header-actions .presence-badge span { max-width: 32vw; }
   .brand-subtitle { max-width: 32vw; }
 }
 

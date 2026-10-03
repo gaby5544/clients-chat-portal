@@ -655,7 +655,7 @@ function registerSocketHandlers(io, socket) {
   // This is the popup shown the moment a Seller opens their invite link and
   // seller_registered is still false — it's what turns their chat seat into
   // an actual account with a password, and locks in their ledger currency.
-  socket.on('register-transaction-account', async ({ groupId, fullName, email, password, currency }) => {
+  socket.on('register-transaction-account', async ({ groupId, fullName, email, password, currency, dateOfBirth, country }) => {
     const m = meta();
     if (!m || m.isAdmin) return;
     if (!accountActionLimiter.allow(m.sessionToken)) return socket.emit('error-msg', 'Too many attempts — please wait a moment and try again.');
@@ -673,11 +673,22 @@ function registerSocketHandlers(io, socket) {
     const finalEmail = group.email_b || (isValidEmailSafe(email) ? email.trim() : null);
     if (!finalEmail) return socket.emit('error-msg', 'Please enter a valid email address.');
 
+    const dob = new Date(dateOfBirth);
+    if (!dateOfBirth || Number.isNaN(dob.getTime())) return socket.emit('error-msg', 'Please enter a valid date of birth.');
+    const ageMs = Date.now() - dob.getTime();
+    const age = ageMs / (365.25 * 24 * 3600 * 1000);
+    if (dob.getFullYear() < 1900 || dob.getTime() > Date.now()) return socket.emit('error-msg', 'Please enter a valid date of birth.');
+    if (age < 18) return socket.emit('error-msg', 'You must be at least 18 years old to create a Transaction Account.');
+    const cleanCountry = sanitizeText(country, 100);
+    if (!cleanCountry) return socket.emit('error-msg', 'Please select your country.');
+
     const fields = {
       seller_registered: true,
       seller_full_name: escapeHtml(cleanName),
       seller_password_hash: hashPassword(password),
       seller_currency: currency,
+      seller_date_of_birth: dateOfBirth,
+      seller_country: escapeHtml(cleanCountry),
       currency_locked_at: new Date().toISOString() // locked immediately; blueprint's "locked after first deposit" is loosened here since the ledger needs a currency from day one
     };
     if (!group.email_b) fields.email_b = finalEmail;

@@ -693,11 +693,14 @@ function closeModal(id) { el(id).classList.add('hidden'); }
 
 // ---------------- PINNED ----------------
 function renderPinned(list) {
+  // Pinned-message UI (header bar, header dot, per-message thumbtack icon) is
+  // an admin-only feature — the buyer and seller never see any of it.
+  document.querySelectorAll('[id^="msg-pin-"]').forEach(i => i.style.display = 'none');
+  if (!isAdminConfirmed) { el('pinnedBar').classList.add('hidden'); el('pinnedDot').classList.add('hidden'); return; }
   el('pinnedDot').classList.toggle('hidden', list.length === 0);
   el('pinnedList').innerHTML = list.map(m =>
     `<div class="pinned-item" onclick="scrollToMessage('${m.id}')"><span><b>${m.sender}:</b> ${(m.text || '').slice(0, 80)}</span></div>`
   ).join('');
-  document.querySelectorAll('[id^="msg-pin-"]').forEach(i => i.style.display = 'none');
   list.forEach(m => { const pinEl = el(`msg-pin-${m.id}`); if (pinEl) pinEl.style.display = 'inline'; });
 }
 socket.on('pinned-messages-updated', ({ pinnedMessages }) => renderPinned(pinnedMessages));
@@ -1049,11 +1052,17 @@ function submitTxRegistration() {
   const password = el('txRegPasswordInput').value;
   const confirm = el('txRegPasswordConfirmInput').value;
   const currency = el('txRegCurrencyInput').value;
+  const dateOfBirth = el('txRegDobInput').value;
+  const country = el('txRegCountryInput').value;
   if (!fullName) return toast('Please enter your full name.', true);
   if (!sellerAccountState.email && !isValidEmailClient(email)) return toast("That doesn't look like a valid email.", true);
   if (password.length < 8) return toast('Password must be at least 8 characters.', true);
   if (password !== confirm) return toast('Passwords do not match.', true);
-  socket.emit('register-transaction-account', { groupId: activeGroupId, fullName, email, password, currency });
+  if (!dateOfBirth) return toast('Please enter your date of birth.', true);
+  const age = (Date.now() - new Date(dateOfBirth).getTime()) / (365.25 * 24 * 3600 * 1000);
+  if (age < 18) return toast('You must be at least 18 years old to create a Transaction Account.', true);
+  if (!country) return toast('Please select your country.', true);
+  socket.emit('register-transaction-account', { groupId: activeGroupId, fullName, email, password, currency, dateOfBirth, country });
 }
 
 // ---- Seller: full dashboard view ----
@@ -1112,6 +1121,8 @@ function renderTxProfile() {
   if (!sellerAccountState) return;
   el('txProfileName').textContent = sellerAccountState.fullName || '—';
   el('txProfileEmail').textContent = sellerAccountState.email || '—';
+  el('txProfileDob').textContent = sellerAccountState.dateOfBirth ? fmtDate(sellerAccountState.dateOfBirth) : '—';
+  el('txProfileCountry').textContent = sellerAccountState.country || '—';
   el('txProfileCurrency').textContent = sellerAccountState.currency || '—';
   el('txProfileKyc').textContent = { not_submitted: 'Not submitted', pending: 'Pending review', verified: 'Verified', rejected: 'Rejected' }[sellerAccountState.kyc.status] || sellerAccountState.kyc.status;
 }
@@ -1550,7 +1561,7 @@ function renderFundsDeskModal() {
   const ledger = fundsDeskLedgerCache;
   if (!ledger) return;
   const ccy = ledger.account.currency || '';
-  el('ledgerModalTitle').textContent = `${ledger.account.fullName || 'Seller'} — ${ledger.account.groupName}`;
+  el('ledgerModalTitle').textContent = `${ledger.account.fullName || 'Seller'} — ${ledger.account.groupName}${ledger.account.country ? ` · ${ledger.account.country}` : ''}`;
   el('ledgerAvailable').textContent = fmtMoney(ledger.account.balances.available, ccy);
   el('ledgerHeld').textContent = fmtMoney(ledger.account.balances.held, ccy);
   el('ledgerTotal').textContent = fmtMoney(ledger.account.balances.totalDeposited, ccy);

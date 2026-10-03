@@ -36,6 +36,8 @@ function makeDefaultGroup(id, name) {
     kyc_id_back_url: null,
     kyc_proof_address_url: null,
     kyc_proof_address_type: null,
+    seller_date_of_birth: null,
+    seller_country: null,
     kyc_selfie_url: null,
     kyc_submitted_at: null,
     kyc_reviewed_by: null,

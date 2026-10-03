@@ -69,6 +69,8 @@ function publicSellerAccount(g) {
     email: g.email_b || null,
     currency: g.seller_currency || null,
     currencyLocked: !!g.currency_locked_at,
+    dateOfBirth: g.seller_date_of_birth ? (g.seller_date_of_birth instanceof Date ? g.seller_date_of_birth.toISOString() : String(g.seller_date_of_birth)).slice(0, 10) : null,
+    country: g.seller_country || null,
     kyc: {
       status: g.kyc_status,
       docType: g.kyc_doc_type || null,
