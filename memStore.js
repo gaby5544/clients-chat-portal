@@ -45,7 +45,19 @@ function makeDefaultGroup(id, name) {
     kyc_rejection_reason: null,
     balance_available: 0,
     balance_held: 0,
-    total_deposited: 0
+    total_deposited: 0,
+    // ---- v3.1 ----
+    seller_phone: null, seller_country_iso: null, seller_account_id: null, seller_account_type: 'standard',
+    seller_language: 'en', seller_terms_accepted_at: null, seller_terms_version: null,
+    seller_email_locked: false, seller_email_verified_at: null, seller_registered_at: null, seller_password_changed_at: null,
+    seller_disabled: false, seller_disabled_reason: null, seller_disabled_at: null,
+    seller_ip_log: [], seller_blocked_ips: [],
+    disbursement_enabled: false, disbursement_updated_at: null,
+    balance_pending: 0,
+    crypto_deposit_verified: false, crypto_deposit_required_usd: null,
+    business_status: 'none', business_profile: null, business_submitted_at: null, business_reviewed_at: null, business_rejection_reason: null,
+    kyc_id_number: null, kyc_id_expiry: null, kyc_id_name: null, kyc_id_dob: null, kyc_auto_result: null,
+    reg_email_target: null, reg_email_code_hash: null, reg_email_code_expires: null, reg_email_code_attempts: 0, reg_email_verified: false
   };
 }
 
@@ -69,6 +81,7 @@ class MemStore {
     this.deposits = new Map();       // id -> deposit record
     this.withdrawals = new Map();    // id -> withdrawal record
     this.incoming = new Map();       // id -> incoming-funds record (recorded by the Desk against a seller)
+    this.settings = new Map();       // key -> JSON value (admin-editable settings)
     this.branding = {
       id: 1, logo_url: null, accent_color: '#38bdf8', accent_color_2: '#8b5cf6',
       welcome_message: 'Welcome to Quantum Secure Transaction Desk.', background_url: null,
@@ -96,6 +109,7 @@ class MemStore {
       admin_role: u.adminRole !== undefined ? u.adminRole : existing.admin_role ?? null,
       email: u.email !== undefined ? u.email : existing.email ?? null,
       country_code: u.countryCode !== undefined ? u.countryCode : existing.country_code ?? null,
+      language: u.language !== undefined ? u.language : existing.language ?? null,
       avatar_seed: existing.avatar_seed || u.sessionToken,
       is_online: u.isOnline ?? existing.is_online ?? false,
       first_seen: existing.first_seen || nowIso(),
@@ -168,17 +182,26 @@ class MemStore {
   // Atomic, guarded balance change. Returns the updated group, or null if the
   // group is gone or the change would push any balance below zero (so two
   // admins acting at once can never overdraw an account).
-  async adjustBalances(groupId, { available = 0, held = 0, total = 0 } = {}) {
+  async adjustBalances(groupId, { available = 0, held = 0, total = 0, pending = 0 } = {}) {
     const g = this.groups.get(groupId);
     if (!g) return null;
     const r2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
     const a = r2(Number(g.balance_available || 0) + available);
     const h = r2(Number(g.balance_held || 0) + held);
     const t = r2(Number(g.total_deposited || 0) + total);
-    if (a < 0 || h < 0 || t < 0) return null;
-    g.balance_available = a; g.balance_held = h; g.total_deposited = t;
+    const p = r2(Number(g.balance_pending || 0) + pending);
+    if (a < 0 || h < 0 || t < 0 || p < 0) return null;
+    g.balance_available = a; g.balance_held = h; g.total_deposited = t; g.balance_pending = p;
     return g;
   }
+
+  async findGroupByAccountId(accountId) {
+    return Array.from(this.groups.values()).find(g => g.seller_account_id === String(accountId)) || null;
+  }
+
+  // ---------- SETTINGS (admin-editable key/value) ----------
+  async getSetting(key, fallback = null) { return this.settings.has(key) ? this.settings.get(key) : fallback; }
+  async setSetting(key, value) { this.settings.set(key, value); return value; }
 
   // ---------- MESSAGES ----------
   async insertMessage(msg) {
@@ -285,6 +308,11 @@ class MemStore {
     return m ? Object.fromEntries(m) : {};
   }
 
+  async getAllUnreadRows() {
+    const rows = [];
+    for (const [token, byGroup] of this.unread.entries()) for (const [groupId, count] of byGroup.entries()) if (count > 0) rows.push({ session_token: token, group_id: groupId, count });
+    return rows;
+  }
   async addNotification(sessionToken, type, payload) {
     if (!this.notifications.has(sessionToken)) this.notifications.set(sessionToken, []);
     const n = { id: uuid(), type, payload, is_read: false, created_at: nowIso() };
@@ -525,10 +553,15 @@ class MemStore {
       amount: rec.amount, amount_currency: rec.amountCurrency, amount_ledger: rec.amountLedger,
       status: 'pending', status_reason: null,
       status_history: [{ status: 'pending', at: nowIso(), by: null, note: 'Submitted by seller' }],
+      request_ip: rec.requestIp || null, email_confirmed_at: rec.emailConfirmedAt || null, seller_account_id: rec.sellerAccountId || null,
       created_at: nowIso(), updated_at: nowIso()
     };
     this.withdrawals.set(record.id, record);
     return record;
+  }
+  async getWithdrawalsSince(groupId, sinceIso) {
+    const since = new Date(sinceIso).getTime();
+    return Array.from(this.withdrawals.values()).filter(w => w.group_id === groupId && new Date(w.created_at).getTime() >= since && !['rejected', 'failed'].includes(w.status));
   }
   async getWithdrawalsForGroup(groupId) {
     return Array.from(this.withdrawals.values()).filter(w => w.group_id === groupId).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
@@ -536,7 +569,7 @@ class MemStore {
   async getWithdrawalById(id) { return this.withdrawals.get(id) || null; }
   async getPendingWithdrawals() {
     return Array.from(this.withdrawals.values())
-      .filter(w => !['completed', 'rejected', 'failed'].includes(w.status))
+      .filter(w => !['completed', 'declined', 'rejected', 'failed'].includes(w.status))
       .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
   }
   async advanceWithdrawal(id, { status, reason, by, expectedStatus }) {
@@ -561,10 +594,29 @@ class MemStore {
       received_at: rec.receivedAt || now, status: rec.status, status_reason: null,
       status_history: [{ status: rec.status, at: now, by: rec.recordedBy || null, note: rec.historyNote || null }],
       proof_url: rec.proofUrl || null, internal_note: rec.internalNote || null, recorded_by: rec.recordedBy || null,
+      bank_name: rec.bankName || null, sender_account: rec.senderAccount || null, fee_amount: rec.feeAmount || 0,
+      note_shared_with_buyer: !!rec.noteSharedWithBuyer,
+      track_enabled: !!(rec.track && rec.track.enabled), track_mode: (rec.track && rec.track.mode) || 'auto',
+      track_stage: (rec.track && rec.track.stage) || 1, track_check: (rec.track && rec.track.check) || 0,
+      track_elapsed_ms: (rec.track && rec.track.elapsedMs) || 0, track_paused: !!(rec.track && rec.track.paused),
+      track_speed: (rec.track && rec.track.speed) || 1, track_timers: (rec.track && rec.track.timers) || null,
+      track_show_timer: !!(rec.track && rec.track.showTimer), track_stage_times: (rec.track && rec.track.stageTimes) || {},
+      track_finished_at: null,
       created_at: now, updated_at: now
     };
     this.incoming.set(record.id, record);
     return record;
+  }
+  async updateIncomingFunds(id, fields) {
+    const i = this.incoming.get(id);
+    if (!i) return null;
+    const allowed = ['track_enabled', 'track_mode', 'track_stage', 'track_check', 'track_elapsed_ms', 'track_paused', 'track_speed', 'track_timers', 'track_show_timer', 'track_stage_times', 'track_finished_at', 'note_shared_with_buyer'];
+    for (const k of Object.keys(fields)) if (allowed.includes(k)) i[k] = fields[k];
+    i.updated_at = nowIso();
+    return i;
+  }
+  async getActiveTrackedIncoming() {
+    return Array.from(this.incoming.values()).filter(i => i.track_enabled && i.track_stage >= 1 && i.track_stage <= 5 && i.status === 'held_in_vault');
   }
   async getIncomingFundsForGroup(groupId) {
     return Array.from(this.incoming.values()).filter(i => i.group_id === groupId)

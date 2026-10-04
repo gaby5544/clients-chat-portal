@@ -5,12 +5,15 @@ const fs = require('fs');
 const crypto = require('crypto');
 const rateLimit = require('express-rate-limit');
 const { store } = require('./db');
-const { validateTransactionForm, escapeHtml, isValidEmail, hashPassword, verifyPassword, isStrongEnoughPassword, generateSixDigitCode, hashCode } = require('./security');
+const { validateTransactionForm, escapeHtml, isValidEmail, hashPassword, verifyPassword, isStrongEnoughPassword, generateSixDigitCode, hashCode, clientIpFrom } = require('./security');
 const { generateTransactionPdf, generateFundsReceiptPdf } = require('./pdfReceipt');
 const F = require('./finance');
 const { resolveAdminRole, hasMinRole } = require('./roles');
 const { getPublicKey } = require('./webpush');
-const { notifyPasswordResetCode } = require('./email');
+const { notifyPasswordResetCode, emailStatus } = require('./email');
+const { translateText, translateMany } = require('./translator');
+const { TERMS_VERSION, TERMS_SECTIONS, TERMS_CHECKBOX_LABEL, COMPLAINTS_EMAIL } = require('./terms');
+const { recordSellerIp, isIpBlocked } = require('./accountHandlers');
 const { v4: uuidv4 } = require('uuid');
 
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
@@ -53,6 +56,11 @@ const pdfLimiter = rateLimit({ windowMs: 60 * 1000, max: 15, standardHeaders: tr
 // Tighter limits for auth endpoints — these are brute-force targets.
 const loginLimiter = rateLimit({ windowMs: 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false });
 const resetLimiter = rateLimit({ windowMs: 60 * 1000, max: 5, standardHeaders: true, legacyHeaders: false });
+const translateLimiter = rateLimit({ windowMs: 60 * 1000, max: 120, standardHeaders: true, legacyHeaders: false });
+// Wrong reset-code guesses per account (in addition to the per-IP limiter above).
+const resetGuesses = new Map(); // groupId -> { n, until }
+const RESET_MAX_GUESSES = 5;
+const RESET_LOCK_MS = 10 * 60 * 1000;
 const LOGIN_LOCKOUT_AFTER = 6;
 const LOGIN_LOCKOUT_MS = 15 * 60 * 1000; // 15 minutes
 
@@ -150,12 +158,12 @@ function buildRouter() {
     }
     const rec = kind === 'incoming' ? await store.getIncomingFundsById(id) : await store.getWithdrawalById(id);
     // A receipt only exists for money that actually landed / actually left.
-    if (!rec || (kind === 'incoming' && rec.status !== 'credited') || (kind === 'withdrawal' && rec.status !== 'completed')) {
+    if (!rec || (kind === 'incoming' && !['credited', 'held_in_vault'].includes(rec.status)) || (kind === 'withdrawal' && rec.status !== 'completed')) {
       return res.status(404).json({ error: 'Receipt not found' });
     }
     const group = await store.getGroup(rec.group_id);
     if (!group) return res.status(404).json({ error: 'Receipt not found' });
-    const record = kind === 'incoming' ? F.publicIncoming(rec, false) : F.publicWithdrawal(rec);
+    const record = kind === 'incoming' ? F.publicIncoming(rec, false, group.seller_account_id) : F.publicWithdrawal(rec);
     generateFundsReceiptPdf(res, { kind, record, group });
   });
 
@@ -209,8 +217,9 @@ function buildRouter() {
     const { email, password } = req.body || {};
     if (!isValidEmail(email) || typeof password !== 'string' || !password) return res.status(400).json(BAD_LOGIN);
     const matches = await store.findGroupsBySellerEmail(email.trim());
-    const group = matches[0]; // one seller account per email in this build — see routes.js notes
+    const group = matches[0]; // one seller account per email — enforced at registration
     if (!group) return res.status(401).json(BAD_LOGIN);
+    const ip = clientIpFrom(req.headers, req.socket && req.socket.remoteAddress);
     if (group.seller_locked_until && new Date(group.seller_locked_until) > new Date()) {
       return res.status(423).json({ error: 'Too many failed attempts. Please try again later.' });
     }
@@ -224,11 +233,17 @@ function buildRouter() {
       await store.updateGroup(group.id, fields);
       return res.status(401).json(BAD_LOGIN);
     }
+    // Correct password from here on, so it is safe to say why access is refused.
+    if (isIpBlocked(group, ip)) {
+      return res.status(403).json({ error: `Access from this network location has been disabled for this account. Please contact ${COMPLAINTS_EMAIL}.`, code: 'ip_blocked' });
+    }
     await store.updateGroup(group.id, { seller_failed_logins: 0, seller_locked_until: null });
-    // Hand back a fresh session token + the group's role-locked params — the
-    // client immediately does the same 'join-room' it would from an invite
-    // link, just without needing the link itself.
-    res.json({ success: true, groupId: group.id, sessionToken: uuidv4(), groupName: group.name });
+    await recordSellerIp(group.id, ip, 'login');
+    // A disabled account can still sign in, so the seller sees WHY it is disabled and how to complain.
+    res.json({
+      success: true, groupId: group.id, sessionToken: uuidv4(), groupName: group.name, language: group.seller_language || 'en',
+      disabled: !!group.seller_disabled, complaintsEmail: COMPLAINTS_EMAIL
+    });
   });
 
   router.post('/api/auth/forgot-password/request', resetLimiter, async (req, res) => {
@@ -241,7 +256,8 @@ function buildRouter() {
     if (group) {
       const code = generateSixDigitCode();
       await store.createPasswordReset({ groupId: group.id, codeHash: hashCode(code), expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString() });
-      await notifyPasswordResetCode(group.email_b, { code, groupName: group.name });
+      await notifyPasswordResetCode(group.email_b, { code, groupName: group.name, lang: group.seller_language });
+      resetGuesses.delete(group.id); // a fresh code starts a fresh set of guesses
     }
     res.json({ success: true });
   });
@@ -252,10 +268,17 @@ function buildRouter() {
     const matches = await store.findGroupsBySellerEmail(email.trim());
     const group = matches[0];
     if (!group) return res.status(400).json({ error: 'Invalid or expired code.' });
+    const lock = resetGuesses.get(group.id);
+    if (lock && lock.until > Date.now()) return res.status(429).json({ error: 'Too many incorrect codes. Please wait a few minutes or request a new code.' });
     const reset = await store.getLatestPasswordReset(group.id);
     if (!reset || new Date(reset.expires_at) < new Date() || reset.code_hash !== hashCode(code)) {
+      const g = resetGuesses.get(group.id) || { n: 0, until: 0 };
+      g.n += 1;
+      if (g.n >= RESET_MAX_GUESSES) { g.n = 0; g.until = Date.now() + RESET_LOCK_MS; }
+      resetGuesses.set(group.id, g);
       return res.status(400).json({ error: 'Invalid or expired code.' });
     }
+    resetGuesses.delete(group.id);
     const resetToken = uuidv4();
     await store.setPasswordResetToken(reset.id, resetToken);
     res.json({ success: true, resetToken });
@@ -271,15 +294,36 @@ function buildRouter() {
     if (!group) return res.status(400).json({ error: 'Invalid or expired reset link.' });
     const consumed = await store.consumePasswordResetByToken(group.id, resetToken);
     if (!consumed) return res.status(400).json({ error: 'Invalid or expired reset link.' });
-    await store.updateGroup(group.id, { seller_password_hash: hashPassword(newPassword), seller_failed_logins: 0, seller_locked_until: null });
+    await store.updateGroup(group.id, { seller_password_hash: hashPassword(newPassword), seller_password_changed_at: new Date().toISOString(), seller_failed_logins: 0, seller_locked_until: null });
     res.json({ success: true });
   });
+
+  // ---- Translation (server-side, cached, with provider fallback) ----
+  router.post('/api/translate', translateLimiter, async (req, res) => {
+    const { text, target, source } = req.body || {};
+    if (typeof text !== 'string' || !text.trim() || text.length > 5000) return res.status(400).json({ error: 'Provide text up to 5,000 characters.' });
+    if (typeof target !== 'string' || !/^[a-zA-Z-]{2,7}$/.test(target)) return res.status(400).json({ error: 'Invalid target language.' });
+    const r = await translateText(text, target, typeof source === 'string' && /^[a-zA-Z-]{2,7}$/.test(source) ? source : 'auto');
+    res.json({ text: r.text, detected: r.detected, ok: r.ok });
+  });
+  router.post('/api/translate/batch', translateLimiter, async (req, res) => {
+    const { texts, target, source } = req.body || {};
+    if (!Array.isArray(texts) || !texts.length || texts.length > 80) return res.status(400).json({ error: 'Provide 1–80 strings.' });
+    if (typeof target !== 'string' || !/^[a-zA-Z-]{2,7}$/.test(target)) return res.status(400).json({ error: 'Invalid target language.' });
+    const clean = texts.map((x) => String(x == null ? '' : x).slice(0, 1500));
+    if (clean.reduce((n, x) => n + x.length, 0) > 30000) return res.status(400).json({ error: 'Too much text in one request.' });
+    const out = await translateMany(clean, target, typeof source === 'string' && /^[a-zA-Z-]{2,7}$/.test(source) ? source : 'auto');
+    res.json({ results: out.map((r) => r.text), ok: out.every((r) => r.ok) });
+  });
+
+  router.get('/api/terms', (req, res) => res.json({ version: TERMS_VERSION, sections: TERMS_SECTIONS, checkboxLabel: TERMS_CHECKBOX_LABEL, complaintsEmail: COMPLAINTS_EMAIL }));
 
   router.get('/api/health', (req, res) => res.json({
     status: 'ok',
     time: new Date().toISOString(),
     version: require('./package.json').version,
-    build: 'funds-desk-2026-09'
+    build: 'funds-desk-2026-10',
+    email: emailStatus()
   }));
 
   return router;

@@ -317,3 +317,94 @@ CREATE TABLE IF NOT EXISTS incoming_funds (
 );
 CREATE INDEX IF NOT EXISTS idx_incoming_group ON incoming_funds(group_id, received_at);
 CREATE INDEX IF NOT EXISTS idx_incoming_status ON incoming_funds(status);
+
+-- ============================================================================
+-- v3.1 — Seller account hardening, tracking, withdrawals v2, compliance.
+-- All additions are idempotent (safe to re-run on a live database).
+-- ============================================================================
+
+-- Seller profile / identity
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_phone               TEXT;           -- E.164, e.g. +233244123456
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_country_iso         TEXT;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_account_id          TEXT;           -- unique 11-digit public account ID
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_account_type        TEXT NOT NULL DEFAULT 'standard';
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_language            TEXT NOT NULL DEFAULT 'en';
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_terms_accepted_at   TIMESTAMPTZ;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_terms_version       TEXT;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_email_locked        BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_email_verified_at   TIMESTAMPTZ;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_registered_at       TIMESTAMPTZ;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_password_changed_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_groups_account_id ON groups(seller_account_id);
+
+-- Account enable / disable (admin)
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_disabled            BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_disabled_reason     TEXT;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_disabled_at         TIMESTAMPTZ;
+
+-- IP detection (JSON arrays of {ip, firstSeen, lastSeen, events[], count})
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_ip_log              JSONB NOT NULL DEFAULT '[]';
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_blocked_ips         JSONB NOT NULL DEFAULT '[]';
+
+-- Withdrawal gate: the seller may only withdraw once the Desk puts this
+-- group's transaction into the disbursement stage.
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS disbursement_enabled       BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS disbursement_updated_at    TIMESTAMPTZ;
+
+-- Funds that left the available balance for a withdrawal that is still in flight.
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS balance_pending            NUMERIC(18,2) NOT NULL DEFAULT 0;
+
+-- Crypto prior-deposit requirement (one-time unlock) + business account (unlimited withdrawals)
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS crypto_deposit_verified    BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS crypto_deposit_required_usd NUMERIC(18,2);
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS business_status            TEXT NOT NULL DEFAULT 'none'; -- none|pending|verified|rejected
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS business_profile           JSONB;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS business_submitted_at      TIMESTAMPTZ;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS business_reviewed_at       TIMESTAMPTZ;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS business_rejection_reason  TEXT;
+
+-- KYC details captured for automatic validation
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS kyc_id_number              TEXT;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS kyc_id_expiry              DATE;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS kyc_id_name                TEXT;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS kyc_id_dob                 DATE;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS kyc_auto_result            JSONB;
+
+-- Registration email verification (code is stored hashed, never in clear)
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS reg_email_target           TEXT;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS reg_email_code_hash        TEXT;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS reg_email_code_expires     TIMESTAMPTZ;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS reg_email_code_attempts    INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS reg_email_verified         BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- Incoming funds: richer record + live stage tracking
+ALTER TABLE incoming_funds ADD COLUMN IF NOT EXISTS bank_name              TEXT;
+ALTER TABLE incoming_funds ADD COLUMN IF NOT EXISTS sender_account         TEXT;
+ALTER TABLE incoming_funds ADD COLUMN IF NOT EXISTS fee_amount             NUMERIC(18,2) NOT NULL DEFAULT 0;
+ALTER TABLE incoming_funds ADD COLUMN IF NOT EXISTS note_shared_with_buyer BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE incoming_funds ADD COLUMN IF NOT EXISTS track_enabled          BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE incoming_funds ADD COLUMN IF NOT EXISTS track_mode             TEXT NOT NULL DEFAULT 'auto';   -- auto | manual
+ALTER TABLE incoming_funds ADD COLUMN IF NOT EXISTS track_stage            INTEGER NOT NULL DEFAULT 1;     -- 1..5, 6 = finished
+ALTER TABLE incoming_funds ADD COLUMN IF NOT EXISTS track_check            INTEGER NOT NULL DEFAULT 0;     -- checks done in current stage
+ALTER TABLE incoming_funds ADD COLUMN IF NOT EXISTS track_elapsed_ms       BIGINT  NOT NULL DEFAULT 0;     -- progress inside current stage
+ALTER TABLE incoming_funds ADD COLUMN IF NOT EXISTS track_paused           BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE incoming_funds ADD COLUMN IF NOT EXISTS track_speed            NUMERIC(12,2) NOT NULL DEFAULT 1;
+ALTER TABLE incoming_funds ADD COLUMN IF NOT EXISTS track_timers           JSONB;                          -- seconds per stage [5]
+ALTER TABLE incoming_funds ADD COLUMN IF NOT EXISTS track_show_timer       BOOLEAN NOT NULL DEFAULT FALSE; -- seller may see the active stage countdown
+ALTER TABLE incoming_funds ADD COLUMN IF NOT EXISTS track_stage_times      JSONB NOT NULL DEFAULT '{}';    -- {"1":iso,...} when each stage started
+ALTER TABLE incoming_funds ADD COLUMN IF NOT EXISTS track_finished_at      TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_incoming_track ON incoming_funds(track_enabled, track_stage);
+
+-- Withdrawals v2
+ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS request_ip         TEXT;
+ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS email_confirmed_at TIMESTAMPTZ;
+ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS seller_account_id  TEXT;
+
+-- Small key/value store for admin-editable settings (compliance tiers etc.)
+CREATE TABLE IF NOT EXISTS app_settings (
+  key         TEXT PRIMARY KEY,
+  value       JSONB NOT NULL,
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS language TEXT;   -- preferred UI / notification language (ISO code)

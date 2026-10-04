@@ -133,3 +133,7 @@ Then open `http://localhost:3000`. For deploying somewhere it'll stay
 online, start with `DEPLOY.md` (works on any host) or `DEPLOY_NORTHFLANK.md`
 (step-by-step for a free, always-on host with a custom name). Render
 instructions are still in `DEPLOY_RENDER.md` if you want them.
+
+
+## v3.1
+See **CHANGES-v3.1.md** for the full item-by-item report, new environment variables and test instructions.

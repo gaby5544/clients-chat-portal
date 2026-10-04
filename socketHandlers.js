@@ -6,6 +6,12 @@ const { sendPushToUser } = require('./webpush');
 const F = require('./finance');
 const { publicSellerAccount, publicDeposit, publicWithdrawal, CURRENCIES, CRYPTO_ASSETS, convertCurrency } = F;
 const { registerFundsHandlers, pushSellerState, pushAdminLedger, emitSnapshotTo } = require('./fundsHandlers');
+const { registerAccountHandlers, recordSellerIp, isIpBlocked, ipOfSocket } = require('./accountHandlers');
+const { registerTrackingHandlers } = require('./tracking');
+const notifier = require('./notifier');
+const QC = require('./public/countries');
+const { COMPLAINTS_EMAIL } = require('./terms');
+const AUTO_EMAIL = String(process.env.AUTO_SEND_OFFLINE_EMAILS || '').toLowerCase() === 'true';
 
 const messageLimiter = new RateLimiter({ windowMs: 10000, max: 20 });   // 20 msgs / 10s per socket
 const actionLimiter = new RateLimiter({ windowMs: 10000, max: 30 });    // generic admin/action guard
@@ -32,7 +38,10 @@ function publicUser(u) {
     isAdmin: u.is_admin,
     adminRole: u.admin_role || null,
     isOnline: u.is_online,
-    lastSeen: u.last_seen
+    lastSeen: u.last_seen,
+    language: u.language || null,
+    countryIso: u.countryIso || null,
+    country: u.country || null
   };
 }
 
@@ -82,7 +91,7 @@ function publicPendingEmail(p) {
   };
 }
 
-async function groupSummary(g, viewerToken) {
+async function groupSummary(g, viewerToken, forAdmin = false, viewerRole = null) {
   const messages = await store.getMessagesForGroup(g.id, 1);
   const last = messages[messages.length - 1];
   const unread = viewerToken ? (await store.getUnreadCounts(viewerToken))[g.id] || 0 : 0;
@@ -90,11 +99,23 @@ async function groupSummary(g, viewerToken) {
     id: g.id,
     name: g.name,
     customNames: { A: g.custom_name_a, B: g.custom_name_b },
-    emails: { A: g.email_a || null, B: g.email_b || null },
+    // A buyer or seller only ever receives THEIR OWN address — never the other party's.
+    emails: (!forAdmin && viewerRole === 'PARTY A') ? { A: g.email_a || null, B: null }
+      : (!forAdmin && viewerRole === 'PARTY B') ? { A: null, B: g.email_b || null }
+      : { A: g.email_a || null, B: g.email_b || null },
     fileUploadsEnabled: g.file_uploads_enabled,
     highlighted: g.highlighted,
     transactionFormEnabled: g.transaction_form_enabled,
     bannerUrl: g.banner_url || null,
+    disbursementEnabled: !!g.disbursement_enabled,
+    ...(forAdmin ? {
+      seller: {
+        registered: !!g.seller_registered, name: g.seller_full_name || null, accountId: g.seller_account_id || null,
+        country: g.seller_country || null, countryIso: g.seller_country_iso || null, phone: g.seller_phone || null,
+        disabled: !!g.seller_disabled, accountType: g.seller_account_type || 'standard', language: g.seller_language || 'en',
+        kycStatus: g.kyc_status, businessStatus: g.business_status || 'none', emailLocked: !!g.seller_email_locked
+      }
+    } : {}),
     lastMessagePreview: last ? (last.file_url ? `📎 ${last.file_name || 'Attachment'}` : last.text).slice(0, 80) : 'No messages yet...',
     unreadCount: unread
   };
@@ -121,8 +142,10 @@ function registerSocketHandlers(io, socket) {
   }
 
   async function broadcastDirectory() {
-    const all = await store.getAllUsers();
-    io.to('admins').emit('user-directory', all.map(publicUser));
+    const [all, groups] = await Promise.all([store.getAllUsers(), store.getAllGroups()]);
+    const geo = new Map(); // seller session token -> where they are from
+    for (const g of groups) if (g.seller_session_token && g.seller_country_iso) geo.set(g.seller_session_token, { countryIso: g.seller_country_iso, country: g.seller_country });
+    io.to('admins').emit('user-directory', all.map((u) => publicUser({ ...u, ...(geo.get(u.session_token) || {}) })));
   }
 
   async function broadcastGroupsList(viewerSocket) {
@@ -130,10 +153,10 @@ function registerSocketHandlers(io, socket) {
     if (viewerSocket) {
       const m = activeSockets.get(viewerSocket.id);
       if (!m || !hasMinRole(m.adminRole, 'ADMIN')) return; // silently ignore for non-admins/moderators
-      const list = await Promise.all(groups.map(g => groupSummary(g, m.sessionToken)));
+      const list = await Promise.all(groups.map(g => groupSummary(g, m.sessionToken, true)));
       viewerSocket.emit('all-groups-list', list);
     } else {
-      const list = await Promise.all(groups.map(g => groupSummary(g, null)));
+      const list = await Promise.all(groups.map(g => groupSummary(g, null, true)));
       io.to('admins').emit('all-groups-list', list);
     }
   }
@@ -168,6 +191,11 @@ function registerSocketHandlers(io, socket) {
   async function queueOfflineEmail(group, party, payload) {
     const toEmail = party === 'A' ? group.email_a : group.email_b;
     if (!toEmail) return;
+    if (AUTO_EMAIL) {
+      // AUTO_SEND_OFFLINE_EMAILS=true: skip the approval queue and email straight away, in the recipient's language.
+      await notifyOfflineMessage(toEmail, { fromName: payload.fromName, groupName: payload.groupName, text: payload.text, lang: party === 'B' ? group.seller_language : undefined });
+      return;
+    }
     const rec = await store.createPendingEmail({
       groupId: group.id, party, toEmail,
       fromName: payload.fromName, groupName: payload.groupName, messageText: payload.text
@@ -175,11 +203,30 @@ function registerSocketHandlers(io, socket) {
     io.to('admins').emit('pending-email-created', publicPendingEmail(rec));
   }
 
+  // A message posted into the group by the Desk itself (status banners, shared payment notes).
+  async function postDeskMessage(groupId, text) {
+    const group = await store.getGroup(groupId);
+    if (!group) return null;
+    const msg = await store.insertMessage({
+      id: 'desk-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
+      groupId, senderName: 'Desk Officer', senderRole: 'ADMINISTRATOR', text: escapeHtml(sanitizeText(text, 2000))
+    });
+    io.to(groupId).emit('message', await publicMessage(msg));
+    try { await notifier.notifyNewMessage(io, group, { session_token: 'desk', display_name: 'Desk Officer' }, text, msg.id, { skipAdmins: true }); } catch (e) { /* alerts are best-effort */ }
+    await broadcastGroupsList();
+    return msg;
+  }
+
+  const handlerCtx = { meta, metaHasMinRole, broadcastGroupsList, postDeskMessage, requireSellerOwnGroup };
   // Money movement (incoming funds, withdrawal status control, Funds Desk).
-  registerFundsHandlers(io, socket, { meta, metaHasMinRole, broadcastGroupsList });
+  registerFundsHandlers(io, socket, handlerCtx);
+  // Seller account: registration, security, KYC, business upgrade, withdrawals, admin account controls.
+  registerAccountHandlers(io, socket, handlerCtx);
+  // Live stage tracking controls for incoming funds.
+  registerTrackingHandlers(io, socket, handlerCtx);
 
   // ---------------- JOIN ROOM ----------------
-  socket.on('join-room', async ({ groupId, role, adminKey, sessionToken, email }) => {
+  socket.on('join-room', async ({ groupId, role, adminKey, sessionToken, email, lang }) => {
     try {
       if (!sessionToken || typeof sessionToken !== 'string') return;
       groupId = sanitizeText(groupId || 'default-group', 100);
@@ -213,6 +260,11 @@ function registerSocketHandlers(io, socket) {
         pendingDisconnects.delete(sessionToken);
       }
 
+      // A seller whose current network address was blocked by the Desk cannot enter their seat.
+      if (!isAdmin && safeRole === 'PARTY B' && group.seller_registered && isIpBlocked(group, ipOfSocket(socket))) {
+        return socket.emit('ip-blocked', { message: 'Access from this network location has been disabled for this account. Please contact ' + COMPLAINTS_EMAIL + '.' });
+      }
+
       const user = await store.upsertUser({
         sessionToken,
         displayName,
@@ -220,6 +272,7 @@ function registerSocketHandlers(io, socket) {
         isAdmin,
         adminRole,
         email: isValidEmailSafe(email) ? email : undefined,
+        language: (typeof lang === 'string' && /^[a-zA-Z-]{2,7}$/.test(lang)) ? lang : undefined,
         isOnline: true
       });
 
@@ -253,9 +306,10 @@ function registerSocketHandlers(io, socket) {
       ]);
 
       await store.clearUnread(sessionToken, groupId);
+      notifier.onGroupRead(io, sessionToken, groupId, user).catch(() => {});
 
       socket.emit('init-state', {
-        group: await groupSummary(group, sessionToken),
+        group: await groupSummary(group, sessionToken, isAdmin, isAdmin ? null : safeRole),
         isAdminConfirmed: isAdmin,
         adminRole,
         role: isAdmin ? null : safeRole,
@@ -283,6 +337,7 @@ function registerSocketHandlers(io, socket) {
         // Account state too (KYC/balances/ledger) — never a Moderator, never the buyer.
         if (hasMinRole(adminRole, 'ADMIN')) await emitSnapshotTo(socket, groupId);
       } else if (safeRole === 'PARTY B') {
+        if (group.seller_registered) { await recordSellerIp(groupId, ipOfSocket(socket), 'login'); }
         // The Seller's own account — this is the popup trigger: the client
         // shows the "Create your Transaction Account" registration modal
         // whenever seller_registered is still false.
@@ -338,11 +393,11 @@ function registerSocketHandlers(io, socket) {
       await broadcastStats();
       if (fileUrl) await broadcastDashboardWidgets();
 
-      // Only the group's actual Buyer and Seller get notified about this
-      // message — never every user in the whole system (a message in one
-      // deal must never leak into another deal's notifications). Admin
-      // messages notify both (whichever is offline); a party's own message
-      // notifies only the other one.
+      // Everyone except the sender is alerted immediately: the group's Buyer and
+      // Seller plus every admin/moderator. Online people get a live alert (the
+      // browser chimes 3x when they aren't looking at the chat); offline people get
+      // a Web Push. Unread counts and the 60-minute reminder clock start here too.
+      await notifier.notifyNewMessage(io, group, user, cleanText || (fileName ? `Shared file: ${fileName}` : 'Shared a file'), msg.id);
       const onlineTokens = new Set(Array.from(activeSockets.values()).map(v => v.sessionToken));
       const senderParty = group.buyer_session_token === user.session_token ? 'A'
         : group.seller_session_token === user.session_token ? 'B' : null;
@@ -350,15 +405,9 @@ function registerSocketHandlers(io, socket) {
       for (const party of ['A', 'B']) {
         if (party === senderParty) continue;
         const token = party === 'A' ? group.buyer_session_token : group.seller_session_token;
-        // A party who has never joined this group yet has no session token
-        // at all — they are, by definition, offline, so an email (if one is
-        // on file) can still be queued even though there's no token to push to.
         const isOnline = token ? onlineTokens.has(token) : false;
-        if (token) await store.incrementUnread(token, groupId);
-        if (!isOnline) {
-          if (token) await pushIfOffline(token, notifyPayload);
-          await queueOfflineEmail(group, party, notifyPayload);
-        }
+        // An offline party (or one who never joined) can still be emailed if an address is on file.
+        if (!isOnline) await queueOfflineEmail(group, party, notifyPayload);
       }
     } catch (err) {
       console.error('[send-message] error:', err);
@@ -370,6 +419,8 @@ function registerSocketHandlers(io, socket) {
     const m = meta();
     if (!m) return;
     await store.clearUnread(m.sessionToken, groupId);
+    const reader = await store.getUser(m.sessionToken);
+    notifier.onGroupRead(io, m.sessionToken, groupId, reader).catch(() => {});
     const updatedIds = await store.markGroupRead(groupId, m.sessionToken, m.sessionToken);
     if (updatedIds.length) io.to(groupId).emit('message-status-bulk-update', { messageIds: updatedIds, status: 'read' });
     await broadcastGroupsList(socket);
@@ -607,6 +658,10 @@ function registerSocketHandlers(io, socket) {
     if (!metaHasMinRole('ADMIN')) return;
     if (!['A', 'B'].includes(party)) return;
     if (email && !isValidEmailSafe(email)) return socket.emit('error-msg', 'That does not look like a valid email address.');
+    if (party === 'B') {
+      const g0 = await store.getGroup(groupId);
+      if (g0 && g0.seller_email_locked) return socket.emit('error-msg', 'The seller\'s email is permanently tied to their registered account and cannot be changed.');
+    }
     const clean = email ? email.trim() : null; // empty string/undefined clears it
     await store.updateGroup(groupId, party === 'A' ? { email_a: clean } : { email_b: clean });
     const group = await store.getGroup(groupId);
@@ -627,6 +682,7 @@ function registerSocketHandlers(io, socket) {
     if (group.buyer_session_token === m.sessionToken) party = 'A';
     else if (group.seller_session_token === m.sessionToken) party = 'B';
     if (!party) return;
+    if (party === 'B' && group.seller_email_locked) return socket.emit('error-msg', 'Your email is permanently tied to your account and cannot be changed.');
     const clean = email.trim();
     await store.updateGroup(groupId, party === 'A' ? { email_a: clean } : { email_b: clean });
     socket.emit('my-email-updated', { email: clean });
@@ -651,92 +707,13 @@ function registerSocketHandlers(io, socket) {
     return group;
   }
 
-  // ---- Registration: "Create your Transaction Account" ----
-  // This is the popup shown the moment a Seller opens their invite link and
-  // seller_registered is still false — it's what turns their chat seat into
-  // an actual account with a password, and locks in their ledger currency.
-  socket.on('register-transaction-account', async ({ groupId, fullName, email, password, currency, dateOfBirth, country }) => {
-    const m = meta();
-    if (!m || m.isAdmin) return;
-    if (!accountActionLimiter.allow(m.sessionToken)) return socket.emit('error-msg', 'Too many attempts — please wait a moment and try again.');
-    const group = await store.getGroup(groupId);
-    if (!group || group.seller_session_token !== m.sessionToken) return socket.emit('error-msg', 'You are not the Seller of this group.');
-    if (group.seller_registered) return socket.emit('error-msg', 'This Transaction Account has already been created.');
-
-    const cleanName = sanitizeText(fullName, 200);
-    if (!cleanName) return socket.emit('error-msg', 'Please enter your full name.');
-    if (!isStrongEnoughPassword(password)) return socket.emit('error-msg', 'Password must be at least 8 characters.');
-    if (!CURRENCIES.has(currency)) return socket.emit('error-msg', 'Please choose a valid account currency.');
-    // Email is usually already on file (set by the Desk Officer, or by the
-    // seller via the envelope icon) — but if it's still missing, the
-    // registration form itself can supply it so nobody gets stuck.
-    const finalEmail = group.email_b || (isValidEmailSafe(email) ? email.trim() : null);
-    if (!finalEmail) return socket.emit('error-msg', 'Please enter a valid email address.');
-
-    const dob = new Date(dateOfBirth);
-    if (!dateOfBirth || Number.isNaN(dob.getTime())) return socket.emit('error-msg', 'Please enter a valid date of birth.');
-    const ageMs = Date.now() - dob.getTime();
-    const age = ageMs / (365.25 * 24 * 3600 * 1000);
-    if (dob.getFullYear() < 1900 || dob.getTime() > Date.now()) return socket.emit('error-msg', 'Please enter a valid date of birth.');
-    if (age < 18) return socket.emit('error-msg', 'You must be at least 18 years old to create a Transaction Account.');
-    const cleanCountry = sanitizeText(country, 100);
-    if (!cleanCountry) return socket.emit('error-msg', 'Please select your country.');
-
-    const fields = {
-      seller_registered: true,
-      seller_full_name: escapeHtml(cleanName),
-      seller_password_hash: hashPassword(password),
-      seller_currency: currency,
-      seller_date_of_birth: dateOfBirth,
-      seller_country: escapeHtml(cleanCountry),
-      currency_locked_at: new Date().toISOString() // locked immediately; blueprint's "locked after first deposit" is loosened here since the ledger needs a currency from day one
-    };
-    if (!group.email_b) fields.email_b = finalEmail;
-    await store.updateGroup(groupId, fields);
-    const updated = await store.getGroup(groupId);
-    socket.emit('seller-account-state', publicSellerAccount(updated));
-    socket.emit('transaction-account-created', { groupId });
-    io.to('finance-admins').emit('seller-account-updated', publicSellerAccount(updated));
-    await pushAdminLedger(io, groupId); // Funds Desk learns about the new account (and its currency) immediately
-    await broadcastGroupsList();
-  });
-
-  // ---- KYC ----
-  socket.on('submit-kyc', async ({ groupId, docType, idFrontUrl, idBackUrl, proofAddressType, proofAddressUrl, selfieUrl }) => {
-    const group = await requireSellerOwnGroup(groupId);
-    if (!group) return;
-    if (!accountActionLimiter.allow(meta().sessionToken)) return socket.emit('error-msg', 'Too many attempts — please wait a moment and try again.');
-    if (group.kyc_status === 'verified') return socket.emit('error-msg', 'Your identity is already verified.');
-    if (!KYC_DOC_TYPES.has(docType)) return socket.emit('error-msg', 'Please select a valid document type.');
-    if (!PROOF_ADDRESS_TYPES.has(proofAddressType)) return socket.emit('error-msg', 'Please select what kind of proof of address you\'re uploading.');
-    if (!idFrontUrl || !proofAddressUrl || !selfieUrl) return socket.emit('error-msg', 'ID (front), proof of address, and a selfie are all required.');
-    if (docType !== 'passport' && !idBackUrl) return socket.emit('error-msg', 'The back of your ID is required for this document type.');
-    // Admins open these links from the review queue, so only files this server
-    // itself stored are accepted (never a javascript:/external URL).
-    const urlsToCheck = [idFrontUrl, proofAddressUrl, selfieUrl].concat(docType !== 'passport' ? [idBackUrl] : []);
-    if (!urlsToCheck.every((u) => typeof u === 'string' && UPLOAD_URL_RE.test(u))) return socket.emit('error-msg', 'One of your documents was not uploaded correctly. Please upload it again.');
-
-    await store.updateGroup(groupId, {
-      kyc_status: 'pending',
-      kyc_doc_type: docType,
-      kyc_id_front_url: sanitizeText(idFrontUrl, 500),
-      kyc_id_back_url: docType === 'passport' ? null : sanitizeText(idBackUrl, 500),
-      kyc_proof_address_url: sanitizeText(proofAddressUrl, 500),
-      kyc_proof_address_type: proofAddressType,
-      kyc_selfie_url: sanitizeText(selfieUrl, 500),
-      kyc_submitted_at: new Date().toISOString(),
-      kyc_rejection_reason: null
-    });
-    const updated = await store.getGroup(groupId);
-    socket.emit('seller-account-state', publicSellerAccount(updated));
-    io.to('finance-admins').emit('kyc-submitted', publicSellerAccount(updated));
-    await pushAdminLedger(io, groupId);
-  });
+  // Registration, email verification, terms acceptance, account ID, KYC submission, business upgrade,
+  // withdrawal requests and disable/enable now live in accountHandlers.js.
 
   socket.on('admin-get-kyc-queue', async () => {
     if (!metaHasMinRole('ADMIN')) return;
     const groups = await store.getAllGroups();
-    const queue = groups.filter(g => g.kyc_status === 'pending').map(publicSellerAccount);
+    const queue = groups.filter(g => g.kyc_status === 'pending').map((g) => publicSellerAccount(g, { forAdmin: true }));
     socket.emit('kyc-queue-list', queue);
   });
 
@@ -758,14 +735,17 @@ function registerSocketHandlers(io, socket) {
       title: decision === 'verified' ? 'Identity verified' : 'Identity verification not approved',
       body: decision === 'verified' ? 'You can now request withdrawals at any time.' : (updated.kyc_rejection_reason || 'Please resubmit your documents.')
     });
-    io.to('finance-admins').emit('kyc-resolved', publicSellerAccount(updated));
-    if (updated.email_b) await notifyKycStatus(updated.email_b, { groupName: updated.name, status: decision, reason: updated.kyc_rejection_reason });
+    io.to('finance-admins').emit('kyc-resolved', publicSellerAccount(updated, { forAdmin: true }));
+    if (updated.email_b) await notifyKycStatus(updated.email_b, { groupName: updated.name, status: decision, reason: updated.kyc_rejection_reason, lang: updated.seller_language });
   });
 
   // ---- Deposits ("Record a deposit" — a notification, never proof of funds) ----
   socket.on('notify-deposit', async ({ groupId, asset, network, amount }) => {
     const group = await requireSellerOwnGroup(groupId);
     if (!group) return;
+    if (!group.seller_registered) return socket.emit('error-msg', 'Please create your Transaction Account first.');
+    if (group.seller_disabled) return socket.emit('error-msg', 'Your account is disabled. Contact ' + COMPLAINTS_EMAIL + '.');
+    if (isIpBlocked(group, ipOfSocket(socket))) return socket.emit('error-msg', 'Access from this network location has been disabled for your account.');
     if (!accountActionLimiter.allow(meta().sessionToken)) return socket.emit('error-msg', 'Too many attempts — please wait a moment and try again.');
     const amt = Number(amount);
     if (!Number.isFinite(amt) || amt <= 0 || amt > 999999999.99) return socket.emit('error-msg', 'Please enter a valid amount.');
@@ -803,6 +783,12 @@ function registerSocketHandlers(io, socket) {
     const moved = await store.adjustBalances(dep.group_id, decision === 'verified' ? { held: -amt, available: amt } : { held: -amt, total: -amt });
     if (!moved) return socket.emit('error-msg', 'The seller\'s held balance does not cover this deposit — please check the ledger.');
     const resolved = await store.resolveDeposit(depositId, { status: decision, verifiedBy: m.sessionToken, rejectionReason: decision === 'rejected' ? (sanitizeText(reason, 500) || 'Not specified') : null });
+    // Crypto prior-deposit requirement: once verified crypto deposits cover what this seller was asked for, unlock crypto withdrawals for good.
+    if (decision === 'verified' && dep.method === 'crypto' && !group.crypto_deposit_verified && group.crypto_deposit_required_usd) {
+      const { verifiedCryptoDepositsUsd } = require('./accountHandlers');
+      const haveUsd = await verifiedCryptoDepositsUsd(await store.getGroup(dep.group_id));
+      if (haveUsd + 1e-9 >= Number(group.crypto_deposit_required_usd)) await store.updateGroup(dep.group_id, { crypto_deposit_verified: true });
+    }
     const updatedGroup = await store.getGroup(dep.group_id);
     await pushSellerState(io, dep.group_id, {
       kind: 'deposit',
@@ -810,7 +796,7 @@ function registerSocketHandlers(io, socket) {
       body: decision === 'verified' ? `${amt.toFixed(2)} ${updatedGroup.seller_currency || ''} is now available.`.trim() : (resolved.rejection_reason || 'Not specified')
     });
     io.to('finance-admins').emit('deposit-resolved', publicDeposit(resolved));
-    if (updatedGroup.email_b) await notifyDepositStatus(updatedGroup.email_b, { groupName: updatedGroup.name, amount: `${amt} ${updatedGroup.seller_currency || ''}`.trim(), status: decision, reason: resolved.rejection_reason });
+    if (updatedGroup.email_b) await notifyDepositStatus(updatedGroup.email_b, { groupName: updatedGroup.name, amount: `${amt} ${updatedGroup.seller_currency || ''}`.trim(), status: decision, reason: resolved.rejection_reason, lang: updatedGroup.seller_language });
     await broadcastGroupsList();
   });
 
@@ -818,48 +804,10 @@ function registerSocketHandlers(io, socket) {
   // The admin side of the state machine (pending -> held in vault -> processing
   // -> completed, or declined) lives in fundsHandlers.js. The seller's request is here.
 
-  socket.on('request-withdrawal', async ({ groupId, method, asset, network, destination, beneficiaryName, bankName, bankAccount, bankSwift, bankCountry, amount, amountCurrency }) => {
-    const group = await requireSellerOwnGroup(groupId);
-    if (!group) return;
-    if (!accountActionLimiter.allow(meta().sessionToken)) return socket.emit('error-msg', 'Too many attempts — please wait a moment and try again.');
-    if (group.kyc_status !== 'verified') return socket.emit('error-msg', 'Your identity must be verified before you can withdraw.');
-    if (!group.seller_currency) return socket.emit('error-msg', 'Your account currency has not been set yet.');
-    const amt = F.round2(Number(amount));
-    if (!Number.isFinite(amt) || amt <= 0) return socket.emit('error-msg', 'Please enter a valid amount.');
-    if (!['crypto', 'bank'].includes(method)) return socket.emit('error-msg', 'Please choose a withdrawal method.');
-
-    let ledgerAmount, ccy;
-    if (method === 'crypto') {
-      if (!CRYPTO_ASSETS.has(asset)) return socket.emit('error-msg', 'Please choose a valid asset.');
-      if (!destination || sanitizeText(destination, 200).length < 6) return socket.emit('error-msg', 'Please enter a valid destination wallet address.');
-      ccy = CURRENCIES.has(amountCurrency) ? amountCurrency : group.seller_currency; // seller may pick the entry currency for crypto only (§6)
-      ledgerAmount = convertCurrency(amt, ccy, group.seller_currency);
-    } else {
-      if (!beneficiaryName || !bankName || !bankAccount) return socket.emit('error-msg', 'Beneficiary name, bank name and account number/IBAN are required.');
-      ccy = group.seller_currency; // bank transfers stay in the account's fixed currency only
-      ledgerAmount = amt;
-    }
-    if (ledgerAmount > Number(group.balance_available || 0)) return socket.emit('error-msg', 'That amount exceeds your available balance.');
-
-    const wd = await store.createWithdrawal({
-      groupId, method, asset: method === 'crypto' ? asset : null, network: method === 'crypto' ? (network || null) : null,
-      destination: method === 'crypto' ? sanitizeText(destination, 200) : null,
-      beneficiaryName: method === 'bank' ? sanitizeText(beneficiaryName, 200) : null,
-      bankName: method === 'bank' ? sanitizeText(bankName, 200) : null,
-      bankAccount: method === 'bank' ? sanitizeText(bankAccount, 100) : null,
-      bankSwift: method === 'bank' ? sanitizeText(bankSwift, 50) : null,
-      bankCountry: method === 'bank' ? sanitizeText(bankCountry, 100) : null,
-      amount: amt, amountCurrency: ccy, amountLedger: Math.round(ledgerAmount * 100) / 100
-    });
-    socket.emit('withdrawal-created', publicWithdrawal(wd));
-    io.to('finance-admins').emit('withdrawal-created', publicWithdrawal(wd));
-    await pushSellerState(io, groupId, null); // keeps the seller's other devices + the Funds Desk in step
-  });
-
   socket.on('admin-get-withdrawals-queue', async () => {
     if (!metaHasMinRole('ADMIN')) return;
     const pending = await store.getPendingWithdrawals();
-    socket.emit('withdrawals-queue-list', pending.map(publicWithdrawal));
+    socket.emit('withdrawals-queue-list', pending.map((w) => publicWithdrawal(w, { forAdmin: true })));
   });
 
   // Admin inspecting one specific group's full Transaction Account (used

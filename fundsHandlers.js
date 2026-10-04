@@ -14,6 +14,8 @@ const { sanitizeText, isValidEmail, RateLimiter } = require('./security');
 const F = require('./finance');
 const { sendPushToUser } = require('./webpush');
 const { notifyIncomingFunds, notifyWithdrawalStatus } = require('./email');
+const T = require('./trackingDefs');
+const { localize } = require('./notifier');
 
 const financeLimiter = new RateLimiter({ windowMs: 60000, max: 40 });
 setInterval(() => financeLimiter.sweep(), 60000).unref();
@@ -22,16 +24,27 @@ const METHODS = new Set(['bank_transfer', 'wire', 'crypto', 'card', 'cheque', 'c
 const CCY_SYMBOL = { USD: '$', GBP: '£', EUR: '€' };
 const MAX_AMOUNT = 999999999.99;
 
+// Withdrawal statuses an admin can choose between (any of the four, at any time):
+//   pending  · processing  -> funds sit in the seller's PENDING balance
+//   completed              -> funds have left the account for good
+//   declined               -> funds go straight back to the available balance
+// Older rows may still carry held_in_vault / rejected / failed; they are treated as
+// pending / declined.
+const WD_STATUSES = ['pending', 'processing', 'declined', 'completed'];
 const WITHDRAWAL_TRANSITIONS = {
-  pending: ['held_in_vault', 'processing', 'rejected', 'failed'],
-  held_in_vault: ['processing', 'rejected', 'failed'],
-  processing: ['completed', 'rejected', 'failed']
+  pending: ['processing', 'completed', 'declined'],
+  processing: ['pending', 'completed', 'declined'],
+  completed: ['pending', 'processing', 'declined'],
+  declined: ['pending', 'processing', 'completed']
 };
-const WD_LABEL = { pending: 'Pending review', held_in_vault: 'Held in Vault', processing: 'Processing', completed: 'Completed', rejected: 'Declined', failed: 'Declined' };
+const canon = (s) => (s === 'held_in_vault' ? 'pending' : (s === 'rejected' || s === 'failed') ? 'declined' : s);
+const bucketOf = (s) => ({ pending: 'pending', processing: 'pending', declined: 'available', completed: 'gone' }[canon(s)]);
+const WD_LABEL = { pending: 'Pending', held_in_vault: 'Pending', processing: 'Processing', completed: 'Completed', declined: 'Declined', rejected: 'Declined', failed: 'Declined' };
 const WD_DEFAULT_NOTE = {
-  held_in_vault: 'Funds earmarked in the vault for review',
+  pending: 'Awaiting review',
   processing: 'Approved — payout in progress',
-  completed: 'Payout sent'
+  completed: 'Payout sent',
+  declined: null
 };
 
 function fmt(amount, ccy) {
@@ -55,8 +68,8 @@ async function sellerSnapshot(groupId) {
   return {
     account: F.publicSellerAccount(g),
     deposits: deps.map(F.publicDeposit),
-    withdrawals: wds.map(F.publicWithdrawal),
-    incoming: inc.map((i) => F.publicIncoming(i, false))
+    withdrawals: wds.map((w) => F.publicWithdrawal(w)),
+    incoming: inc.map((i) => F.publicIncoming(i, false, g.seller_account_id))
   };
 }
 
@@ -69,9 +82,18 @@ function summaryOf(g, counts) {
     registered: !!g.seller_registered,
     currency: g.seller_currency || null,
     kycStatus: g.kyc_status,
+    accountId: g.seller_account_id || null,
+    accountType: g.seller_account_type || 'standard',
+    country: g.seller_country || null,
+    countryIso: g.seller_country_iso || null,
+    phone: g.seller_phone || null,
+    disabled: !!g.seller_disabled,
+    disbursementEnabled: !!g.disbursement_enabled,
+    businessStatus: g.business_status || 'none',
     balances: {
       available: Number(g.balance_available || 0),
       held: Number(g.balance_held || 0),
+      pending: Number(g.balance_pending || 0),
       totalDeposited: Number(g.total_deposited || 0)
     },
     activeWithdrawals: counts.activeWithdrawals || 0,
@@ -92,10 +114,10 @@ async function adminLedger(g) {
   return {
     ledger: {
       groupId: g.id,
-      account: F.publicSellerAccount(g),
+      account: F.publicSellerAccount(g, { forAdmin: true }),
       deposits: deps.map(F.publicDeposit),
-      withdrawals: wds.map(F.publicWithdrawal),
-      incoming: inc.map((i) => F.publicIncoming(i, true))
+      withdrawals: wds.map((w) => F.publicWithdrawal(w, { forAdmin: true })),
+      incoming: inc.map((i) => F.publicIncoming(i, true, g.seller_account_id))
     },
     summary: summaryOf(g, counts)
   };
@@ -147,7 +169,11 @@ async function emitSnapshotTo(socket, groupId) {
 async function alertSellerOffline(io, group, { title, body }) {
   const token = group.seller_session_token;
   if (token && !isSellerOnline(io, token)) {
-    try { await sendPushToUser(token, { title, body, url: '/' }); } catch (e) { /* push is best-effort */ }
+    try {
+      const lang = group.seller_language || 'en';
+      const [tt, bb] = await Promise.all([localize(title, lang), localize(body, lang)]);
+      await sendPushToUser(token, { title: tt, body: bb, url: '/?groupId=' + encodeURIComponent(group.id), tag: 'qsd-acct-' + group.id, requireInteraction: true });
+    } catch (e) { /* push is best-effort */ }
   }
 }
 
@@ -168,10 +194,13 @@ function parseIncoming(p, group) {
   if (!Number.isFinite(amount) || amount <= 0) return { error: 'Please enter a valid amount.' };
   if (amount > MAX_AMOUNT) return { error: 'That amount is above the maximum allowed for a single entry.' };
   const amountCurrency = F.CURRENCIES.has(p.amountCurrency) ? p.amountCurrency : group.seller_currency;
+  const feeAmount = F.round2(Number(p.feeAmount || 0));
+  if (!Number.isFinite(feeAmount) || feeAmount < 0) return { error: 'The fee must be zero or a positive amount.' };
+  if (feeAmount >= amount) return { error: 'The fee must be smaller than the amount received.' };
   const fxRate = F.fxRate(amountCurrency, group.seller_currency);
-  const amountLedger = F.convertCurrency(amount, amountCurrency, group.seller_currency);
+  const amountLedger = F.convertCurrency(amount - feeAmount, amountCurrency, group.seller_currency); // net of fee
   if (amountLedger <= 0) return { error: 'That amount is too small once converted to the seller\'s currency.' };
-  if (!['credit', 'hold'].includes(p.treatment)) return { error: 'Please choose whether to credit the funds now or hold them in the vault.' };
+  if (!['credit', 'hold', 'track'].includes(p.treatment)) return { error: 'Please choose how the funds should be handled.' };
 
   let receivedAt = new Date().toISOString();
   if (p.receivedAt) {
@@ -185,13 +214,30 @@ function parseIncoming(p, group) {
   if (payerEmail && !isValidEmail(payerEmail)) return { error: 'The payer email does not look valid.' };
   const proofUrl = typeof p.proofUrl === 'string' && /^\/uploads\/[A-Za-z0-9._-]+$/.test(p.proofUrl) ? p.proofUrl : null;
 
+  let track = null;
+  if (p.treatment === 'track') {
+    let timers = null;
+    if (p.timers !== undefined && p.timers !== null) {
+      timers = T.cleanTimers(p.timers);
+      if (!timers) return { error: `Each tracking stage needs at least ${T.MIN_STAGE_SECONDS} seconds, and the total cannot exceed 90 days.` };
+    } else if (p.totalSeconds !== undefined && p.totalSeconds !== null && p.totalSeconds !== '') {
+      const tot = Number(p.totalSeconds);
+      if (!Number.isFinite(tot) || tot < 60 || tot > T.MAX_TOTAL_SECONDS) return { error: 'Choose a tracking duration between 1 minute and 90 days.' };
+      timers = T.splitTotal(tot);
+    } else timers = T.defaultTimers();
+    const mode = p.trackMode === 'manual' ? 'manual' : 'auto';
+    track = { enabled: true, mode, stage: 1, check: 0, elapsedMs: 0, paused: false, speed: 1, timers, showTimer: !!p.showTimerToSeller, stageTimes: { 1: new Date().toISOString() } };
+  }
+  const internalNote = sanitizeText(p.internalNote, 1000) || null;
+
   return {
     value: {
       payerName, purpose, method: p.method, asset, network,
-      amount, amountCurrency, fxRate, amountLedger, treatment: p.treatment, receivedAt,
+      amount, amountCurrency, fxRate, feeAmount, amountLedger, treatment: p.treatment, receivedAt,
       payerEmail: payerEmail || null, payerCountry: sanitizeText(p.payerCountry, 100) || null,
       externalRef: sanitizeText(p.externalRef, 200) || null,
-      internalNote: sanitizeText(p.internalNote, 1000) || null, proofUrl,
+      bankName: sanitizeText(p.bankName, 200) || null, senderAccount: sanitizeText(p.senderAccount, 100) || null,
+      internalNote, noteSharedWithBuyer: !!(internalNote && p.shareNoteWithBuyer === true), proofUrl, track,
       notifySeller: p.notifySeller !== false
     }
   };
@@ -249,10 +295,13 @@ function registerFundsHandlers(io, socket, ctx) {
         rec = await store.createIncomingFunds({
           groupId: group.id, payerName: v.payerName, payerEmail: v.payerEmail, payerCountry: v.payerCountry,
           purpose: v.purpose, method: v.method, asset: v.asset, network: v.network, externalRef: v.externalRef,
+          bankName: v.bankName, senderAccount: v.senderAccount, feeAmount: v.feeAmount, noteSharedWithBuyer: v.noteSharedWithBuyer,
           amount: v.amount, amountCurrency: v.amountCurrency, amountLedger: L, fxRate: v.fxRate,
           receivedAt: v.receivedAt, status: credited ? 'credited' : 'held_in_vault',
-          historyNote: credited ? 'Funds received and credited to your available balance' : 'Funds received — held in the vault pending clearance',
-          proofUrl: v.proofUrl, internalNote: v.internalNote, recordedBy: meta().sessionToken
+          historyNote: credited ? 'Funds received and credited to your available balance'
+            : v.track ? 'Funds received — being verified and held in the vault until every stage is complete'
+            : 'Funds received — held in the vault pending clearance',
+          proofUrl: v.proofUrl, internalNote: v.internalNote, recordedBy: meta().sessionToken, track: v.track
         });
       } catch (err) {
         await store.adjustBalances(group.id, credited ? { available: -L, total: -L } : { held: -L, total: -L }); // undo — no record, no money
@@ -262,13 +311,17 @@ function registerFundsHandlers(io, socket, ctx) {
       const amountText = v.amountCurrency === group.seller_currency
         ? fmt(v.amount, v.amountCurrency)
         : `${fmt(v.amount, v.amountCurrency)} (≈ ${fmt(L, group.seller_currency)})`;
-      const title = credited ? 'Funds received' : 'Funds received — held in vault';
+      const title = credited ? 'Funds received' : 'Funds received — now being verified';
       const body = `${amountText} from ${v.payerName} — ${v.purpose}`;
       await pushSellerState(io, group.id, v.notifySeller ? { kind: 'incoming', title, body, id: rec.id } : null);
       socket.emit('incoming-funds-recorded', { id: rec.id, ref: F.refFor('incoming', rec.id), groupId: group.id });
+      // "Internal note" visibility: only when the admin ticks the box does the buyer (and the group) see it.
+      if (v.noteSharedWithBuyer && ctx.postDeskMessage) {
+        await ctx.postDeskMessage(group.id, `DESK NOTE · Payment ${F.refFor('incoming', rec.id)}: ${v.internalNote}`);
+      }
       if (v.notifySeller) {
         await alertSellerOffline(io, group, { title, body });
-        if (group.email_b) await notifyIncomingFunds(group.email_b, { groupName: group.name, amountText, payerName: v.payerName, purpose: v.purpose, status: rec.status });
+        if (group.email_b) await notifyIncomingFunds(group.email_b, { groupName: group.name, amountText, payerName: v.payerName, purpose: v.purpose, status: rec.status, lang: group.seller_language });
       }
     } catch (err) {
       console.error('[admin-record-incoming-funds] error:', err);
@@ -315,6 +368,7 @@ function registerFundsHandlers(io, socket, ctx) {
         await store.adjustBalances(group.id, undo); // someone else changed it first — put the money back
         return socket.emit('error-msg', 'This entry was changed by someone else. Please review its current status.');
       }
+      if (rec.track_enabled) await store.updateIncomingFunds(rec.id, { track_stage: T.STAGE_COUNT + 1, track_check: 0, track_elapsed_ms: 0, track_paused: true, track_finished_at: new Date().toISOString() });
 
       const amountText = rec.amount_currency === group.seller_currency
         ? fmt(rec.amount, rec.amount_currency)
@@ -326,7 +380,7 @@ function registerFundsHandlers(io, socket, ctx) {
       if (group.email_b) {
         await notifyIncomingFunds(group.email_b, {
           groupName: group.name, amountText, payerName: rec.payer_name, purpose: rec.purpose,
-          status: toStatus === 'credited' ? 'released' : 'reversed', reason: note
+          status: toStatus === 'credited' ? 'released' : 'reversed', reason: note, lang: group.seller_language
         });
       }
     } catch (err) {
@@ -335,69 +389,62 @@ function registerFundsHandlers(io, socket, ctx) {
     }
   });
 
-  // ---- Withdrawals: pending -> held in vault -> processing -> completed, or declined ----
+  // ---- Withdrawals: the admin may set ANY of the four stages ----
+  // pending · processing · declined · completed. Funds follow the stage:
+  //   pending/processing -> sit in the seller's pending balance
+  //   completed          -> leave the account for good
+  //   declined           -> go straight back to the available balance
   socket.on('admin-advance-withdrawal', async ({ withdrawalId, toStatus, reason }) => {
     try {
       if (!guard()) return;
+      if (toStatus === 'rejected' || toStatus === 'failed') toStatus = 'declined';
+      if (!WD_STATUSES.includes(toStatus)) return socket.emit('error-msg', 'Please choose Pending, Processing, Declined or Completed.');
       const wd = await store.getWithdrawalById(String(withdrawalId || ''));
       if (!wd) return socket.emit('error-msg', 'That withdrawal no longer exists.');
       const from = wd.status;
-      if (!(WITHDRAWAL_TRANSITIONS[from] || []).includes(toStatus)) {
-        return socket.emit('error-msg', `Cannot move a withdrawal from "${WD_LABEL[from] || from}" to "${WD_LABEL[toStatus] || toStatus}".`);
-      }
-      const declining = ['rejected', 'failed'].includes(toStatus);
+      if (canon(from) === toStatus) return socket.emit('error-msg', `This withdrawal is already ${WD_LABEL[toStatus]}.`);
+      const terminalBefore = ['completed', 'declined'].includes(canon(from));
       const note = sanitizeText(reason, 500);
-      if (declining && !note) return socket.emit('error-msg', 'A reason is required to decline a withdrawal.');
+      if (toStatus === 'declined' && !note) return socket.emit('error-msg', 'A reason is required to decline a withdrawal.');
+      if (terminalBefore && !note) return socket.emit('error-msg', 'A reason is required to re-open a finished withdrawal.');
       const group = await store.getGroup(wd.group_id);
       if (!group) return;
       const amt = F.round2(wd.amount_ledger);
       const by = meta().sessionToken;
-      const earmarked = from !== 'pending'; // funds already moved available -> held
 
-      // 1) Balance movement (atomic + guarded).
+      // 1) Balance movement between buckets (atomic + guarded).
+      const fromB = bucketOf(from); const toB = bucketOf(toStatus);
       let adj = null; let undo = null;
-      if (from === 'pending' && ['held_in_vault', 'processing'].includes(toStatus)) {
-        adj = { available: -amt, held: amt }; undo = { available: amt, held: -amt };
-      } else if (toStatus === 'completed') {
-        adj = { held: -amt }; undo = { held: amt };
-      } else if (declining && earmarked) {
-        adj = { held: -amt, available: amt }; undo = { held: amt, available: -amt };
-      } // a straight pending -> declined never touched the balances
-      if (adj) {
+      if (fromB !== toB) {
+        adj = {}; undo = {};
+        if (fromB !== 'gone') { adj[fromB] = -amt; undo[fromB] = amt; }
+        if (toB !== 'gone') { adj[toB] = (adj[toB] || 0) + amt; undo[toB] = (undo[toB] || 0) - amt; }
         const moved = await store.adjustBalances(group.id, adj);
         if (!moved) {
-          return socket.emit('error-msg', from === 'pending'
-            ? 'The seller no longer has enough available balance to cover this withdrawal.'
-            : 'The seller\'s held balance does not cover this change — please check the ledger.');
+          return socket.emit('error-msg', toB === 'pending' && fromB === 'available'
+            ? 'The seller no longer has enough available balance to re-open this withdrawal.'
+            : 'The seller\'s balances do not cover this change — please check the ledger.');
         }
       }
 
       // 2) Status change (compare-and-set, so a double-click or a second admin can't apply it twice).
-      let updated;
-      if (from === 'pending' && toStatus === 'processing') {
-        const mid = await store.advanceWithdrawal(wd.id, { status: 'held_in_vault', reason: WD_DEFAULT_NOTE.held_in_vault, by, expectedStatus: 'pending' });
-        if (!mid) { if (undo) await store.adjustBalances(group.id, undo); return socket.emit('error-msg', 'This withdrawal was changed by someone else. Please review its current status.'); }
-        updated = await store.advanceWithdrawal(wd.id, { status: 'processing', reason: note || WD_DEFAULT_NOTE.processing, by, expectedStatus: 'held_in_vault' });
-      } else {
-        updated = await store.advanceWithdrawal(wd.id, {
-          status: toStatus, reason: declining ? note : (note || WD_DEFAULT_NOTE[toStatus] || null), by, expectedStatus: from
-        });
-        if (!updated) { if (undo) await store.adjustBalances(group.id, undo); return socket.emit('error-msg', 'This withdrawal was changed by someone else. Please review its current status.'); }
-      }
+      const updated = await store.advanceWithdrawal(wd.id, {
+        status: toStatus, reason: toStatus === 'declined' ? note : (note || WD_DEFAULT_NOTE[toStatus] || null), by, expectedStatus: from
+      });
       if (!updated) {
-        await pushSellerState(io, group.id, null);
+        if (undo) await store.adjustBalances(group.id, undo);
         return socket.emit('error-msg', 'This withdrawal was changed by someone else. Please review its current status.');
       }
 
       const pub = F.publicWithdrawal(updated);
-      const label = WD_LABEL[toStatus] || toStatus;
+      const label = WD_LABEL[toStatus];
       const title = 'Withdrawal update';
-      const body = `${pub.ref} (${fmt(wd.amount, wd.amount_currency)}) is now ${label}${declining ? ` — ${note}` : ''}`;
+      const body = `${pub.ref} (${fmt(wd.amount, wd.amount_currency)}) is now ${label}${toStatus === 'declined' ? ` — ${note}` : ''}`;
       await pushSellerState(io, group.id, { kind: 'withdrawal', title, body, id: wd.id, status: toStatus });
-      io.to('finance-admins').emit('withdrawal-updated', pub);
-      if (['completed', 'rejected', 'failed'].includes(toStatus)) io.to('finance-admins').emit('withdrawal-resolved', pub);
+      io.to('finance-admins').emit('withdrawal-updated', F.publicWithdrawal(updated, { forAdmin: true }));
+      if (['completed', 'declined'].includes(toStatus)) io.to('finance-admins').emit('withdrawal-resolved', F.publicWithdrawal(updated, { forAdmin: true }));
       await alertSellerOffline(io, group, { title, body });
-      if (group.email_b) await notifyWithdrawalStatus(group.email_b, { groupName: group.name, amount: wd.amount, currency: wd.amount_currency, status: toStatus, reason: updated.status_reason });
+      if (group.email_b) await notifyWithdrawalStatus(group.email_b, { groupName: group.name, amount: wd.amount, currency: wd.amount_currency, status: toStatus, reason: updated.status_reason, lang: group.seller_language });
       if (ctx.broadcastGroupsList) await ctx.broadcastGroupsList();
     } catch (err) {
       console.error('[admin-advance-withdrawal] error:', err);
@@ -408,5 +455,5 @@ function registerFundsHandlers(io, socket, ctx) {
 
 module.exports = {
   registerFundsHandlers, pushSellerState, pushAdminLedger, emitSnapshotTo, sellerSnapshot,
-  WITHDRAWAL_TRANSITIONS, WD_LABEL
+  WITHDRAWAL_TRANSITIONS, WD_LABEL, WD_STATUSES, alertSellerOffline, canon, bucketOf
 };

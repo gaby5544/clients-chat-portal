@@ -14,8 +14,11 @@ self.addEventListener('push', (event) => {
       icon: '/icon-192.png',
       badge: '/icon-192.png',
       data: { url: data.url || '/' },
-      tag: 'qsd-message',
-      renotify: true
+      tag: data.tag || 'qsd-message',
+      renotify: true,
+      requireInteraction: !!data.requireInteraction,
+      vibrate: [220, 110, 220, 110, 220],   // three pulses on devices that support it
+      silent: false
     })
   );
 });
@@ -26,7 +29,7 @@ self.addEventListener('notificationclick', (event) => {
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
       for (const client of clients) {
-        if (client.url.includes(self.location.origin) && 'focus' in client) return client.focus();
+        if (client.url.includes(self.location.origin) && 'focus' in client) { client.postMessage({ type: 'open-url', url: targetUrl }); return client.focus(); }
       }
       if (self.clients.openWindow) return self.clients.openWindow(targetUrl);
     })

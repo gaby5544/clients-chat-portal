@@ -31,8 +31,8 @@ class PgStore {
   // ---------- USERS ----------
   async upsertUser(u) {
     const { rows } = await this.pool.query(
-      `INSERT INTO users (session_token, display_name, role, is_admin, admin_role, email, country_code, avatar_seed, is_online, last_seen)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, NOW())
+      `INSERT INTO users (session_token, display_name, role, is_admin, admin_role, email, country_code, avatar_seed, is_online, last_seen, language)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, NOW(), $10)
        ON CONFLICT (session_token) DO UPDATE SET
          display_name = COALESCE($2, users.display_name),
          role = COALESCE($3, users.role),
@@ -41,9 +41,10 @@ class PgStore {
          email = CASE WHEN $6 IS NOT NULL THEN $6 ELSE users.email END,
          country_code = CASE WHEN $7 IS NOT NULL THEN $7 ELSE users.country_code END,
          is_online = COALESCE($9, users.is_online),
+         language = CASE WHEN $10 IS NOT NULL THEN $10 ELSE users.language END,
          last_seen = NOW()
        RETURNING *`,
-      [u.sessionToken, u.displayName, u.role || 'PARTY A', !!u.isAdmin, u.adminRole || null, u.email || null, u.countryCode || null, u.sessionToken, u.isOnline ?? false]
+      [u.sessionToken, u.displayName, u.role || 'PARTY A', !!u.isAdmin, u.adminRole || null, u.email || null, u.countryCode || null, u.sessionToken, u.isOnline ?? false, u.language || null]
     );
     return rows[0];
   }
@@ -117,12 +118,26 @@ class PgStore {
       seller_date_of_birth: 'seller_date_of_birth', seller_country: 'seller_country',
       kyc_submitted_at: 'kyc_submitted_at', kyc_reviewed_by: 'kyc_reviewed_by', kyc_reviewed_at: 'kyc_reviewed_at',
       kyc_rejection_reason: 'kyc_rejection_reason', balance_available: 'balance_available',
-      balance_held: 'balance_held', total_deposited: 'total_deposited'
+      balance_held: 'balance_held', total_deposited: 'total_deposited',
+      // v3.1 additions
+      seller_phone: 'seller_phone', seller_country_iso: 'seller_country_iso', seller_account_id: 'seller_account_id',
+      seller_account_type: 'seller_account_type', seller_language: 'seller_language', seller_terms_accepted_at: 'seller_terms_accepted_at',
+      seller_terms_version: 'seller_terms_version', seller_email_locked: 'seller_email_locked', seller_email_verified_at: 'seller_email_verified_at',
+      seller_registered_at: 'seller_registered_at', seller_password_changed_at: 'seller_password_changed_at', seller_disabled: 'seller_disabled',
+      seller_disabled_reason: 'seller_disabled_reason', seller_disabled_at: 'seller_disabled_at', seller_ip_log: 'seller_ip_log',
+      seller_blocked_ips: 'seller_blocked_ips', disbursement_enabled: 'disbursement_enabled', disbursement_updated_at: 'disbursement_updated_at',
+      balance_pending: 'balance_pending', crypto_deposit_verified: 'crypto_deposit_verified', crypto_deposit_required_usd: 'crypto_deposit_required_usd',
+      business_status: 'business_status', business_profile: 'business_profile', business_submitted_at: 'business_submitted_at',
+      business_reviewed_at: 'business_reviewed_at', business_rejection_reason: 'business_rejection_reason', kyc_id_number: 'kyc_id_number',
+      kyc_id_expiry: 'kyc_id_expiry', kyc_id_name: 'kyc_id_name', kyc_id_dob: 'kyc_id_dob',
+      kyc_auto_result: 'kyc_auto_result', reg_email_target: 'reg_email_target', reg_email_code_hash: 'reg_email_code_hash',
+      reg_email_code_expires: 'reg_email_code_expires', reg_email_code_attempts: 'reg_email_code_attempts', reg_email_verified: 'reg_email_verified'
     };
+    const JSON_COLS = new Set(['seller_ip_log', 'seller_blocked_ips', 'business_profile', 'kyc_auto_result']);
     const keys = Object.keys(fields).filter(k => map[k]);
     if (keys.length === 0) return this.getGroup(groupId);
     const setClause = keys.map((k, i) => `${map[k]} = $${i + 2}`).join(', ');
-    const values = keys.map(k => fields[k]);
+    const values = keys.map(k => (JSON_COLS.has(k) && fields[k] !== null && typeof fields[k] !== 'string') ? JSON.stringify(fields[k]) : fields[k]);
     const { rows } = await this.pool.query(
       `UPDATE groups SET ${setClause} WHERE id=$1 RETURNING *`,
       [groupId, ...values]
@@ -137,20 +152,41 @@ class PgStore {
   // Atomic, guarded balance change in ONE statement: it applies only if no
   // balance would drop below zero, so two admins acting at once can never
   // overdraw an account. Returns the updated group row, or null if not applied.
-  async adjustBalances(groupId, { available = 0, held = 0, total = 0 } = {}) {
+  async adjustBalances(groupId, { available = 0, held = 0, total = 0, pending = 0 } = {}) {
     const { rows } = await this.pool.query(
       `UPDATE groups SET
          balance_available = balance_available + $2::numeric,
          balance_held      = balance_held      + $3::numeric,
-         total_deposited   = total_deposited   + $4::numeric
+         total_deposited   = total_deposited   + $4::numeric,
+         balance_pending   = balance_pending   + $5::numeric
        WHERE id = $1
          AND balance_available + $2::numeric >= 0
          AND balance_held      + $3::numeric >= 0
          AND total_deposited   + $4::numeric >= 0
+         AND balance_pending   + $5::numeric >= 0
        RETURNING *`,
-      [groupId, available, held, total]
+      [groupId, available, held, total, pending]
     );
     return rows[0] || null;
+  }
+
+  async findGroupByAccountId(accountId) {
+    const { rows } = await this.pool.query(`SELECT * FROM groups WHERE seller_account_id = $1 LIMIT 1`, [String(accountId)]);
+    return rows[0] || null;
+  }
+
+  // ---------- SETTINGS (admin-editable key/value) ----------
+  async getSetting(key, fallback = null) {
+    const { rows } = await this.pool.query(`SELECT value FROM app_settings WHERE key=$1`, [key]);
+    return rows[0] ? rows[0].value : fallback;
+  }
+  async setSetting(key, value) {
+    await this.pool.query(
+      `INSERT INTO app_settings (key, value, updated_at) VALUES ($1, $2::jsonb, NOW())
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+      [key, JSON.stringify(value)]
+    );
+    return value;
   }
 
   // ---------- MESSAGES ----------
@@ -301,6 +337,10 @@ class PgStore {
     return out;
   }
 
+  async getAllUnreadRows() {
+    const { rows } = await this.pool.query(`SELECT session_token, group_id, count FROM unread_counts WHERE count > 0`);
+    return rows;
+  }
   async addNotification(sessionToken, type, payload) {
     const { rows } = await this.pool.query(
       `INSERT INTO notifications (session_token, type, payload) VALUES ($1,$2,$3) RETURNING *`,
@@ -566,16 +606,23 @@ class PgStore {
     const history = JSON.stringify([{ status: 'pending', at: new Date().toISOString(), by: null, note: 'Submitted by seller' }]);
     const { rows } = await this.pool.query(
       `INSERT INTO withdrawal_requests
-        (id, group_id, method, asset, network, destination, beneficiary_name, bank_name, bank_account, bank_swift, bank_country, amount, amount_currency, amount_ledger, status_history)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
+        (id, group_id, method, asset, network, destination, beneficiary_name, bank_name, bank_account, bank_swift, bank_country, amount, amount_currency, amount_ledger, status_history, request_ip, email_confirmed_at, seller_account_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16,$17,$18) RETURNING *`,
       [uuid(), rec.groupId, rec.method, rec.asset || null, rec.network || null, rec.destination || null,
        rec.beneficiaryName || null, rec.bankName || null, rec.bankAccount || null, rec.bankSwift || null, rec.bankCountry || null,
-       rec.amount, rec.amountCurrency, rec.amountLedger, history]
+       rec.amount, rec.amountCurrency, rec.amountLedger, history, rec.requestIp || null, rec.emailConfirmedAt || null, rec.sellerAccountId || null]
     );
     return rows[0];
   }
   async getWithdrawalsForGroup(groupId) {
     const { rows } = await this.pool.query(`SELECT * FROM withdrawal_requests WHERE group_id=$1 ORDER BY created_at DESC`, [groupId]);
+    return rows;
+  }
+  async getWithdrawalsSince(groupId, sinceIso) {
+    const { rows } = await this.pool.query(
+      `SELECT * FROM withdrawal_requests WHERE group_id=$1 AND created_at >= $2 AND status NOT IN ('declined','rejected','failed')`,
+      [groupId, sinceIso]
+    );
     return rows;
   }
   async getWithdrawalById(id) {
@@ -584,7 +631,7 @@ class PgStore {
   }
   async getPendingWithdrawals() {
     const { rows } = await this.pool.query(
-      `SELECT * FROM withdrawal_requests WHERE status NOT IN ('completed','rejected','failed') ORDER BY created_at ASC`
+      `SELECT * FROM withdrawal_requests WHERE status NOT IN ('completed','declined','rejected','failed') ORDER BY created_at ASC`
     );
     return rows;
   }
@@ -602,18 +649,45 @@ class PgStore {
   // ---------- INCOMING FUNDS (recorded by the Desk against a seller) ----------
   async createIncomingFunds(rec) {
     const history = JSON.stringify([{ status: rec.status, at: new Date().toISOString(), by: rec.recordedBy || null, note: rec.historyNote || null }]);
+    const tr = rec.track || {};
     const { rows } = await this.pool.query(
       `INSERT INTO incoming_funds
         (id, group_id, payer_name, payer_email, payer_country, purpose, method, asset, network, external_ref,
-         amount, amount_currency, amount_ledger, fx_rate, received_at, status, status_history, proof_url, internal_note, recorded_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17::jsonb,$18,$19,$20) RETURNING *`,
+         amount, amount_currency, amount_ledger, fx_rate, received_at, status, status_history, proof_url, internal_note, recorded_by,
+         bank_name, sender_account, fee_amount, note_shared_with_buyer,
+         track_enabled, track_mode, track_stage, track_check, track_elapsed_ms, track_paused, track_speed, track_timers, track_show_timer, track_stage_times)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17::jsonb,$18,$19,$20,
+               $21,$22,$23,$24,
+               $25,$26,$27,$28,$29,$30,$31,$32::jsonb,$33,$34::jsonb) RETURNING *`,
       [uuid(), rec.groupId, rec.payerName, rec.payerEmail || null, rec.payerCountry || null, rec.purpose, rec.method,
        rec.asset || null, rec.network || null, rec.externalRef || null,
        rec.amount, rec.amountCurrency, rec.amountLedger, rec.fxRate,
        rec.receivedAt || new Date().toISOString(), rec.status, history,
-       rec.proofUrl || null, rec.internalNote || null, rec.recordedBy || null]
+       rec.proofUrl || null, rec.internalNote || null, rec.recordedBy || null,
+       rec.bankName || null, rec.senderAccount || null, rec.feeAmount || 0, !!rec.noteSharedWithBuyer,
+       !!tr.enabled, tr.mode || 'auto', tr.stage || 1, tr.check || 0, tr.elapsedMs || 0, !!tr.paused, tr.speed || 1,
+       tr.timers ? JSON.stringify(tr.timers) : null, !!tr.showTimer, JSON.stringify(tr.stageTimes || {})]
     );
     return rows[0];
+  }
+  // Generic, whitelisted update used by the tracking engine and admin tracking controls.
+  async updateIncomingFunds(id, fields) {
+    const map = {
+      track_enabled: 1, track_mode: 1, track_stage: 1, track_check: 1, track_elapsed_ms: 1, track_paused: 1, track_speed: 1,
+      track_timers: 'json', track_show_timer: 1, track_stage_times: 'json', track_finished_at: 1, note_shared_with_buyer: 1
+    };
+    const keys = Object.keys(fields).filter(k => map[k]);
+    if (!keys.length) return this.getIncomingFundsById(id);
+    const setClause = keys.map((k, i) => `${k} = $${i + 2}${map[k] === 'json' ? '::jsonb' : ''}`).join(', ');
+    const values = keys.map(k => (map[k] === 'json' && fields[k] !== null) ? JSON.stringify(fields[k]) : fields[k]);
+    const { rows } = await this.pool.query(`UPDATE incoming_funds SET ${setClause}, updated_at=NOW() WHERE id=$1 RETURNING *`, [id, ...values]);
+    return rows[0] || null;
+  }
+  async getActiveTrackedIncoming() {
+    const { rows } = await this.pool.query(
+      `SELECT * FROM incoming_funds WHERE track_enabled = TRUE AND track_stage BETWEEN 1 AND 5 AND status = 'held_in_vault'`
+    );
+    return rows;
   }
   async getIncomingFundsForGroup(groupId) {
     const { rows } = await this.pool.query(`SELECT * FROM incoming_funds WHERE group_id=$1 ORDER BY received_at DESC, created_at DESC`, [groupId]);

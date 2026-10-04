@@ -117,7 +117,69 @@ class RateLimiter {
   }
 }
 
+// ---- v3.1 helpers --------------------------------------------------------
+
+/** Phone number -> E.164-ish string ("+233244123456") or null when invalid. */
+function normalizePhone(dialCode, localNumber) {
+  const dial = String(dialCode || '').replace(/\D/g, '');
+  let local = String(localNumber || '').replace(/[^\d]/g, '');
+  if (!dial || !local) return null;
+  local = local.replace(/^0+/, ''); // national trunk prefix (0244... -> 244...)
+  const full = dial + local;
+  if (local.length < 6 || full.length < 8 || full.length > 15) return null;
+  return '+' + full;
+}
+
+function stripDiacritics(s) {
+  return String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+function nameTokens(s) {
+  return stripDiacritics(s).toLowerCase().replace(/[^a-z0-9\s'-]/g, ' ').replace(/['-]/g, '').split(/\s+/).filter(Boolean);
+}
+function editDistance(a, b) {
+  const m = a.length, n = b.length;
+  if (!m) return n; if (!n) return m;
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) {
+    const cur = [i];
+    for (let j = 1; j <= n; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return prev[n];
+}
+/**
+ * Moderate name comparison for KYC: tolerant of middle names, ordering,
+ * diacritics and a one-letter typo, but rejects genuinely different names.
+ */
+function namesRoughlyMatch(a, b) {
+  const ta = nameTokens(a), tb = nameTokens(b);
+  if (!ta.length || !tb.length) return false;
+  const [short, long] = ta.length <= tb.length ? [ta, tb] : [tb, ta];
+  let hits = 0;
+  const used = new Set();
+  for (const tok of short) {
+    const idx = long.findIndex((x, i) => !used.has(i) && (x === tok || (Math.max(tok.length, x.length) >= 4 && Math.min(tok.length, x.length) >= 3 && editDistance(tok, x) <= 1)));
+    if (idx >= 0) { used.add(idx); hits++; }
+  }
+  return hits >= Math.max(1, Math.ceil(short.length * 0.6)) && (short.length === 1 ? long.length <= 1 || hits >= 1 : hits >= 2 || short.length < 2);
+}
+
+/** Client IP behind a proxy (Render/Northflank set x-forwarded-for). */
+function clientIpFrom(headers, fallback) {
+  const xff = headers && (headers['x-forwarded-for'] || headers['X-Forwarded-For']);
+  let ip = (typeof xff === 'string' && xff.split(',')[0].trim()) || (headers && headers['x-real-ip']) || fallback || '';
+  ip = String(ip).replace(/^::ffff:/, '');
+  return ip.slice(0, 64) || 'unknown';
+}
+
+function maskEmail(email) {
+  const [u, d] = String(email || '').split('@');
+  if (!d) return '';
+  return (u.length <= 2 ? u[0] + '*' : u.slice(0, 2) + '***') + '@' + d;
+}
+
 module.exports = {
+  normalizePhone, namesRoughlyMatch, clientIpFrom, maskEmail, nameTokens,
   escapeHtml,
   sanitizeText,
   isValidEmail,

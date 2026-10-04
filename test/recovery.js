@@ -1,0 +1,64 @@
+process.env.ACCOUNT_RATE_MAX = '1000';
+require('./harness');
+const logs = []; const origLog = console.log;
+console.log = (...a) => { const s = a.join(' '); logs.push(s); if (!/\[email:mock\]|\[storage\]|\[push\]/.test(s)) origLog(...a); };
+let pass = 0, fail = 0; const ok = (c, m) => { c ? pass++ : fail++; origLog(c ? '  ✓' : '  ✗ FAIL:', m); };
+const lastCode = (re) => { for (let i = logs.length - 1; i >= 0; i--) { const m = logs[i].match(re); if (m) return m[1]; } return null; };
+(async () => {
+  const { initStore, store } = require('../db');
+  await initStore();
+  const { hashPassword } = require('../security');
+  const { buildRouter } = require('../routes');
+  const router = buildRouter();
+  const find = (method, p) => router.routes.find((r) => r[0] === method && r[1] === p);
+  const call = async (method, p, body, headers = {}) => {
+    const r = find(method, p); if (!r) throw new Error('no route ' + method + ' ' + p);
+    const handlers = r[2]; const h = handlers[handlers.length - 1];
+    const res = { code: 200, body: null, status(c) { this.code = c; return this; }, json(b) { this.body = b; return this; } };
+    await h({ body, headers, socket: { remoteAddress: '5.5.5.5' }, query: {} }, res);
+    return res;
+  };
+  await store.createGroupIfMissing('g1', 'Deal One');
+  await store.updateGroup('g1', { seller_registered: true, email_b: 'seller@example.com', seller_password_hash: hashPassword('OldPassw0rd!'), seller_full_name: 'Test', seller_currency: 'USD', seller_language: 'en' });
+
+  origLog('\nPassword recovery');
+  let r = await call('post', '/api/auth/login', { email: 'seller@example.com', password: 'OldPassw0rd!' });
+  ok(r.body && r.body.success, 'login works with the current password');
+  r = await call('post', '/api/auth/forgot-password/request', { email: 'seller@example.com' });
+  ok(r.code === 200, 'forgot-password request accepted');
+  const code = lastCode(/password reset code[^:]*: (\d{6})/);
+  ok(/^\d{6}$/.test(code || ''), 'a 6-digit reset code was emailed: ' + code);
+  r = await call('post', '/api/auth/forgot-password/request', { email: 'nobody@example.com' });
+  ok(r.code === 200 && !/not found|no account/i.test(JSON.stringify(r.body)), 'unknown email gets the same answer (no account enumeration)');
+  r = await call('post', '/api/auth/forgot-password/verify', { email: 'seller@example.com', code: '000000' });
+  ok(r.code === 400, 'wrong code rejected');
+  r = await call('post', '/api/auth/forgot-password/verify', { email: 'seller@example.com', code });
+  ok(r.code === 200 && r.body.resetToken, 'correct code returns a one-time reset token');
+  const token = r.body.resetToken;
+  r = await call('post', '/api/auth/forgot-password/reset', { email: 'seller@example.com', resetToken: token, newPassword: 'short' });
+  ok(r.code === 400, 'weak new password rejected');
+  r = await call('post', '/api/auth/forgot-password/reset', { email: 'seller@example.com', resetToken: 'bogus', newPassword: 'NewPassw0rd!' });
+  ok(r.code === 400, 'forged reset token rejected');
+  r = await call('post', '/api/auth/forgot-password/reset', { email: 'seller@example.com', resetToken: token, newPassword: 'NewPassw0rd!' });
+  ok(r.code === 200 && r.body.success, 'password reset completes');
+  r = await call('post', '/api/auth/login', { email: 'seller@example.com', password: 'OldPassw0rd!' });
+  ok(r.code === 401, 'old password no longer works');
+  r = await call('post', '/api/auth/login', { email: 'seller@example.com', password: 'NewPassw0rd!' });
+  ok(r.body && r.body.success && r.body.groupId === 'g1', 'new password works');
+  r = await call('post', '/api/auth/forgot-password/reset', { email: 'seller@example.com', resetToken: token, newPassword: 'Another1234!' });
+  ok(r.code === 400, 'a used reset token cannot be replayed');
+  const g = await store.getGroup('g1'); ok(!!g.seller_password_changed_at, 'password change time recorded');
+  // lockout of guesses
+  await call('post', '/api/auth/forgot-password/request', { email: 'seller@example.com' });
+  for (let i = 0; i < 5; i++) await call('post', '/api/auth/forgot-password/verify', { email: 'seller@example.com', code: '999999', newPassword: 'NewPassw0rd!2' });
+  r = await call('post', '/api/auth/forgot-password/verify', { email: 'seller@example.com', code: lastCode(/password reset code[^:]*: (\d{6})/), newPassword: 'NewPassw0rd!2' });
+  ok(r.code === 429, 'after 5 wrong guesses the account is locked out of guessing');
+  // disabled + blocked ip at login
+  await store.updateGroup('g1', { seller_disabled: true, seller_disabled_reason: 'Review' });
+  r = await call('post', '/api/auth/login', { email: 'seller@example.com', password: 'NewPassw0rd!' });
+  ok(r.body && r.body.success && r.body.disabled === true && r.body.complaintsEmail === 'complaints@usvistra.com', 'disabled seller can sign in to SEE the notice + complaints email');
+  await store.updateGroup('g1', { seller_blocked_ips: ['5.5.5.5'] });
+  r = await call('post', '/api/auth/login', { email: 'seller@example.com', password: 'NewPassw0rd!' });
+  ok(r.code === 403 && r.body.code === 'ip_blocked', 'blocked IP refused at login');
+  origLog(`\nRESULT: ${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);
+})().catch((e) => { origLog('FATAL', e); process.exit(2); });
