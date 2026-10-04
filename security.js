@@ -19,8 +19,11 @@ function verifyPassword(password, stored) {
   return hash.length === expected.length && crypto.timingSafeEqual(hash, expected);
 }
 function isStrongEnoughPassword(password) {
-  return typeof password === 'string' && password.length >= 8 && password.length <= 200;
+  // 8+ characters with at least one letter and one number — enough to stop trivial
+  // passwords without making the sign-up form feel hostile.
+  return typeof password === 'string' && password.length >= 8 && password.length <= 200 && /[A-Za-z\u00C0-\uFFFF]/.test(password) && /\d/.test(password);
 }
+const PASSWORD_RULE_TEXT = 'Password must be at least 8 characters and include a letter and a number.';
 
 /** A random 6-digit numeric code for password-reset emails, hashed the same way. */
 function generateSixDigitCode() {
@@ -117,69 +120,61 @@ class RateLimiter {
   }
 }
 
-// ---- v3.1 helpers --------------------------------------------------------
-
-/** Phone number -> E.164-ish string ("+233244123456") or null when invalid. */
-function normalizePhone(dialCode, localNumber) {
-  const dial = String(dialCode || '').replace(/\D/g, '');
-  let local = String(localNumber || '').replace(/[^\d]/g, '');
-  if (!dial || !local) return null;
-  local = local.replace(/^0+/, ''); // national trunk prefix (0244... -> 244...)
-  const full = dial + local;
-  if (local.length < 6 || full.length < 8 || full.length > 15) return null;
-  return '+' + full;
+// ---------- Contact helpers ----------
+/** Phone numbers are stored as "+<digits>" (E.164-style): 7-15 digits after the +. */
+function normalizePhone(raw) {
+  if (typeof raw !== 'string') return null;
+  const cleaned = raw.replace(/[\s().-]/g, '');
+  if (!/^\+\d{7,15}$/.test(cleaned)) return null;
+  return cleaned;
+}
+function maskEmail(email) {
+  const [user, domain] = String(email || '').split('@');
+  if (!domain) return '';
+  const shown = user.length <= 2 ? user[0] || '' : user.slice(0, 2);
+  return `${shown}${'•'.repeat(Math.max(2, user.length - shown.length))}@${domain}`;
 }
 
-function stripDiacritics(s) {
-  return String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+// ---------- Client IP (works behind Render / Northflank / Netlify proxies) ----------
+function cleanIp(ip) {
+  if (!ip) return '';
+  let s = String(ip).trim();
+  if (s.startsWith('::ffff:')) s = s.slice(7);
+  if (s === '::1') s = '127.0.0.1';
+  return s.slice(0, 64);
 }
-function nameTokens(s) {
-  return stripDiacritics(s).toLowerCase().replace(/[^a-z0-9\s'-]/g, ' ').replace(/['-]/g, '').split(/\s+/).filter(Boolean);
+function ipFromHeaders(headers, fallback) {
+  const xff = headers && (headers['x-forwarded-for'] || headers['X-Forwarded-For']);
+  if (xff) return cleanIp(String(xff).split(',')[0]);
+  const real = headers && (headers['x-real-ip'] || headers['cf-connecting-ip']);
+  if (real) return cleanIp(real);
+  return cleanIp(fallback);
 }
-function editDistance(a, b) {
-  const m = a.length, n = b.length;
-  if (!m) return n; if (!n) return m;
-  let prev = Array.from({ length: n + 1 }, (_, j) => j);
-  for (let i = 1; i <= m; i++) {
-    const cur = [i];
-    for (let j = 1; j <= n; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
-    prev = cur;
-  }
-  return prev[n];
+const getReqIp = (req) => ipFromHeaders(req.headers, req.socket && req.socket.remoteAddress);
+const getSocketIp = (socket) => ipFromHeaders(socket.handshake && socket.handshake.headers, socket.handshake && socket.handshake.address);
+function isValidIp(ip) {
+  return typeof ip === 'string' && (/^(\d{1,3}\.){3}\d{1,3}$/.test(ip) ? ip.split('.').every((n) => Number(n) <= 255) : /^[0-9a-fA-F:]{3,45}$/.test(ip) && ip.includes(':'));
 }
-/**
- * Moderate name comparison for KYC: tolerant of middle names, ordering,
- * diacritics and a one-letter typo, but rejects genuinely different names.
- */
-function namesRoughlyMatch(a, b) {
-  const ta = nameTokens(a), tb = nameTokens(b);
+
+// ---------- Name matching (KYC) — tolerant of order, middle names, accents, case ----------
+function nameTokens(name) {
+  return String(name || '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase().replace(/[^a-z0-9\u0400-\u04ff\u0600-\u06ff\u4e00-\u9fff\s'-]/g, ' ')
+    .split(/\s+/).filter((t) => t.length > 1 || /[\u4e00-\u9fff]/.test(t));
+}
+/** True when every word of the shorter name appears in the longer one (moderate, not strict). */
+function namesMatch(a, b) {
+  const ta = nameTokens(a); const tb = nameTokens(b);
   if (!ta.length || !tb.length) return false;
   const [short, long] = ta.length <= tb.length ? [ta, tb] : [tb, ta];
-  let hits = 0;
-  const used = new Set();
-  for (const tok of short) {
-    const idx = long.findIndex((x, i) => !used.has(i) && (x === tok || (Math.max(tok.length, x.length) >= 4 && Math.min(tok.length, x.length) >= 3 && editDistance(tok, x) <= 1)));
-    if (idx >= 0) { used.add(idx); hits++; }
-  }
-  return hits >= Math.max(1, Math.ceil(short.length * 0.6)) && (short.length === 1 ? long.length <= 1 || hits >= 1 : hits >= 2 || short.length < 2);
-}
-
-/** Client IP behind a proxy (Render/Northflank set x-forwarded-for). */
-function clientIpFrom(headers, fallback) {
-  const xff = headers && (headers['x-forwarded-for'] || headers['X-Forwarded-For']);
-  let ip = (typeof xff === 'string' && xff.split(',')[0].trim()) || (headers && headers['x-real-ip']) || fallback || '';
-  ip = String(ip).replace(/^::ffff:/, '');
-  return ip.slice(0, 64) || 'unknown';
-}
-
-function maskEmail(email) {
-  const [u, d] = String(email || '').split('@');
-  if (!d) return '';
-  return (u.length <= 2 ? u[0] + '*' : u.slice(0, 2) + '***') + '@' + d;
+  if (short.length < 2 && long.length >= 2 && short.length === 1) return false; // a single word is never enough
+  const matched = short.filter((t) => long.some((u) => u === t || (t.length > 3 && u.length > 3 && (u.startsWith(t) || t.startsWith(u)))));
+  return matched.length === short.length;
 }
 
 module.exports = {
-  normalizePhone, namesRoughlyMatch, clientIpFrom, maskEmail, nameTokens,
+  PASSWORD_RULE_TEXT, normalizePhone, maskEmail, cleanIp, ipFromHeaders, getReqIp, getSocketIp, isValidIp, namesMatch, nameTokens,
   escapeHtml,
   sanitizeText,
   isValidEmail,

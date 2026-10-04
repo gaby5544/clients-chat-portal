@@ -79,16 +79,3 @@ const I18N = {
     submitForm: 'İşlemi Gönder', editHistoryTitle: 'Mesaj Düzenleme Geçmişi', translate: 'Çevir', clearChat: 'Sohbet Geçmişini Temizle', userManagement: 'Kullanıcı Yönetimi', kickUser: 'Kullanıcıyı Bağlantısını Kes', selectAll: 'Tümünü Seç'
   }
 };
-
-function applyI18n(lang) {
-  const dict = I18N[lang] || I18N.en;
-  document.querySelectorAll('[data-i18n]').forEach(el => {
-    const key = el.getAttribute('data-i18n');
-    if (dict[key]) el.textContent = dict[key];
-  });
-  document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
-    const key = el.getAttribute('data-i18n-placeholder');
-    if (dict[key]) el.setAttribute('placeholder', dict[key]);
-  });
-  localStorage.setItem('q_ui_lang', lang);
-}

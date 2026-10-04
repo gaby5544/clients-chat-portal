@@ -1,10 +1,33 @@
-# Quantum Secure Transaction Desk — v3.0
+# Quantum Secure Transaction Desk — v3.1
 
 Enterprise chat portal: dark-glass UI, PostgreSQL persistence (with
 in-memory dev fallback), transaction board with PDF receipts, multi-admin
 role tiers, announcements, tasks & approvals, live dashboard widgets, push
 notifications, message read receipts, a Branding Center, onboarding, and
 hardened input handling throughout.
+
+## v3.1 — Seller Transaction Accounts
+See `CHANGELOG.md` for the item-by-item list. In short: verified-email seller
+registration, unique Account IDs, KYC with live face step, escrow payment
+tracking (5-stage, auto-release), disbursement gate, bank/crypto withdrawals
+with emailed codes, daily limit + business upgrade, IP blocking, 46-language
+UI and chat translation, and a full admin control surface (Sellers tab, Funds
+Desk, Record Incoming Funds, Policy).
+
+**Needed in production:** SMTP (`.env.example`) for codes and notices, a
+translation key (DeepL/Google/LibreTranslate) for good translation quality,
+and `DATABASE_URL` (schema migrates itself on boot).
+
+**Known limits (be aware):**
+- KYC checks are rule-based (format, name/DOB match, expiry, quality). There is
+  no OCR or face-matching service; the live face step uses the browser's face
+  detector when available. Approve/reject by a human remains the control.
+- Uploaded files (including KYC images) are served from `/uploads` under
+  unguessable names, not behind a login. Put the folder behind object storage
+  with signed URLs before handling real identity documents.
+- Passwords are hashed and cannot be viewed; the admin button emails a reset code.
+- FX rates in `finance.js` are fixed placeholders. Use a live feed in production.
+- The admin screens are English-only; seller-facing screens and notices translate.
 
 ## v3.0 additions
 - **Announcements** — Admin+ can post to any combination of groups; each one
@@ -109,8 +132,11 @@ DEPLOY_RENDER.md        Step-by-step Render deployment guide
   against a live database in this sandbox (no external DB reachable here) —
   test it against your real Postgres instance before relying on it in
   production.
-- UI was not exercised in an actual browser from this environment; verify
-  the visual layer once deployed.
+- v3.1: ~86 backend assertions (registration, codes, escrow engine, funds,
+  withdrawals, limits, IP, notifications, translation) pass against stubbed
+  mail/DB; a headless-browser smoke test loads the seller and admin screens
+  with a mocked socket and reports no script errors. Not run here: a live
+  Postgres, a real SMTP server, a real translation provider, or a real camera.
 
 ## A note on this copy of the repo
 The zip this was rebuilt from had several files saved under the wrong
@@ -133,7 +159,3 @@ Then open `http://localhost:3000`. For deploying somewhere it'll stay
 online, start with `DEPLOY.md` (works on any host) or `DEPLOY_NORTHFLANK.md`
 (step-by-step for a free, always-on host with a custom name). Render
 instructions are still in `DEPLOY_RENDER.md` if you want them.
-
-
-## v3.1
-See **CHANGES-v3.1.md** for the full item-by-item report, new environment variables and test instructions.
