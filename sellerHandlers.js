@@ -155,15 +155,46 @@ function registerSellerHandlers(io, socket, ctx) {
     socket.emit('register-code-verified', { email: addr });
   });
 
+  // The browser asks for its account state again when a reply may have been lost (mobile connections drop often).
+  socket.on('get-my-account', async ({ groupId } = {}) => {
+    const g = await requireActiveSeller(groupId, { allowDisabled: true, silent: true });
+    if (g) socket.emit('seller-account-state', F.publicSellerAccount(g, false));
+  });
+
   socket.on('register-transaction-account', async (p) => {
     const m = meta();
     if (!m || m.isAdmin) return;
     p = p || {};
     const fail = (message, field) => socket.emit('register-error', { message, field: field || null });
-    if (!accountLimiter.allow(m.sessionToken)) return fail('Too many attempts — please wait a moment and try again.');
+    try { await registerAccount(m, p, fail); } catch (e) {
+      console.error('[register] unexpected error:', e);
+      // If the account was written before the error, the seller must still be taken forward, never left on the form.
+      try {
+        const g = await store.getGroup(String(p.groupId || ''));
+        if (g && g.seller_registered && A.isSellerToken(g, m.sessionToken)) return confirmRegistration(g);
+      } catch (e2) { /* fall through */ }
+      fail('Something went wrong while creating your account. Please try again in a moment.');
+    }
+  });
+
+  // Tell the seller's browser the account exists: fresh state first, then the "created" event that opens the
+  // Start-transaction / Continue-KYC screen. Everything after that is best effort and can never block it.
+  async function confirmRegistration(group) {
+    socket.emit('seller-account-state', F.publicSellerAccount(group, false));
+    socket.emit('transaction-account-created', { groupId: group.id, accountId: group.seller_account_id });
+    try {
+      await FH.pushSellerState(io, group.id, null);
+      await FH.pushAdminLedger(io, group.id);
+      io.to('finance-admins').emit('seller-account-updated', F.publicSellerAccount(group, true));
+      if (broadcastGroupsList) await broadcastGroupsList();
+    } catch (e) { console.error('[register] post-registration push failed:', e.message); }
+  }
+
+  async function registerAccount(m, p, fail) {
     const group = await store.getGroup(String(p.groupId || ''));
     if (!group || !A.isSellerToken(group, m.sessionToken)) return fail('You are not the Seller of this group.');
-    if (group.seller_registered) return fail('This Transaction Account has already been created.');
+    if (group.seller_registered) return confirmRegistration(group); // retry after a lost reply (e.g. a mobile connection drop): carry on, don't show an error
+    if (!accountLimiter.allow(m.sessionToken)) return fail('Too many attempts — please wait a moment and try again.');
     const ip = ipOf();
     if (isIpBlocked(group, ip)) { socket.emit('ip-blocked', { groupId: group.id, contact: SUPPORT }); return; }
 
@@ -199,7 +230,9 @@ function registerSellerHandlers(io, socket, ctx) {
     const accountId = await generateAccountId(store);
     const lang = (LANG.find(p.language) || { c: 'en' }).c;
     const nowIso = new Date().toISOString();
-    await store.updateGroup(group.id, {
+    const ipLog = (Array.isArray(group.seller_ip_log) ? group.seller_ip_log.slice(-49) : []).concat([{ ip, action: 'register', at: nowIso }]);
+    // ONE write: the account, the trusted device and the IP record land together or not at all.
+    const updated = await store.updateGroup(group.id, {
       seller_registered: true,
       seller_full_name: escapeHtml(name),
       seller_password_hash: S.hashPassword(p.password),
@@ -214,19 +247,15 @@ function registerSellerHandlers(io, socket, ctx) {
       seller_registered_at: nowIso,
       seller_terms_accepted_at: nowIso,
       seller_terms_version: LEGAL.version,
-      currency_locked_at: nowIso
+      currency_locked_at: nowIso,
+      seller_auth_tokens: [A.hashToken(m.sessionToken)],
+      seller_ip_log: ipLog, seller_last_ip: ip, seller_registration_ip: ip
     });
-    let updated = await A.trustSellerToken(store, await store.getGroup(group.id), m.sessionToken);
-    updated = await recordIp(updated, ip, 'register');
-    await store.upsertUser({ sessionToken: m.sessionToken, email, phone, countryCode: country.c, prefLang: lang, lastIp: ip });
-
-    socket.emit('seller-account-state', F.publicSellerAccount(updated, false));
-    socket.emit('transaction-account-created', { groupId: group.id, accountId });
-    await FH.pushSellerState(io, group.id, null);
-    await FH.pushAdminLedger(io, group.id);
-    io.to('finance-admins').emit('seller-account-updated', F.publicSellerAccount(updated, true));
-    if (broadcastGroupsList) await broadcastGroupsList();
-  });
+    if (!updated) throw new Error('could not save the account');
+    // The seller moves on immediately; the user profile row is a convenience and must never block this.
+    store.upsertUser({ sessionToken: m.sessionToken, email, phone, countryCode: country.c, prefLang: lang, lastIp: ip }).catch((e) => console.error('[register] upsertUser failed:', e.message));
+    await confirmRegistration(updated);
+  }
 
   // ====================================================================
   // KYC — validated on the server before it reaches a human

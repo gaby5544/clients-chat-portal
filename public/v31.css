@@ -369,3 +369,21 @@
 .sys-row { display: flex; justify-content: space-between; gap: 12px; font-size: .72rem; padding: 3px 0; border-bottom: 1px dashed var(--border-soft); }
 .sys-row span { color: var(--text-faint); } .sys-row b { text-align: end; word-break: break-all; font-weight: 600; }
 .sys-row b.ok { color: var(--accent-emerald); } .sys-row b.bad { color: var(--accent-rose); } .sys-row b.warn { color: var(--accent-amber, #f59e0b); }
+
+/* popup reassurance list + crypto requirement card */
+.pop-points { list-style: none; margin: 14px 0 0; padding: 0; display: flex; flex-direction: column; gap: 9px; text-align: start; }
+.pop-points li { display: flex; gap: 10px; align-items: flex-start; font-size: .78rem; line-height: 1.5; color: var(--text-muted); }
+.pop-points li i { color: #22d3a5; margin-top: 3px; font-size: .78rem; }
+.pop-points li span { flex: 1; }
+.cr-card .cr-head { display: flex; align-items: center; gap: 8px; font-weight: 800; font-size: .82rem; margin-bottom: 6px; }
+.cr-card .cr-head i { color: #d4af37; }
+.cr-card p { margin: 0 0 8px; }
+.cr-card .cr-prog { display: flex; gap: 8px; margin: 8px 0; }
+.cr-card .cr-prog > div { flex: 1; padding: 8px 10px; border-radius: 10px; background: rgba(255,255,255,.04); border: 1px solid var(--border-soft); display: flex; flex-direction: column; gap: 2px; }
+.cr-card .cr-prog span { font-size: .66rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: .06em; }
+.cr-card .cr-prog b { font-size: .84rem; font-variant-numeric: tabular-nums; }
+.cr-card .cr-foot { font-size: .7rem; color: var(--text-muted); margin-top: 6px; }
+.cr-card .cr-act { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.cr-card .cr-act button { width: auto; }
+.cr-card .cr-link { background: none; border: 0; color: #d4af37; font-size: .74rem; font-weight: 700; cursor: pointer; padding: 6px 2px; text-decoration: underline; }
+.callout.info { background: rgba(212,175,55,.07); border-color: rgba(212,175,55,.32); }

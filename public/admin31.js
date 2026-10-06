@@ -400,6 +400,9 @@ function wdDestination(w) {
 }
 function withdrawalRowHtml(w, inDesk) {
   const wid = admEsc(w.id);
+  // The same withdrawal can be on screen twice (Funds Desk + Withdrawals queue): every control id is
+  // scoped to its own card, otherwise the button reads the OTHER card's dropdown.
+  const cx = inDesk ? 'd' : 'q';
   const next = WD_NEXT[w.status] || [];
   const ccyL = (fdLedger && fdLedger.groupId === w.groupId ? fdLedger.account.currency : (admFunds.find((f) => f.groupId === w.groupId) || {}).currency) || w.amountCurrency;
   return `<div class="ledger-row" id="${inDesk ? 'wd' : 'wq'}-${wid}">
@@ -413,22 +416,32 @@ function withdrawalRowHtml(w, inDesk) {
       </div>
     </div>
     ${next.length ? `<div class="esc-ctl adm-wd-ctl">
-      <select id="wdSel-${wid}" class="message-input">${next.map((s) => `<option value="${s}">${WD_TEXT[s]}</option>`).join('')}</select>
-      <input id="wdRef-${wid}" class="message-input" placeholder="Payout reference (completed)" maxlength="120" style="min-width:160px;" autocomplete="off">
-      <input id="wdNote-${wid}" class="message-input" placeholder="Note / decline reason" maxlength="500" style="min-width:160px;" autocomplete="off">
-      <button class="admin-btn" style="width:auto;" onclick="adminApplyWdStage('${wid}')"><i class="fa-solid fa-arrow-right"></i> Update stage</button>
+      <select id="wdSel-${cx}-${wid}" class="message-input" onchange="wdStageChanged('${wid}','${cx}')">${next.map((s) => `<option value="${s}">${WD_TEXT[s]}</option>`).join('')}</select>
+      <input id="wdRef-${cx}-${wid}" class="message-input" placeholder="Payout reference (completed)" maxlength="120" style="min-width:160px;" autocomplete="off">
+      <input id="wdNote-${cx}-${wid}" class="message-input" placeholder="Note / decline reason" maxlength="500" style="min-width:160px;" autocomplete="off">
+      <button class="admin-btn" style="width:auto;" onclick="adminApplyWdStage('${wid}','${cx}')"><i class="fa-solid fa-arrow-right"></i> Update stage</button>
     </div>` : `<div class="ledger-row-sub" style="margin-top:6px;">${pill(w.status === 'completed' ? 'Completed — final' : 'Declined — final', WD_TONE[w.status])}</div>`}
     ${w.receiptUrl ? `<a class="ledger-row-receipt" href="${admEsc(w.receiptUrl)}" target="_blank" rel="noopener"><i class="fa-solid fa-file-pdf"></i> Download receipt</a>` : ''}
   </div>`;
 }
-function adminApplyWdStage(id) {
-  const toStatus = el('wdSel-' + id).value;
-  const ref = el('wdRef-' + id).value.trim();
-  const note = el('wdNote-' + id).value.trim();
+function wdStageChanged(id, cx) {
+  const sel = el('wdSel-' + cx + '-' + id), note = el('wdNote-' + cx + '-' + id), ref = el('wdRef-' + cx + '-' + id);
+  if (!sel || !note) return;
+  note.placeholder = sel.value === 'declined' ? 'Reason for declining (required)' : 'Note / decline reason';
+  note.style.borderColor = sel.value === 'declined' ? 'var(--danger, #e5484d)' : '';
+  if (ref) ref.style.display = sel.value === 'completed' ? '' : 'none';
+}
+function adminApplyWdStage(id, cx) {
+  cx = cx || 'd';
+  const selEl = el('wdSel-' + cx + '-' + id);
+  if (!selEl) return toast('This withdrawal card is out of date — please reopen the list.', true);
+  const toStatus = selEl.value;
+  const ref = (el('wdRef-' + cx + '-' + id) || { value: '' }).value.trim();
+  const note = (el('wdNote-' + cx + '-' + id) || { value: '' }).value.trim();
   const send = (reason) => socket.emit('admin-set-withdrawal-stage', { withdrawalId: id, toStatus, reason, payoutReference: ref });
   if (toStatus === 'declined') {
-    if (note) return showConfirmModal({ title: 'Decline this withdrawal?', message: 'The reserved funds return to the seller\'s available balance. This is final.' }, () => send(note));
-    return showPromptModal({ title: 'Decline withdrawal', message: 'A reason is required. The funds return to the seller\'s available balance.', placeholder: 'Reason for declining' }, (r) => send(r));
+    if (note) return showConfirmModal({ title: 'Decline this withdrawal?', message: 'The withdrawal is declined and the full amount returns to the seller\'s available balance. This is final.' }, () => send(note));
+    return showPromptModal({ title: 'Decline withdrawal', message: 'A reason is required. The full amount returns to the seller\'s available balance.', placeholder: 'Reason for declining' }, (r) => send(r));
   }
   if (toStatus === 'completed') return showConfirmModal({ title: 'Mark as completed?', message: 'The payout is final: the reserved funds leave the account. This cannot be undone.' }, () => send(note));
   send(note);

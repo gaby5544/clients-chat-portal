@@ -1,3 +1,15 @@
+# v3.1.2 — withdrawal decline, private emails, crypto wording
+
+| # | Issue raised | Fix | Where |
+|---|---|---|---|
+| 1 | Admin chose **Declined** but the seller's withdrawal was not declined / amount not returned | **Root cause:** the same withdrawal is drawn twice on the admin screen (Funds Desk card and Withdrawals queue) and both cards used identical control IDs, so "Update stage" read the *other* card's dropdown (still on Processing) and the reason box was ignored. Every control is now scoped to its own card. Also: the decline always returns the **full amount** to the seller's available balance (even if the pending pool was adjusted by hand), the reason box turns red and says "required" when Declined is picked, the admin gets a clear confirmation ("… returned to the seller's available balance"), and a Moderator who tries a money action now gets an explanation instead of silence | `admin31.js`, `fundsHandlers.js` |
+| 2 | Seller could see the buyer's email in Email Alerts | The server now sends each person **only their own** address (buyer → buyer's, seller → seller's, admin → both); an admin changing one party's address no longer broadcasts it to the room; the browser remembers an alert address **per transaction and role** (it used to be one global value shared by buyer and seller); a seller's join ignores any address the browser supplies; a registered seller sees "alerts go to the email on your Transaction Account (se***@…)" instead of an editable box; outdated "once the Desk Officer approves" text removed | `socketHandlers.js`, `app.js` |
+| 3 | Crypto withdrawal requirement sounded frightening | Rewritten in a calm, professional voice following the compliance spec: a one-time source-of-funds / AML funding trail; **not a fee** — the deposit is credited in full to the available balance once the Desk confirms it on-chain; permanently unlocks crypto withdrawals; bank withdrawals never affected; recalculated live as the amount changes. New: reassurance card on the Withdraw page with progress (verified / still to deposit), a "Why is this required?" explainer, a hint inside Record a Deposit showing how much is still needed, a "Deposit recorded" confirmation, and clearer confirmed / not-confirmed deposit emails. Tier percentages stay configurable in the admin Policy panel | `seller31.js`, `ui31.js`, `v31.css`, `index.html`, `email.js` |
+
+Tests: 70 + 16 + 85 + 41 + 20 + 14 + 17 backend assertions, the escrow test and 7 headless-browser scenarios pass.
+
+---
+
 # v3.1.1 — fixes after review
 
 | # | Issue raised | Fix | Where |
@@ -12,6 +24,7 @@
 | 6 | FX placeholders | Live USD/GBP/EUR rates (frankfurter.dev → open.er-api.com), refreshed every 6 h, saved to the DB, plausibility-checked, with manual refresh. Each payment keeps the rate it was converted at | `fx.js` |
 | 7 | IP detection "perfect" | **Fixed spoofing**: the old code trusted the first X-Forwarded-For entry (any visitor could fake it). Now counted from the right by `TRUST_PROXY_HOPS`, plus Cloudflare mode, IPv4-mapped and IPv6 /64 matching. Enforced at join, register, **sign-in**, withdrawal and live. **IP detection** diagnostic in System status shows what the server sees | `security.js`, `sellerHandlers.js`, `routes.js`, `server.js` |
 | 8 | (found while fixing) Invite link alone opened a registered account | Added seller **sign-in** (email + password), per-device trusted sessions, sign-out, admin "sign out all devices", forgot-password flow in the modal | `accounts.js`, `socketHandlers.js`, `routes.js`, `seller31.js`, `index.html` |
+| 10 | Registration form stayed open with "This Transaction Account has already been created" | The account is now written in **one** save (account + trusted device + IP record); a failure in any later step (user profile, admin push) can no longer stop the seller being moved on; pressing Create again for an account that already exists simply re-sends the state and opens the **Start transaction / Continue KYC** screen instead of an error; the browser re-requests its account state if no reply arrives within 6 s (dropped mobile connection); one failing screen render can no longer stop the form closing | `sellerHandlers.js`, `seller31.js` |
 | 9 | (found by static scan) | `admin-get-withdrawals-queue` called an undefined function; deposit decisions did not update the seller's list live | `socketHandlers.js` |
 
 Tests: 70 + 16 + 85 backend assertions and the escrow engine test pass; headless-browser smoke tests of the seller, admin, sign-in and language screens report no script errors.

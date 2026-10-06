@@ -1,28 +1,35 @@
-// Languages offered to every user. `code` is what the translation service
-// expects; `flag` is an ISO country code used only to draw a small flag;
-// `native` is shown so people can always recognise their own language even
-// when the interface is currently in one they cannot read.
-(function (root) {
-  var RAW = [
-    ['en','English','English','gb'],['es','Spanish','Español','es'],['fr','French','Français','fr'],['de','German','Deutsch','de'],
-    ['it','Italian','Italiano','it'],['pt','Portuguese','Português','pt'],['nl','Dutch','Nederlands','nl'],['sv','Swedish','Svenska','se'],
-    ['da','Danish','Dansk','dk'],['no','Norwegian','Norsk','no'],['fi','Finnish','Suomi','fi'],['pl','Polish','Polski','pl'],
-    ['cs','Czech','Čeština','cz'],['sk','Slovak','Slovenčina','sk'],['hu','Hungarian','Magyar','hu'],['ro','Romanian','Română','ro'],
-    ['bg','Bulgarian','Български','bg'],['el','Greek','Ελληνικά','gr'],['tr','Turkish','Türkçe','tr'],['ru','Russian','Русский','ru'],
-    ['uk','Ukrainian','Українська','ua'],['ar','Arabic','العربية','sa'],['he','Hebrew','עברית','il'],['fa','Persian','فارسی','ir'],
-    ['ur','Urdu','اردو','pk'],['hi','Hindi','हिन्दी','in'],['bn','Bengali','বাংলা','bd'],['ta','Tamil','தமிழ்','in'],
-    ['te','Telugu','తెలుగు','in'],['mr','Marathi','मराठी','in'],['gu','Gujarati','ગુજરાતી','in'],['pa','Punjabi','ਪੰਜਾਬੀ','in'],
-    ['ne','Nepali','नेपाली','np'],['si','Sinhala','සිංහල','lk'],['th','Thai','ไทย','th'],['vi','Vietnamese','Tiếng Việt','vn'],
-    ['id','Indonesian','Bahasa Indonesia','id'],['ms','Malay','Bahasa Melayu','my'],['tl','Filipino','Filipino','ph'],
-    ['zh-CN','Chinese (Simplified)','简体中文','cn'],['zh-TW','Chinese (Traditional)','繁體中文','tw'],['ja','Japanese','日本語','jp'],
-    ['ko','Korean','한국어','kr'],['sw','Swahili','Kiswahili','ke'],['am','Amharic','አማርኛ','et'],['ha','Hausa','Hausa','ng'],
-    ['yo','Yoruba','Yorùbá','ng'],['ig','Igbo','Igbo','ng'],['zu','Zulu','isiZulu','za'],['af','Afrikaans','Afrikaans','za'],['so','Somali','Soomaali','so']
+/* Supported interface / chat languages — shared by the browser and the server. */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.LANG_DATA = factory();
+})(typeof self !== 'undefined' ? self : this, function () {
+  var list = [
+    { c: 'en', n: 'English', e: 'English' }, { c: 'es', n: 'Español', e: 'Spanish' }, { c: 'fr', n: 'Français', e: 'French' },
+    { c: 'de', n: 'Deutsch', e: 'German' }, { c: 'it', n: 'Italiano', e: 'Italian' }, { c: 'pt', n: 'Português', e: 'Portuguese' },
+    { c: 'nl', n: 'Nederlands', e: 'Dutch' }, { c: 'ru', n: 'Русский', e: 'Russian' }, { c: 'uk', n: 'Українська', e: 'Ukrainian' },
+    { c: 'pl', n: 'Polski', e: 'Polish' }, { c: 'tr', n: 'Türkçe', e: 'Turkish' }, { c: 'ar', n: 'العربية', e: 'Arabic', rtl: true },
+    { c: 'he', n: 'עברית', e: 'Hebrew', rtl: true }, { c: 'fa', n: 'فارسی', e: 'Persian', rtl: true }, { c: 'ur', n: 'اردو', e: 'Urdu', rtl: true },
+    { c: 'hi', n: 'हिन्दी', e: 'Hindi' }, { c: 'bn', n: 'বাংলা', e: 'Bengali' }, { c: 'ta', n: 'தமிழ்', e: 'Tamil' },
+    { c: 'zh', n: '中文 (简体)', e: 'Chinese (Simplified)' }, { c: 'zh-TW', n: '中文 (繁體)', e: 'Chinese (Traditional)' },
+    { c: 'ja', n: '日本語', e: 'Japanese' }, { c: 'ko', n: '한국어', e: 'Korean' }, { c: 'vi', n: 'Tiếng Việt', e: 'Vietnamese' },
+    { c: 'th', n: 'ไทย', e: 'Thai' }, { c: 'id', n: 'Bahasa Indonesia', e: 'Indonesian' }, { c: 'ms', n: 'Bahasa Melayu', e: 'Malay' },
+    { c: 'tl', n: 'Filipino', e: 'Filipino' }, { c: 'sw', n: 'Kiswahili', e: 'Swahili' }, { c: 'ha', n: 'Hausa', e: 'Hausa' },
+    { c: 'yo', n: 'Yorùbá', e: 'Yoruba' }, { c: 'ig', n: 'Igbo', e: 'Igbo' }, { c: 'am', n: 'አማርኛ', e: 'Amharic' },
+    { c: 'zu', n: 'isiZulu', e: 'Zulu' }, { c: 'af', n: 'Afrikaans', e: 'Afrikaans' }, { c: 'el', n: 'Ελληνικά', e: 'Greek' },
+    { c: 'ro', n: 'Română', e: 'Romanian' }, { c: 'hu', n: 'Magyar', e: 'Hungarian' }, { c: 'cs', n: 'Čeština', e: 'Czech' },
+    { c: 'sk', n: 'Slovenčina', e: 'Slovak' }, { c: 'bg', n: 'Български', e: 'Bulgarian' }, { c: 'sr', n: 'Српски', e: 'Serbian' },
+    { c: 'hr', n: 'Hrvatski', e: 'Croatian' }, { c: 'sv', n: 'Svenska', e: 'Swedish' }, { c: 'da', n: 'Dansk', e: 'Danish' },
+    { c: 'no', n: 'Norsk', e: 'Norwegian' }, { c: 'fi', n: 'Suomi', e: 'Finnish' }
   ];
-  var RTL = { ar: 1, he: 1, fa: 1, ur: 1 };
-  var LANGUAGES = RAW.map(function (r) { return { code: r[0], name: r[1], native: r[2], flag: r[3], rtl: !!RTL[r[0]] }; });
-  var BY_CODE = {}; LANGUAGES.forEach(function (l) { BY_CODE[l.code] = l; });
-  function findLanguage(code) { return BY_CODE[code] || BY_CODE[String(code || '').split('-')[0]] || null; }
-  function isSupported(code) { return !!BY_CODE[code]; }
-  var api = { LANGUAGES: LANGUAGES, findLanguage: findLanguage, isSupported: isSupported };
-  if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.QLanguages = api;
-})(typeof window !== 'undefined' ? window : globalThis);
+  var byCode = {};
+  list.forEach(function (l) { byCode[l.c.toLowerCase()] = l; });
+  function find(code) {
+    if (!code) return null;
+    var k = String(code).toLowerCase();
+    if (byCode[k]) return byCode[k];
+    var base = k.split('-')[0];
+    return byCode[base] || null;
+  }
+  function isRtl(code) { var l = find(code); return !!(l && l.rtl); }
+  return { list: list, find: find, isRtl: isRtl };
+});
