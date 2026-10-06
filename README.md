@@ -1,60 +1,10 @@
-# Quantum Secure Transaction Desk — v3.1
+# Quantum Secure Transaction Desk — v3.0
 
 Enterprise chat portal: dark-glass UI, PostgreSQL persistence (with
 in-memory dev fallback), transaction board with PDF receipts, multi-admin
 role tiers, announcements, tasks & approvals, live dashboard widgets, push
 notifications, message read receipts, a Branding Center, onboarding, and
 hardened input handling throughout.
-
-## v3.1 — Seller Transaction Accounts
-See `CHANGELOG.md` for the item-by-item list. In short: verified-email seller
-registration, unique Account IDs, KYC with live face step, escrow payment
-tracking (5-stage, auto-release), disbursement gate, bank/crypto withdrawals
-with emailed codes, daily limit + business upgrade, IP blocking, 46-language
-UI and chat translation, and a full admin control surface (Sellers tab, Funds
-Desk, Record Incoming Funds, Policy).
-
-**Needed in production:** a working mailbox (Zoho: `EMAIL_SERVICE=zoho`, `EMAIL_USER`, `EMAIL_PASS`, `EMAIL_FROM` = same address, `ZOHO_REGION`) or an email provider key (`RESEND_API_KEY`, `BREVO_API_KEY`, `SENDGRID_API_KEY` or SMTP,
-plus a verified `EMAIL_FROM`), `DATABASE_URL` (schema migrates itself on boot), a long random `RECEIPT_SECRET`, and
-`TRUST_PROXY_HOPS` matching your hosting. A translation key (DeepL/Google/LibreTranslate) gives the best quality.
-After deploying, open **Admin ▸ Accounts ▸ System status**: it shows email, translation, exchange-rate and IP
-detection health, and has a **Send test email** button.
-
-**Emails:** every message (codes, KYC, escrow stages, deposits, withdrawals, account notices, message alerts) uses one
-premium template with a monogram badge, status chip, facts table and two footer desks: **Support** (`SUPPORT_EMAIL`) and
-**Complaints & Escalations** (`COMPLAINTS_EMAIL`). Set `BRAND_NAME`, `BRAND_MONOGRAM`, `BRAND_TAGLINE`, `COMPANY_ADDRESS`
-and `APP_URL` to personalise it. Use addresses on your own domain.
-
-**Keeping email out of spam:** no code can force an inbox; what decides it is your domain's DNS. Publish **SPF**
-(`v=spf1 include:zoho.com ~all`, use your region's domain), **DKIM** (Zoho Mail Admin ▸ Domains ▸ Email Configuration
-▸ DKIM) and **DMARC** (`_dmarc` TXT, start with `p=none`, move to `quarantine` later), send from the same address you log
-in with, then press **Check spam protection** in System status until every line is green. A brand-new domain also
-needs a few days of normal sending to build reputation.
-
-**How seller accounts are protected**
-- A registered seller's account is opened by **signing in** (email + password). The invite link alone no longer
-  gives access. Each signed-in browser is remembered (a hashed token), so the seller does not retype the password
-  every time. The seller can sign out; the admin can sign the seller out of every device.
-- Passwords are stored as salted hashes and **cannot be viewed by anyone**, including the admin and the company. This is
-  deliberate: a screen that shows passwords would expose every seller's credentials (and every other site where they
-  reuse the same password). Instead the admin has **Set temporary password** (shown once, replaces the old one, signs
-  every device out), **Email password-reset code**, and **Sign out all devices**.
-- Everything else about the seller is visible to the admin: name, email, phone, country, date of birth, language,
-  Account ID, terms version and time, registration/last IP, IP log, KYC and business documents, balances.
-- KYC images, business documents and proofs of payment are stored under unguessable `p_…` names and open only through
-  signed links that expire after 6 hours (chat attachments stay public under unguessable names).
-
-**IP detection:** taken from `X-Forwarded-For` counted from the right by `TRUST_PROXY_HOPS` (a visitor cannot forge
-that part), or from `cf-connecting-ip` when `TRUST_CLOUDFLARE=1`. Blocks match the exact IPv4 address, or the whole
-IPv6 /64. They are enforced at join, registration, sign-in, withdrawal, and cut live sessions at once.
-
-**Known limits (be aware):**
-- KYC checks are rule-based (format, name/DOB match, expiry, quality). There is no OCR or face-matching service
-  (paid); the live face step uses the browser's face detector when available. A human approves or rejects.
-- Free translation fallbacks (MyMemory, Lingva) have small quotas; set a DeepL/Google/LibreTranslate key for volume.
-- Exchange rates (USD/GBP/EUR) come from a free public feed; if both sources are down the last saved rates are used.
-- Not run in the build sandbox: a live Postgres, real email providers, a real translation provider, a real camera,
-  and a real reverse proxy. Check them on your deployed host with the System status panel.
 
 ## v3.0 additions
 - **Announcements** — Admin+ can post to any combination of groups; each one
@@ -159,11 +109,8 @@ DEPLOY_RENDER.md        Step-by-step Render deployment guide
   against a live database in this sandbox (no external DB reachable here) —
   test it against your real Postgres instance before relying on it in
   production.
-- v3.1.2: ~260 backend assertions (registration, codes, escrow engine, funds,
-  withdrawals, limits, IP, notifications, translation) pass against stubbed
-  mail/DB; a headless-browser smoke test loads the seller and admin screens
-  with a mocked socket and reports no script errors. Not run here: a live
-  Postgres, a real SMTP server, a real translation provider, or a real camera.
+- UI was not exercised in an actual browser from this environment; verify
+  the visual layer once deployed.
 
 ## A note on this copy of the repo
 The zip this was rebuilt from had several files saved under the wrong
@@ -186,3 +133,26 @@ Then open `http://localhost:3000`. For deploying somewhere it'll stay
 online, start with `DEPLOY.md` (works on any host) or `DEPLOY_NORTHFLANK.md`
 (step-by-step for a free, always-on host with a custom name). Render
 instructions are still in `DEPLOY_RENDER.md` if you want them.
+
+
+---
+
+## v4.0 additions — configuration
+
+| Variable | Purpose |
+|---|---|
+| `REQUIRE_EMAIL_CODES` | `true` / `false` / `auto` (default). Email codes for registration and withdrawals; `auto` = on whenever email delivery is configured. |
+| `SUPPORT_EMAIL` | Client Support address (default `support@usvistra.com`) — Reply-To of every email. |
+| `COMPLAINTS_EMAIL` | Complaints & Escalations address (default `complaints@usvistra.com`) — shown to disabled sellers. |
+| `EMAIL_SERVICE`, `EMAIL_USER`, `EMAIL_PASS`, `EMAIL_FROM` | Email login (Zoho: `zoho`, mailbox, App Password). See **EMAIL-SETUP-ZOHO.md**. |
+| `ZOHO_REGION`, `EMAIL_FROM_ALIASES`, `EMAIL_DKIM_SELECTOR`, `APP_URL`, `COMPANY_ADDRESS` | Optional email tuning. |
+| `FACE_MATCH`, `FACE_MATCH_STRONG/REVIEW/REJECT` | Free on-server face matching (`off` disables; defaults 0.50 / 0.60 / 0.68). Needs ~600 MB RAM free while a check runs. |
+| `TRANSLATE_PROVIDERS` | Order of free translation providers (default `gtx,lingva,mymemory`). |
+| `GOOGLE_TRANSLATE_API_KEY` | Optional paid-tier provider. Not needed — translation is free by default. |
+| `LIBRETRANSLATE_URL`, `LIBRETRANSLATE_API_KEY` | Alternative self-hosted translation. |
+| `MYMEMORY_EMAIL` | Raises the free MyMemory daily quota (fallback provider). |
+| `DAILY_WITHDRAWAL_LIMIT` | Daily limit in account currency (default `10000000`). |
+| `TRUST_PROXY_HOPS` | Reverse proxies in front of the app (default `1`) — needed so IP logging/blocking sees the real visitor. |
+| `TRUST_CLOUDFLARE` | `1` if behind Cloudflare (uses `CF-Connecting-IP`). |
+
+`sharp` (optional dependency) powers the automatic KYC image-quality checks. See `V4-CHANGES.md` for the item-by-item list.

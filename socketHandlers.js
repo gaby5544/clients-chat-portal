@@ -1,28 +1,25 @@
 const { store } = require('./db');
-const { escapeHtml, sanitizeText, RateLimiter, getSocketIp } = require('./security');
-const { isSellerToken } = require('./accounts');
-const { notifyOfflineMessage, notifyTransactionSubmitted, notifyDepositStatus } = require('./email');
-const { publicMessage, nowTime, postSystemMessage } = require('./chatShape');
-const { publicPendingEmail } = require('./notify');
-const { registerSellerHandlers, recordIp, isIpBlocked } = require('./sellerHandlers');
-const CDATA = require('./public/countries');
+const { escapeHtml, sanitizeText, RateLimiter } = require('./security');
+const { notifyOfflineMessage, notifyTransactionSubmitted } = require('./email');
 const { resolveAdminRole, hasMinRole } = require('./roles');
-const { sendPushToUser } = require('./webpush');
 const F = require('./finance');
-const { publicSellerAccount, publicDeposit, CRYPTO_ASSETS } = F;
+const COUNTRIES = require('./public/countries.js');
+const LANGS = require('./public/languages.js');
+const IP = require('./ipTools');
+const N = require('./notifyService');
 const { registerFundsHandlers, pushSellerState, pushAdminLedger, emitSnapshotTo } = require('./fundsHandlers');
+const { registerAccountHandlers, maskEmail } = require('./accountHandlers');
 
 const messageLimiter = new RateLimiter({ windowMs: 10000, max: 20 });   // 20 msgs / 10s per socket
 const actionLimiter = new RateLimiter({ windowMs: 10000, max: 30 });    // generic admin/action guard
 const accountActionLimiter = new RateLimiter({ windowMs: 60000, max: 8 }); // registration/KYC/deposit/withdrawal submissions
 setInterval(() => { messageLimiter.sweep(); actionLimiter.sweep(); accountActionLimiter.sweep(); }, 60000).unref();
 
-const KYC_DOC_TYPES = new Set(['national_id', 'drivers_license', 'passport']);
-const PROOF_ADDRESS_TYPES = new Set(['bank_statement', 'utility_bill', 'electricity_bill', 'council_tax', 'other']);
-// CURRENCIES / CRYPTO_ASSETS / FX conversion and the seller-facing payload
-// shapers now live in finance.js (shared with fundsHandlers.js).
-// KYC documents are only ever files this server stored itself.
-const UPLOAD_URL_RE = /^\/uploads\/[A-Za-z0-9._-]+$/;
+const COMPLAINTS_EMAIL = require('./email').COMPLAINTS_EMAIL;
+
+function nowTime() {
+  return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
 
 function publicUser(u) {
   if (!u) return null;
@@ -34,10 +31,36 @@ function publicUser(u) {
     adminRole: u.admin_role || null,
     isOnline: u.is_online,
     lastSeen: u.last_seen,
-    phone: u.phone || null,
-    country: u.country_code ? ((CDATA.list.find((c) => c.c === u.country_code) || {}).n || null) : null,
-    countryFlag: u.country_code ? CDATA.flagEmoji(u.country_code) : null,
-    language: u.pref_lang || null
+    countryCode: u.country_code || null,
+    countryName: u.country_name || null,
+    language: u.language || null
+  };
+}
+
+async function publicMessage(m) {
+  const [reactions, status] = await Promise.all([
+    store.getReactionSummary(m.id),
+    store.getMessageStatus(m.id)
+  ]);
+  return {
+    id: m.id,
+    groupId: m.group_id,
+    sender: m.sender_name,
+    senderRole: m.sender_role,
+    senderToken: m.sender_token,
+    text: m.text,
+    fileUrl: m.file_url,
+    fileType: m.file_type,
+    fileName: m.file_name,
+    replyToId: m.reply_to_id,
+    forwardedFrom: m.forwarded_from,
+    targetLang: m.target_lang,
+    audience: m.audience || null,
+    isEdited: m.is_edited,
+    time: nowTime(),
+    createdAt: m.created_at,
+    reactions,
+    status
   };
 }
 
@@ -53,20 +76,15 @@ function publicAnnouncement(a) {
   return { id: a.id, groupId: a.group_id, messageId: a.message_id, text: a.text, createdBy: a.created_by, createdAt: a.created_at };
 }
 
-// `viewer` decides which email addresses may leave the server:
-//   'admin'    -> both (Desk Officers manage them)
-//   'PARTY A'  -> only the Buyer's own address
-//   'PARTY B'  -> only the Seller's own address
-//   anything else -> none
-// A Buyer must never learn the Seller's address and vice versa.
-function emailsFor(g, viewer) {
-  if (viewer === 'admin') return { A: g.email_a || null, B: g.email_b || null };
-  if (viewer === 'PARTY A') return { A: g.email_a || null, B: null };
-  if (viewer === 'PARTY B') return { A: null, B: g.email_b || null };
-  return { A: null, B: null };
+function publicPendingEmail(p) {
+  return {
+    id: p.id, groupId: p.group_id, party: p.party, toEmail: p.to_email,
+    fromName: p.from_name, groupName: p.group_name, text: p.message_text,
+    status: p.status, createdAt: p.created_at
+  };
 }
 
-async function groupSummary(g, viewerToken, viewer) {
+async function groupSummary(g, viewerToken) {
   const messages = await store.getMessagesForGroup(g.id, 1);
   const last = messages[messages.length - 1];
   const unread = viewerToken ? (await store.getUnreadCounts(viewerToken))[g.id] || 0 : 0;
@@ -74,15 +92,13 @@ async function groupSummary(g, viewerToken, viewer) {
     id: g.id,
     name: g.name,
     customNames: { A: g.custom_name_a, B: g.custom_name_b },
-    emails: emailsFor(g, viewer),
+    emails: { A: g.email_a || null, B: g.email_b || null },
     fileUploadsEnabled: g.file_uploads_enabled,
     highlighted: g.highlighted,
     transactionFormEnabled: g.transaction_form_enabled,
-    bannerUrl: g.banner_url || null,
     disbursementEnabled: !!g.disbursement_enabled,
-    sellerRegistered: !!g.seller_registered,
     sellerDisabled: !!g.seller_disabled,
-    sellerAccountId: g.seller_account_id || null,
+    bannerUrl: g.banner_url || null,
     lastMessagePreview: last ? (last.file_url ? `📎 ${last.file_name || 'Attachment'}` : last.text).slice(0, 80) : 'No messages yet...',
     unreadCount: unread
   };
@@ -118,10 +134,10 @@ function registerSocketHandlers(io, socket) {
     if (viewerSocket) {
       const m = activeSockets.get(viewerSocket.id);
       if (!m || !hasMinRole(m.adminRole, 'ADMIN')) return; // silently ignore for non-admins/moderators
-      const list = await Promise.all(groups.map(g => groupSummary(g, m.sessionToken, 'admin')));
+      const list = await Promise.all(groups.map(g => groupSummary(g, m.sessionToken)));
       viewerSocket.emit('all-groups-list', list);
     } else {
-      const list = await Promise.all(groups.map(g => groupSummary(g, null, 'admin')));
+      const list = await Promise.all(groups.map(g => groupSummary(g, null)));
       io.to('admins').emit('all-groups-list', list);
     }
   }
@@ -136,18 +152,47 @@ function registerSocketHandlers(io, socket) {
     io.to('admins').emit('dashboard-widgets-update', widgets);
   }
 
-  // Money movement (incoming funds, withdrawal status control, Funds Desk).
-  registerFundsHandlers(io, socket, { meta, metaHasMinRole, broadcastGroupsList });
-  registerSellerHandlers(io, socket, { meta, metaHasMinRole, broadcastGroupsList });
-  const notifier = io._notifier;
+  // Immediate + automatic (no approval gate, unlike email below). The push is translated
+  // into the recipient's own language before it is sent.
+  async function pushIfOffline(targetToken, payload) {
+    if (N.isOnline(io, targetToken)) return;
+    await store.addNotification(targetToken, 'message', payload);
+    await N.pushToToken(targetToken, {
+      title: `New message from ${payload.fromName}`,
+      body: payload.text ? `${payload.groupName}: ${payload.text}` : payload.groupName,
+      url: '/'
+    });
+  }
+
+  // Missed-message emails are queued as "pending" and only actually sent once
+  // an admin approves them (see 'admin-approve-pending-email' below) — never
+  // sent automatically, per how the Desk Officer wants email handled. Works
+  // even for a party who has never joined the group yet, as long as an email
+  // was set for them (e.g. at group creation) — they are offline by definition.
+  async function queueOfflineEmail(group, party, payload) {
+    const toEmail = party === 'A' ? group.email_a : group.email_b;
+    if (!toEmail) return;
+    const rec = await store.createPendingEmail({
+      groupId: group.id, party, toEmail,
+      fromName: payload.fromName, groupName: payload.groupName, messageText: payload.text
+    });
+    io.to('admins').emit('pending-email-created', publicPendingEmail(rec));
+  }
+
+  // Money movement (incoming funds, escrow review, withdrawal stages, Funds Desk) and the
+  // seller's own account flows (registration, KYC, business upgrade, withdrawals, admin controls).
+  const subCtx = { meta, metaHasMinRole, broadcastGroupsList, broadcastDirectory, publicMessage };
+  registerFundsHandlers(io, socket, subCtx);
+  registerAccountHandlers(io, socket, subCtx);
 
   // ---------------- JOIN ROOM ----------------
-  socket.on('join-room', async ({ groupId, role, adminKey, sessionToken, email }) => {
+  socket.on('join-room', async ({ groupId, role, adminKey, sessionToken, email, lang }) => {
     try {
       if (!sessionToken || typeof sessionToken !== 'string') return;
       groupId = sanitizeText(groupId || 'default-group', 100);
       const adminRole = resolveAdminRole(adminKey);
       const isAdmin = !!adminRole;
+      const ip = IP.fromSocket(socket);
 
       let group = await store.getGroup(groupId);
       if (!group) {
@@ -159,33 +204,54 @@ function registerSocketHandlers(io, socket) {
 
       // Invite links use friendly role names in the URL ('BUYER'/'SELLER') so
       // a party never sees the internal 'PARTY A'/'PARTY B' slot names even
-      // in their own browser's address bar. Old-style links already sent out
-      // with '?role=PARTY%20A' etc. still work.
+      // in their own browser's address bar. Old-style links already sent
+      // out with '?role=PARTY%20A' etc. still work.
       const roleMap = { BUYER: 'PARTY A', SELLER: 'PARTY B', 'PARTY A': 'PARTY A', 'PARTY B': 'PARTY B' };
       const safeRole = roleMap[role] || 'PARTY A';
+
+      // A REGISTERED seller's seat is protected: only a session that signed in with the
+      // account password may take it, and a blocked IP never may. (Before registration the
+      // invite link alone is enough — that is how the seller creates the account.)
+      if (!isAdmin && safeRole === 'PARTY B') {
+        if (await store.isIpBlocked(groupId, ip)) {
+          await store.logIpEvent({ groupId, kind: 'login_blocked', ip, userAgent: socket.handshake.headers['user-agent'] });
+          return socket.emit('seller-ip-blocked', { supportEmail: COMPLAINTS_EMAIL });
+        }
+        if (group.seller_registered) {
+          let authorised = await store.hasSellerSession(groupId, sessionToken);
+          if (!authorised) {
+            // Accounts created before sign-in existed: the session already holding the seat is grandfathered in once.
+            const existing = await store.getSellerSessionTokens(groupId);
+            if (!existing.length && group.seller_session_token === sessionToken) { await store.addSellerSession(groupId, sessionToken, ip); authorised = true; }
+          }
+          if (!authorised) {
+            return socket.emit('seller-login-required', { groupId, groupName: group.name, emailHint: maskEmail(group.email_b) });
+          }
+        }
+      }
+
       const displayName = isAdmin
         ? `Desk Officer (${adminRole === 'SUPER_ADMIN' ? 'Super Admin' : adminRole === 'MODERATOR' ? 'Moderator' : 'Admin'})`
         : (safeRole === 'PARTY A' ? group.custom_name_a : group.custom_name_b);
 
-      // IP enforcement: a blocked IP never reaches the seller's account.
-      const ip = getSocketIp(socket);
-      if (!isAdmin && safeRole === 'PARTY B' && group.seller_registered && isIpBlocked(group, ip)) {
-        return socket.emit('ip-blocked', { groupId, contact: 'complaints@usvistra.com' });
-      }
-      // A registered Transaction Account is opened by signing in (email + password), not by the invite link.
-      // Only browsers that have signed in (or created the account) are trusted.
-      if (!isAdmin && safeRole === 'PARTY B' && group.seller_registered && !isSellerToken(group, sessionToken)) {
-        return socket.emit('seller-login-required', { groupId, groupName: group.name, reason: 'signin' });
-      }
-
-      // A reconnect within the grace window (brief network blip / tab
-      // backgrounding) just clears the pending "went offline" timer below —
-      // it does not need any special handling here any more since presence
-      // is no longer logged into the chat as a message.
+      // A reconnect within the grace window (brief network blip / tab backgrounding)
+      // just clears the pending "went offline" timer below.
       if (pendingDisconnects.has(sessionToken)) {
         clearTimeout(pendingDisconnects.get(sessionToken));
         pendingDisconnects.delete(sessionToken);
       }
+
+      // Country: a registered seller's declared country; otherwise whatever the host/CDN tells us about the visitor.
+      let countryCode; let countryName;
+      if (!isAdmin && safeRole === 'PARTY B' && group.seller_registered) {
+        const c = COUNTRIES.byName(group.seller_country);
+        if (c) { countryCode = c.code; countryName = c.name; }
+      } else if (!isAdmin) {
+        const c = COUNTRIES.byCode(IP.countryFromHeaders(socket.handshake.headers));
+        if (c) { countryCode = c.code; countryName = c.name; }
+      }
+      const accountLang = (!isAdmin && safeRole === 'PARTY B' && group.seller_registered) ? group.seller_language : null;
+      const chosenLang = LANGS.get(accountLang || lang) ? (accountLang || lang) : undefined;
 
       const user = await store.upsertUser({
         sessionToken,
@@ -193,25 +259,23 @@ function registerSocketHandlers(io, socket) {
         role: isAdmin ? 'ADMINISTRATOR' : safeRole,
         isAdmin,
         adminRole,
-        // A seller's alert address is the one on their own account — never an address a browser happens to remember.
-        email: (safeRole !== 'PARTY B' || isAdmin) && isValidEmailSafe(email) ? email : undefined,
-        isOnline: true,
-        lastIp: ip || undefined
+        email: isValidEmailSafe(email) ? email : undefined,
+        countryCode, countryName, language: chosenLang,
+        isOnline: true
       });
 
       socket.rooms.forEach(r => { if (r !== socket.id) socket.leave(r); });
       socket.join(groupId);
+      socket.join(N.userRoom(sessionToken)); // private room: every tab/device of this person
       if (isAdmin) socket.join('admins');
       // Money data goes ONLY to Admin / Super Admin (never a Moderator) via this room.
       if (hasMinRole(adminRole, 'ADMIN')) socket.join('finance-admins');
 
-      activeSockets.set(socket.id, { sessionToken, groupId, isAdmin, adminRole, role: isAdmin ? null : safeRole, active: true });
+      activeSockets.set(socket.id, { sessionToken, groupId, isAdmin, adminRole, role: isAdmin ? null : safeRole, ip });
 
       // Persist which session currently holds the Buyer/Seller seat for THIS
-      // group. This is what lets offline notifications (push + email) target
-      // exactly the right two people instead of every user in the system —
-      // last one to join a given role/group keeps the seat, so switching
-      // devices still works.
+      // group — this is what lets offline notifications target exactly the right
+      // two people instead of every user in the system.
       if (!isAdmin) {
         await store.updateGroup(groupId, safeRole === 'PARTY A' ? { buyer_session_token: sessionToken } : { seller_session_token: sessionToken });
         group = await store.getGroup(groupId);
@@ -219,11 +283,12 @@ function registerSocketHandlers(io, socket) {
         // live money updates can never reach the Buyer in the same chat.
         if (safeRole === 'PARTY B') {
           socket.join(`seller:${groupId}`);
-          if (group.seller_registered) group = await recordIp(group, ip, 'join');
-        }
+          if (group.seller_registered) await store.logIpEvent({ groupId, kind: 'join', ip, country: countryCode, userAgent: socket.handshake.headers['user-agent'] });
+        } else socket.join(`buyer:${groupId}`);
       }
 
-      const [messages, pinnedMessages, unreadCounts, announcements, tasks] = await Promise.all([
+      const viewer = { isAdmin, role: isAdmin ? null : safeRole };
+      let [messages, pinnedMessages, unreadCounts, announcements, tasks] = await Promise.all([
         store.getMessagesForGroup(groupId),
         store.getPinnedMessages(groupId),
         store.getUnreadCounts(sessionToken),
@@ -231,15 +296,20 @@ function registerSocketHandlers(io, socket) {
         store.getTasks(groupId)
       ]);
 
+      messages = messages.filter(m => N.canSeeMessage(m.audience, viewer));
+      pinnedMessages = pinnedMessages.filter(m => N.canSeeMessage(m.audience, viewer));
       await store.clearUnread(sessionToken, groupId);
 
       socket.emit('init-state', {
-        group: await groupSummary(group, sessionToken, isAdmin ? 'admin' : safeRole),
+        group: await groupSummary(group, sessionToken),
         isAdminConfirmed: isAdmin,
         adminRole,
         role: isAdmin ? null : safeRole,
         socketId: socket.id,
         sessionToken,
+        language: user.language || null,
+        accountLanguage: accountLang,
+        country: countryCode ? { code: countryCode, name: countryName } : null,
         messages: await Promise.all(messages.map(publicMessage)),
         pinnedMessages: await Promise.all(pinnedMessages.map(publicMessage)),
         unreadCounts,
@@ -260,13 +330,12 @@ function registerSocketHandlers(io, socket) {
         socket.emit('pending-emails-list', pending.map(publicPendingEmail));
         // Admin / Super Admin viewing this group gets the seller's Transaction
         // Account state too (KYC/balances/ledger) — never a Moderator, never the buyer.
-        if (hasMinRole(adminRole, 'ADMIN')) await emitSnapshotTo(socket, groupId, true);
+        if (hasMinRole(adminRole, 'ADMIN')) await emitSnapshotTo(socket, groupId);
       } else if (safeRole === 'PARTY B') {
         // The Seller's own account — this is the popup trigger: the client
         // shows the "Create your Transaction Account" registration modal
         // whenever seller_registered is still false.
         await emitSnapshotTo(socket, groupId);
-        if (group.seller_disabled) socket.emit('seller-disabled', { groupId, reason: group.seller_disabled_reason || null, contact: 'complaints@usvistra.com' });
       }
     } catch (err) {
       console.error('[join-room] error:', err);
@@ -281,14 +350,15 @@ function registerSocketHandlers(io, socket) {
         return socket.emit('error-msg', 'You are sending messages too quickly. Please slow down.');
       }
       const m = meta();
-      if (!m) return;
+      if (!m || m.groupId !== groupId) return;
       const user = await store.getUser(m.sessionToken);
       const group = await store.getGroup(groupId);
       if (!user || !group) return;
-
-      if (!m.isAdmin && isSellerToken(group, m.sessionToken) && group.seller_disabled) {
-        return socket.emit('seller-disabled', { groupId, reason: group.seller_disabled_reason || null, contact: 'complaints@usvistra.com' });
+      if (!m.isAdmin && m.role === 'PARTY B' && group.seller_registered) {
+        if (!(await store.hasSellerSession(groupId, m.sessionToken))) return socket.emit('seller-login-required', { groupId, groupName: group.name, emailHint: maskEmail(group.email_b) });
+        if (group.seller_disabled) return socket.emit('error-msg', `Your account has been disabled. To lodge a complaint, contact ${COMPLAINTS_EMAIL}.`);
       }
+
       const cleanText = sanitizeText(text, 4000);
       if (!cleanText && !fileUrl) return;
       if (fileUrl && !group.file_uploads_enabled) {
@@ -321,10 +391,32 @@ function registerSocketHandlers(io, socket) {
       await broadcastStats();
       if (fileUrl) await broadcastDashboardWidgets();
 
-      // Automatic notifications: the other party and every admin hear about it immediately
-      // (in-app + 3-beep sound if inactive, push, email when offline), in their own language.
-      const plain = cleanText || (fileName ? `Shared file: ${fileName}` : '');
-      await notifier.notifyNewMessage({ group, sender: user, senderIsAdmin: !!m.isAdmin, messageId: msg.id, text: plain });
+      // WHO gets notified: the group's own Buyer and Seller (whichever did not send it) and
+      // every Desk Officer other than the sender. Never anyone outside this deal. Each recipient
+      // is told immediately — a live event if online (the browser plays the sound 3 times when
+      // they are not looking at the chat), a translated push if offline — and is reminded every
+      // 60 minutes (see notifyService) until they open the chat.
+      const senderToken = user.session_token;
+      const senderParty = group.buyer_session_token === senderToken ? 'A'
+        : group.seller_session_token === senderToken ? 'B' : null;
+      const notifyPayload = { fromName: user.display_name, groupName: group.name, text: cleanText.slice(0, 200), groupId };
+      const recipients = new Map(); // token -> 'A' | 'B' | 'ADMIN'
+      if (group.buyer_session_token && senderParty !== 'A') recipients.set(group.buyer_session_token, 'A');
+      if (group.seller_session_token && senderParty !== 'B') recipients.set(group.seller_session_token, 'B');
+      for (const u of await store.getAllUsers()) if (u.is_admin && u.session_token !== senderToken) recipients.set(u.session_token, 'ADMIN');
+      recipients.delete(senderToken);
+
+      for (const [token, kind] of recipients.entries()) {
+        await store.incrementUnread(token, groupId);
+        N.emitToUser(io, token, 'notify-message', { ...notifyPayload, messageId: msg.id });
+        if (!N.isOnline(io, token)) await pushIfOffline(token, notifyPayload);
+      }
+      // A party who has never joined has no session token yet — an email (if one is on file) can still be queued.
+      for (const party of ['A', 'B']) {
+        if (party === senderParty) continue;
+        const token = party === 'A' ? group.buyer_session_token : group.seller_session_token;
+        if (!token || !N.isOnline(io, token)) await queueOfflineEmail(group, party, notifyPayload);
+      }
     } catch (err) {
       console.error('[send-message] error:', err);
     }
@@ -333,21 +425,17 @@ function registerSocketHandlers(io, socket) {
   // ---------------- MARK READ (also drives read receipts) ----------------
   socket.on('mark-group-read', async ({ groupId }) => {
     const m = meta();
-    if (!m) return;
-    const hadUnread = ((await store.getUnreadCounts(m.sessionToken))[groupId] || 0) > 0;
-    await store.clearUnread(m.sessionToken, groupId);
+    if (!m || m.groupId !== groupId) return;
+    const had = Number((await store.getUnreadCounts(m.sessionToken))[groupId] || 0);
+    await store.clearUnread(m.sessionToken, groupId); // ends the 60-minute reminders for this person
     const updatedIds = await store.markGroupRead(groupId, m.sessionToken, m.sessionToken);
-    if (updatedIds.length) {
-      io.to(groupId).emit('message-status-bulk-update', { messageIds: updatedIds, status: 'read' });
-      // Tell the others (the senders and the admins) that someone has now read it.
-      if (hadUnread) {
-        const [reader, group] = await Promise.all([store.getUser(m.sessionToken), store.getGroup(groupId)]);
-        if (reader && group) {
-          const senders = new Set();
-          for (const id of updatedIds) { const msg = await store.getMessageById(id); if (msg && msg.sender_token) senders.add(msg.sender_token); }
-          await notifier.notifyRead({ group, reader, readerSocket: socket, senderTokens: senders, count: updatedIds.length });
-        }
-      }
+    if (updatedIds.length) io.to(groupId).emit('message-status-bulk-update', { messageIds: updatedIds, status: 'read' });
+    // Tell everyone else the messages were opened (in the group, and any Desk Officer elsewhere).
+    if (updatedIds.length || had) {
+      const reader = await store.getUser(m.sessionToken);
+      const notice = { groupId, byName: reader ? reader.display_name : 'Someone', byToken: m.sessionToken, count: updatedIds.length || had };
+      socket.to(groupId).emit('message-read-notice', notice);
+      io.to('admins').except(groupId).emit('message-read-notice', notice);
     }
     await broadcastGroupsList(socket);
   });
@@ -583,18 +671,13 @@ function registerSocketHandlers(io, socket) {
   socket.on('admin-set-party-email', async ({ groupId, party, email }) => {
     if (!metaHasMinRole('ADMIN')) return;
     if (!['A', 'B'].includes(party)) return;
-    { const g0 = await store.getGroup(groupId); if (party === 'B' && g0 && g0.seller_registered) return socket.emit('error-msg', 'The seller\u2019s email is tied to their registered account and cannot be changed.'); }
     if (email && !isValidEmailSafe(email)) return socket.emit('error-msg', 'That does not look like a valid email address.');
     const clean = email ? email.trim() : null; // empty string/undefined clears it
+    const target = await store.getGroup(groupId);
+    if (party === 'B' && target && target.seller_registered) return socket.emit('error-msg', 'The seller\'s email is tied to their Transaction Account and cannot be changed.');
     await store.updateGroup(groupId, party === 'A' ? { email_a: clean } : { email_b: clean });
     const group = await store.getGroup(groupId);
-    // Desk Officers see which party changed; each party is only ever told about
-    // their OWN address — never the other side's.
-    for (const [sid, m] of activeSockets.entries()) {
-      if (m.groupId !== groupId) continue;
-      if (m.isAdmin) io.to(sid).emit('party-email-updated', { groupId, party, email: clean });
-      else if ((m.role === 'PARTY A' && party === 'A') || (m.role === 'PARTY B' && party === 'B')) io.to(sid).emit('my-email-updated', { email: clean, byAdmin: true });
-    }
+    io.to(groupId).emit('party-email-updated', { groupId, party, email: clean });
     await broadcastGroupsList();
   });
 
@@ -609,9 +692,9 @@ function registerSocketHandlers(io, socket) {
     if (!group) return;
     let party = null;
     if (group.buyer_session_token === m.sessionToken) party = 'A';
-    else if (isSellerToken(group, m.sessionToken)) party = 'B';
+    else if (group.seller_session_token === m.sessionToken) party = 'B';
     if (!party) return;
-    if (party === 'B' && group.seller_registered) return socket.emit('error-msg', 'Your email is tied to your account and can never be changed.');
+    if (party === 'B' && group.seller_registered) return socket.emit('error-msg', 'Your email is tied to your Transaction Account and cannot be changed.');
     const clean = email.trim();
     await store.updateGroup(groupId, party === 'A' ? { email_a: clean } : { email_b: clean });
     socket.emit('my-email-updated', { email: clean });
@@ -619,108 +702,6 @@ function registerSocketHandlers(io, socket) {
     await broadcastGroupsList();
   });
 
-  // =====================================================================
-  // TRANSACTION ACCOUNT SYSTEM — Seller registration, KYC, deposits and
-  // withdrawals. See Withdrawal_System___Technical_Blueprint for the full
-  // spec this implements. Everything here is Seller-only or Admin-only;
-  // a Buyer never sees any of it, and it's never folded into groupSummary.
-  // =====================================================================
-
-  // A Seller can only ever act on THEIR OWN group's Transaction Account —
-  // this resolves & checks that in one place for every handler below.
-  async function requireSellerOwnGroup(groupId) {
-    const m = meta();
-    if (!m || m.isAdmin) return null;
-    const group = await store.getGroup(groupId);
-    if (!group || !isSellerToken(group, m.sessionToken)) return null;
-    if (group.seller_disabled) { socket.emit('seller-disabled', { groupId: group.id, reason: group.seller_disabled_reason || null, contact: 'complaints@usvistra.com' }); return null; }
-    if (isIpBlocked(group, getSocketIp(socket))) { socket.emit('ip-blocked', { groupId: group.id, contact: 'complaints@usvistra.com' }); return null; }
-    return group;
-  }
-
-  // ---- Deposits ("Record a deposit" — a notification, never proof of funds) ----
-  socket.on('notify-deposit', async ({ groupId, asset, network, amount }) => {
-    const group = await requireSellerOwnGroup(groupId);
-    if (!group) return;
-    if (!accountActionLimiter.allow(meta().sessionToken)) return socket.emit('error-msg', 'Too many attempts — please wait a moment and try again.');
-    const amt = Number(amount);
-    if (!Number.isFinite(amt) || amt <= 0 || amt > 999999999.99) return socket.emit('error-msg', 'Please enter a valid amount.');
-    // Deposits are crypto-only — bank deposit was intentionally removed.
-    if (!CRYPTO_ASSETS.has(asset)) return socket.emit('error-msg', 'Please choose a valid asset.');
-
-    const depAmt = F.round2(amt);
-    const dep = await store.createDeposit({ groupId, method: 'crypto', asset, network: network || null, amount: depAmt });
-    // Recorded immediately as "Held in Vault" — total_deposited moves now,
-    // available balance never moves until an admin confirms the funds arrived.
-    await store.adjustBalances(groupId, { held: depAmt, total: depAmt });
-    await pushSellerState(io, groupId, null);
-    socket.emit('deposit-created', publicDeposit(dep));
-    io.to('finance-admins').emit('deposit-created', publicDeposit(dep));
-    await broadcastGroupsList();
-  });
-
-  socket.on('admin-get-deposits-queue', async () => {
-    if (!metaHasMinRole('ADMIN')) return;
-    const pending = await store.getPendingDeposits();
-    socket.emit('deposits-queue-list', pending.map(publicDeposit));
-  });
-
-  socket.on('admin-review-deposit', async ({ depositId, decision, reason }) => {
-    if (!metaHasMinRole('ADMIN')) return;
-    if (!['verified', 'rejected'].includes(decision)) return;
-    const dep = await store.getDepositById(depositId);
-    if (!dep || dep.status !== 'held_in_vault') return;
-    const group = await store.getGroup(dep.group_id);
-    if (!group) return;
-    const m = meta();
-    const amt = F.round2(dep.amount);
-    // Verified: held -> available. Rejected: release the hold and back out the
-    // Total Deposited bump — it never became available.
-    const moved = await store.adjustBalances(dep.group_id, decision === 'verified' ? { held: -amt, available: amt } : { held: -amt, total: -amt });
-    if (!moved) return socket.emit('error-msg', 'The seller\'s held balance does not cover this deposit — please check the ledger.');
-    const resolved = await store.resolveDeposit(depositId, { status: decision, verifiedBy: m.sessionToken, rejectionReason: decision === 'rejected' ? (sanitizeText(reason, 500) || 'Not specified') : null });
-    const updatedGroup = await store.getGroup(dep.group_id);
-    await pushSellerState(io, dep.group_id, {
-      kind: 'deposit',
-      title: decision === 'verified' ? 'Deposit confirmed' : 'Deposit could not be confirmed',
-      body: decision === 'verified' ? `${F.fmtMoney(amt, updatedGroup.seller_currency)} is now available.`.trim() : (resolved.rejection_reason || 'Not specified')
-    });
-    io.to('finance-admins').emit('deposit-resolved', publicDeposit(resolved));
-    io.to(`seller:${dep.group_id}`).emit('deposit-updated', publicDeposit(resolved));
-    if (updatedGroup.email_b) await notifyDepositStatus(updatedGroup.email_b, { groupName: updatedGroup.name, amount: `${amt} ${updatedGroup.seller_currency || ''}`.trim(), status: decision, reason: resolved.rejection_reason, lang: updatedGroup.seller_language });
-    await broadcastGroupsList();
-  });
-
-  // ---- Withdrawals ----
-  // The admin side of the state machine (pending -> held in vault -> processing
-  // -> completed, or declined) lives in fundsHandlers.js. The seller's request is here.
-
-  socket.on('admin-get-withdrawals-queue', async () => {
-    if (!metaHasMinRole('ADMIN')) return;
-    const pending = await store.getPendingWithdrawals();
-    socket.emit('withdrawals-queue-list', pending.map((w) => F.publicWithdrawal(w, true)));
-  });
-
-  // Admin inspecting one specific group's full Transaction Account (used
-  // when opening a group from the Groups panel, distinct from the queues above
-  // which span every group).
-  socket.on('admin-get-seller-account', async ({ groupId }) => {
-    if (!metaHasMinRole('ADMIN')) return;
-    const group = await store.getGroup(groupId);
-    if (!group) return;
-    await emitSnapshotTo(socket, groupId, true);
-  });
-
-  // The Seller's own on-demand refresh — fired every time they open their
-  // Transaction Account view, so what they see is pulled fresh from the
-  // store rather than trusted to whatever the socket has cached client-side.
-  socket.on('get-my-seller-account', async ({ groupId }) => {
-    const group = await requireSellerOwnGroup(groupId);
-    if (!group) return;
-    await emitSnapshotTo(socket, groupId);
-  });
-
-  // ---------------- ADMIN+: GROUP BANNER (Branding Center) ----------------
   socket.on('admin-set-group-banner', async ({ groupId, bannerUrl }) => {
     if (!metaHasMinRole('ADMIN')) return;
     const clean = sanitizeText(bannerUrl, 500);

@@ -16,7 +16,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Sora:wght@600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 <link rel="stylesheet" href="/style.css">
-<link rel="stylesheet" href="/v31.css">
+<link rel="stylesheet" href="/v4.css">
 </head>
 <body>
 
@@ -85,8 +85,6 @@
         <button class="icon-btn" id="tasksToggleBtn" onclick="openTasksModal()" title="Tasks &amp; Approvals">
           <i class="fa-solid fa-list-check"></i><span class="badge-dot hidden" id="tasksDot"></span>
         </button>
-        <span class="disb-pill off hidden" id="disbPill" title="Disbursement stage of this transaction"><i class="fa-solid fa-circle"></i> <span id="disbPillText">Awaiting disbursement</span></span>
-        <button class="icon-btn lang-btn" id="langBtn" onclick="openLanguagePicker()" title="Language"><i class="fa-solid fa-globe"></i><span class="lang-code notranslate" translate="no">EN</span></button>
         <button class="icon-btn" id="notifyToggleBtn" onclick="togglePushSubscription()" title="Enable notifications"><i class="fa-solid fa-bell"></i></button>
         <button class="icon-btn" id="emailAlertsBtn" onclick="openEmailSettings()" title="Email alerts"><i class="fa-solid fa-envelope"></i></button>
         <button class="icon-btn hidden" id="txAccountBtn" onclick="openTxAccountView()" title="Your Transaction Account"><i class="fa-solid fa-building-columns"></i></button>
@@ -136,6 +134,13 @@
         <option value="PARTY B" data-i18n="roleSeller">Role: Seller</option>
       </select>
 
+      <select class="lang-dropdown" id="uiLangSelect" onchange="setUiLanguage(this.value)" title="Interface Language">
+        <option value="en">🇬🇧 EN</option>
+        <option value="de">🇩🇪 DE</option>
+        <option value="it">🇮🇹 IT</option>
+        <option value="tr">🇹🇷 TR</option>
+      </select>
+
       <select class="lang-dropdown" id="targetLangSelect" title="Translate to / from this language">
         <option value="en">🇬🇧 English</option>
         <option value="de">🇩🇪 German</option>
@@ -180,7 +185,6 @@
       <button class="drawer-tab" data-tab="controls" onclick="setAdminTab('controls')" data-i18n="controls">Controls</button>
       <button class="drawer-tab admin-plus-only" data-tab="transactions" onclick="setAdminTab('transactions')" data-i18n="transactions">Transactions</button>
       <button class="drawer-tab admin-plus-only" data-tab="accounts" onclick="setAdminTab('accounts')">Accounts<span class="badge-dot hidden" id="accountsTabDot"></span></button>
-      <button class="drawer-tab admin-plus-only" data-tab="sellers" onclick="setAdminTab('sellers')">Sellers</button>
       <button class="drawer-tab" data-tab="tasks" onclick="setAdminTab('tasks')">Tasks</button>
       <button class="drawer-tab super-admin-only hidden" data-tab="branding" onclick="setAdminTab('branding')">Branding</button>
     </div>
@@ -234,14 +238,8 @@
         <button class="admin-btn" onclick="toggleFileLock()" id="lockFileBtn"><i class="fa-solid fa-lock"></i> <span data-i18n="toggleUploads">Toggle File Upload Switch</span></button>
       </div>
       <div class="admin-section admin-plus-only">
-        <span class="admin-section-label"><i class="fa-solid fa-unlock-keyhole"></i> DISBURSEMENT STAGE · ACTIVE GROUP</span>
-        <div class="sw-row"><div>Confirmed &amp; in disbursement stage<small id="ctlDisbText">OFF — withdrawals are closed. The seller sees a popup with a "complete the transaction" button.</small></div>
-          <label class="sw"><input type="checkbox" id="ctlDisbSwitch" onchange="adminToggleDisbursement(this.checked)"><i></i></label></div>
-        <p style="font-size:0.72rem; color:var(--text-faint); margin:6px 0 0;">Shown in the admin dashboard, the transaction group header and the seller's account.</p>
-      </div>
-      <div class="admin-section admin-plus-only hidden" id="pendingEmailsSection">
-        <span class="admin-section-label"><i class="fa-solid fa-envelope-circle-check"></i> HELD EMAILS (APPROVAL MODE)</span>
-        <p style="font-size:0.76rem; color:var(--text-muted); margin:0 0 8px;">Missed-message emails are sent automatically. This list only appears when the server is running with EMAIL_APPROVAL_REQUIRED=1.</p>
+        <span class="admin-section-label"><i class="fa-solid fa-envelope-circle-check"></i> PENDING EMAIL APPROVALS</span>
+        <p style="font-size:0.76rem; color:var(--text-muted); margin:0 0 8px;">Missed-message emails wait here — nothing is sent until you approve it.</p>
         <div id="pendingEmailsList"><p style="font-size:0.78rem; color:var(--text-faint); margin:0;">No pending emails.</p></div>
       </div>
       <div class="admin-section admin-plus-only">
@@ -290,21 +288,8 @@
       </div>
       <div class="admin-section admin-plus-only">
         <span class="admin-section-label"><i class="fa-solid fa-id-card-clip"></i> KYC REVIEW QUEUE</span>
-        <p style="font-size:0.76rem; color:var(--text-muted); margin:0 0 8px;">Every submission is screened automatically first (name, ID number, expiry, age, photo clarity, live face check). Submissions that pass wait here for approval, unless auto-approval is switched on in the policy below.</p>
+        <p style="font-size:0.76rem; color:var(--text-muted); margin:0 0 8px;">Every submission is reviewed manually — nothing is ever auto-approved.</p>
         <div id="kycQueueList"><p style="font-size:0.78rem; color:var(--text-faint); margin:0;">No pending KYC submissions.</p></div>
-      </div>
-      <div class="admin-section admin-plus-only">
-        <span class="admin-section-label"><i class="fa-solid fa-briefcase"></i> BUSINESS ACCOUNT APPLICATIONS</span>
-        <p style="font-size:0.76rem; color:var(--text-muted); margin:0 0 8px;">Sellers applying for unlimited withdrawals. Approving upgrades them to a Business account.</p>
-        <div id="businessQueueList"><p style="font-size:0.78rem; color:var(--text-faint); margin:0;">No pending applications.</p></div>
-      </div>
-      <div class="admin-section admin-plus-only">
-        <span class="admin-section-label"><i class="fa-solid fa-sliders"></i> WITHDRAWAL &amp; VERIFICATION POLICY</span>
-        <div id="policyBox"><p style="font-size:0.78rem; color:var(--text-faint); margin:0;">Loading…</p></div>
-      </div>
-      <div class="admin-section admin-plus-only">
-        <span class="admin-section-label"><i class="fa-solid fa-heart-pulse"></i> SYSTEM STATUS — EMAIL · TRANSLATION · RATES · IP</span>
-        <div id="sysStatusBox"><p style="font-size:0.78rem; color:var(--text-faint); margin:0;">Loading…</p></div>
       </div>
       <div class="admin-section admin-plus-only">
         <span class="admin-section-label"><i class="fa-solid fa-vault"></i> DEPOSITS — HELD IN VAULT</span>
@@ -314,15 +299,6 @@
       <div class="admin-section admin-plus-only">
         <span class="admin-section-label"><i class="fa-solid fa-money-bill-transfer"></i> WITHDRAWALS IN PROGRESS</span>
         <div id="withdrawalsQueueList"><p style="font-size:0.78rem; color:var(--text-faint); margin:0;">No withdrawals in progress.</p></div>
-      </div>
-    </div>
-
-    <div class="drawer-tab-panel hidden" id="tabSellers">
-      <div class="admin-section admin-plus-only">
-        <span class="admin-section-label"><i class="fa-solid fa-users-gear"></i> REGISTERED SELLERS</span>
-        <p style="font-size:0.76rem; color:var(--text-muted); margin:0 0 8px;">Everything a seller entered at registration, plus their Account ID, status and network addresses. Passwords are stored hashed and can never be viewed — use "Email reset code" instead.</p>
-        <div class="seller-toolbar"><input type="text" class="message-input" id="sellerSearch" placeholder="Search name, email, Account ID, country…" oninput="renderSellersTab()"><button class="admin-btn" onclick="socket.emit('admin-get-sellers')"><i class="fa-solid fa-rotate"></i></button></div>
-        <div id="sellersList"><p style="font-size:0.78rem; color:var(--text-faint); margin:0;">Loading sellers…</p></div>
       </div>
     </div>
 
@@ -429,20 +405,18 @@
   </div>
 </div>
 
-<!-- FUNDS DESK — one seller's full ledger, profile and controls (admin/super admin only) -->
+<!-- FUNDS DESK — one seller's full ledger (admin/super admin only) -->
 <div class="modal-overlay hidden" id="fundsDeskModal">
   <div class="modal-box wide">
     <div class="modal-header">
-      <span><i class="fa-solid fa-vault"></i> <span id="ledgerModalTitle" class="notranslate" translate="no">Seller Ledger</span></span>
+      <span><i class="fa-solid fa-vault"></i> <span id="ledgerModalTitle">Seller Ledger</span></span>
       <i class="fa-solid fa-xmark" onclick="closeFundsDeskModal()"></i>
     </div>
     <div class="modal-body">
-      <div id="fdProfile"></div>
-      <div class="ledger-stats-row" style="margin-top:12px;">
-        <div class="ledger-stat emerald"><div class="ledger-stat-label">Available</div><div class="ledger-stat-value notranslate" translate="no" id="ledgerAvailable">—</div></div>
-        <div class="ledger-stat amber"><div class="ledger-stat-label">In vault (review / hold)</div><div class="ledger-stat-value notranslate" translate="no" id="ledgerHeld">—</div></div>
-        <div class="ledger-stat"><div class="ledger-stat-label">Pending withdrawals</div><div class="ledger-stat-value notranslate" translate="no" id="ledgerPendingWd">—</div></div>
-        <div class="ledger-stat"><div class="ledger-stat-label">Total Deposited</div><div class="ledger-stat-value notranslate" translate="no" id="ledgerTotal">—</div></div>
+      <div class="ledger-stats-row">
+        <div class="ledger-stat emerald"><div class="ledger-stat-label">Available</div><div class="ledger-stat-value" id="ledgerAvailable">—</div></div>
+        <div class="ledger-stat amber"><div class="ledger-stat-label">Held in Vault</div><div class="ledger-stat-value" id="ledgerHeld">—</div></div>
+        <div class="ledger-stat"><div class="ledger-stat-label">Total Deposited</div><div class="ledger-stat-value" id="ledgerTotal">—</div></div>
       </div>
       <button class="send-btn" style="width:100%; justify-content:center; margin-bottom:6px;" onclick="openRecordFundsModal()"><i class="fa-solid fa-circle-plus"></i> Record Incoming Funds</button>
 
@@ -455,251 +429,23 @@
   </div>
 </div>
 
-<!-- RECORD INCOMING FUNDS (admin/super admin only) -->
-<div class="modal-overlay hidden" id="recordFundsModal">
-  <div class="modal-box wide">
-    <div class="modal-header"><span><i class="fa-solid fa-circle-plus"></i> Record Incoming Funds</span><i class="fa-solid fa-xmark" onclick="closeModal('recordFundsModal')"></i></div>
-    <div class="modal-body">
-      <p style="color:var(--text-muted); font-size:0.8rem; margin:0 0 6px;">Record a payment received for <b id="recordFundsSellerLabel">this seller</b>. It is posted to their account immediately and — if you choose escrow review — starts the 5-stage review the seller can follow live.</p>
-      <div class="lock-note" style="margin-bottom:6px;"><i class="fa-solid fa-fingerprint"></i><span>Seller Account ID: <b id="rfTargetAcct" class="notranslate" translate="no">—</b> · Account currency: <b id="rfTargetCcy">—</b></span></div>
-
-      <form id="rfForm" autocomplete="off" onsubmit="submitRecordFunds(); return false;" novalidate>
-        <div class="form-section"><i class="fa-solid fa-user"></i> Payer</div>
-        <div class="form-grid">
-          <div class="fld"><label class="fld-label" for="rfPayerName">Payer / company name <span class="req">*</span></label><input id="rfPayerName" class="message-input" maxlength="200" placeholder="e.g. Jude Mensah" autocomplete="off"></div>
-          <div class="fld"><label class="fld-label" for="rfPayerType">Payer type</label>
-            <select id="rfPayerType" class="message-input"><option value="individual">Individual</option><option value="company">Company</option></select></div>
-          <div class="fld"><label class="fld-label" for="rfPayerEmail">Payer email</label><input type="email" id="rfPayerEmail" class="message-input" autocomplete="off"></div>
-          <div class="fld"><label class="fld-label" for="rfPayerPhone">Payer phone (with country code)</label><input type="tel" id="rfPayerPhone" class="message-input" placeholder="+233 24 000 0000" autocomplete="off"></div>
-          <div class="fld"><label class="fld-label">Payer country</label><div id="rfPayerCountry"></div></div>
-          <div class="fld"><label class="fld-label" for="rfPayerBank">Payer bank / institution</label><input id="rfPayerBank" class="message-input" maxlength="200" autocomplete="off"></div>
-        </div>
-
-        <div class="form-section"><i class="fa-solid fa-file-invoice-dollar"></i> Payment</div>
-        <div class="form-grid">
-          <div class="fld span-2"><label class="fld-label" for="rfPurpose">Payment for (purpose) <span class="req">*</span></label><textarea id="rfPurpose" class="message-input" rows="2" maxlength="500" placeholder="e.g. Payment for 10kg gold bullion, order #A17"></textarea></div>
-          <div class="fld"><label class="fld-label" for="rfMethod">Method <span class="req">*</span></label>
-            <select id="rfMethod" class="message-input" onchange="toggleRecordFundsFields()">
-              <option value="bank_transfer">Bank Transfer</option><option value="wire">Wire Transfer (SWIFT)</option><option value="crypto">Cryptocurrency</option><option value="card">Card Payment</option><option value="cheque">Cheque</option><option value="cash">Cash</option><option value="other">Other</option>
-            </select></div>
-          <div class="fld"><label class="fld-label" for="rfReceivedAt">Received on</label><input type="datetime-local" id="rfReceivedAt" class="message-input"></div>
-          <div class="fld"><label class="fld-label" for="rfAmount">Amount <span class="req">*</span></label><input type="number" id="rfAmount" class="message-input" placeholder="0.00" min="0" step="0.01"></div>
-          <div class="fld"><label class="fld-label" for="rfCurrency">Currency</label>
-            <select id="rfCurrency" class="message-input"><option value="USD">USD</option><option value="GBP">GBP</option><option value="EUR">EUR</option></select></div>
-          <div class="fld"><label class="fld-label" for="rfInvoiceRef">Invoice / order reference</label><input id="rfInvoiceRef" class="message-input" maxlength="120" autocomplete="off"></div>
-          <div class="fld"><label class="fld-label" for="rfExternalRef">Bank reference / transaction hash</label><input id="rfExternalRef" class="message-input" maxlength="200" autocomplete="off"></div>
-        </div>
-        <div class="form-grid" id="rfCryptoFields" style="display:none; margin-top:14px;">
-          <div class="fld"><label class="fld-label" for="rfAsset">Asset</label><select id="rfAsset" class="message-input"><option value="USDT">USDT</option><option value="BTC">BTC</option><option value="ETH">ETH</option></select></div>
-          <div class="fld"><label class="fld-label" for="rfNetwork">Network</label><input id="rfNetwork" class="message-input" placeholder="e.g. TRC20" autocomplete="off"></div>
-          <div class="fld span-2"><label class="fld-label" for="rfWallet">Sending wallet address</label><input id="rfWallet" class="message-input" maxlength="200" autocomplete="off"></div>
-        </div>
-        <div class="fld" style="margin-top:14px;"><label class="fld-label">Proof of payment (image or PDF, optional — admin only)</label><input type="file" id="rfProofFile" accept="image/*,.pdf" onchange="rfUploadProof(this)"><div class="fld-hint" id="rfProofStatus"></div></div>
-
-        <div class="form-section"><i class="fa-solid fa-diagram-project"></i> How should the funds be handled?</div>
-        <div class="radio-cards">
-          <label class="radio-card"><input type="radio" name="rfTreat" value="review" checked onchange="rfTreatChanged()"><b>Escrow review</b>5-stage review, shown live to the seller. Funds stay in the vault and release automatically.</label>
-          <label class="radio-card"><input type="radio" name="rfTreat" value="credit" onchange="rfTreatChanged()"><b>Credit now</b>Straight to the available balance. No review.</label>
-          <label class="radio-card"><input type="radio" name="rfTreat" value="hold" onchange="rfTreatChanged()"><b>Hold in vault</b>Keep it held until you release it manually.</label>
-        </div>
-        <div id="rfReviewBox" style="margin-top:12px;">
-          <div class="form-grid">
-            <div class="fld"><label class="fld-label" for="rfReviewMode">Review mode</label>
-              <select id="rfReviewMode" class="message-input" onchange="rfTreatChanged()"><option value="auto">Automatic — timed, completes by itself</option><option value="manual">Manual — you confirm each check</option></select></div>
-            <div class="fld" id="rfSpeedRow"><label class="fld-label" for="rfSpeed">Clock speed</label>
-              <select id="rfSpeed" class="message-input"><option value="1">1× (real time)</option><option value="10">10×</option><option value="60">60×</option><option value="600">600×</option><option value="3600">3600×</option><option value="fit">Auto-fit (whole review in ~45 s)</option></select></div>
-          </div>
-          <div id="rfTimeBox" style="margin-top:12px;">
-            <div class="form-grid">
-              <div class="fld"><label class="fld-label">Total review time</label>
-                <div class="input-row"><input type="number" id="rfDurValue" class="message-input" min="1" value="6" step="1"><select id="rfDurUnit" class="message-input" style="max-width:120px;"><option value="60">minutes</option><option value="3600" selected>hours</option><option value="86400">days</option></select></div>
-                <div class="fld-hint">Split across the 5 stages 10 / 25 / 35 / 10 / 20 %.</div></div>
-              <div class="fld"><label class="fld-label">&nbsp;</label>
-                <label style="display:flex; gap:8px; align-items:center; font-size:0.78rem; color:var(--text-muted); cursor:pointer;"><input type="checkbox" id="rfShowTime" style="width:16px;height:16px;"> Show the seller an estimated time for the active stage</label></div>
-            </div>
-            <button type="button" class="link-btn" style="margin-top:8px;" onclick="rfToggleAdv()">Set each stage's duration manually</button>
-            <div class="timers-grid hidden" id="rfAdv" style="margin-top:8px;">
-              <label>1 · Received (s)<input type="number" min="2" id="rfT0" class="message-input"></label>
-              <label>2 · Payer check (s)<input type="number" min="2" id="rfT1" class="message-input"></label>
-              <label>3 · Authenticity (s)<input type="number" min="2" id="rfT2" class="message-input"></label>
-              <label>4 · Confirmed (s)<input type="number" min="2" id="rfT3" class="message-input"></label>
-              <label>5 · Settlement (s)<input type="number" min="2" id="rfT4" class="message-input"></label>
-            </div>
-          </div>
-        </div>
-
-        <div class="form-section"><i class="fa-solid fa-note-sticky"></i> Notes &amp; notifications</div>
-        <div class="fld"><label class="fld-label" for="rfInternalNote">Internal note</label><textarea id="rfInternalNote" class="message-input" rows="2" maxlength="1000"></textarea></div>
-        <label style="display:flex; align-items:flex-start; gap:8px; font-size:0.78rem; color:var(--text-muted); cursor:pointer; margin-top:8px;"><input type="checkbox" id="rfShareNote" style="width:16px; height:16px; margin-top:2px;"> <span>Let the buyer and seller see this note (it is posted to the transaction chat). Leave unticked to keep it admin-only.</span></label>
-        <label style="display:flex; align-items:center; gap:8px; font-size:0.78rem; color:var(--text-muted); cursor:pointer; margin-top:8px;"><input type="checkbox" id="rfNotifySeller" checked style="width:16px; height:16px;"> Notify the seller and post a line in the chat (plus push / email if they are offline)</label>
-
-        <div class="callout warn" id="rfError" style="margin-top:12px;"></div>
-        <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:16px;">
-          <button type="button" class="ghost-btn" onclick="closeModal('recordFundsModal')">Cancel</button>
-          <button type="submit" class="send-btn" id="rfSubmitBtn"><i class="fa-solid fa-check"></i> Record Funds</button>
-        </div>
-      </form>
-    </div>
-  </div>
-</div>
-
-<!-- TRANSACTION ACCOUNT — REGISTRATION (seller only; shown the moment they join if not yet registered) -->
-<div class="modal-overlay hidden" id="txRegModal">
-  <div class="modal-box wide">
-    <div class="modal-header">
-      <span><i class="fa-solid fa-shield-halved"></i> Create Your Transaction Account</span>
-      <button type="button" class="icon-btn lang-btn" onclick="openLanguagePicker()" title="Language"><i class="fa-solid fa-globe"></i><span class="lang-code notranslate" translate="no">EN</span></button>
-    </div>
-    <div class="modal-body">
-      <p style="color:var(--text-muted); font-size:0.8rem; margin:0 0 6px;">One last step before you can trade — set up the account that holds your balance, identity verification and withdrawals for this deal.</p>
-      <form id="rgForm" autocomplete="off" novalidate onsubmit="submitTxRegistration(); return false;">
-
-        <div class="form-section"><i class="fa-solid fa-user"></i> Your details</div>
-        <div class="form-grid">
-          <div class="fld span-2" id="fld-fullName">
-            <label class="fld-label" for="rgName">Full legal name <span class="req">*</span></label>
-            <input type="text" id="rgName" class="message-input" autocomplete="off" maxlength="120" placeholder="As it appears on your ID">
-            <div class="fld-hint">This must match the name on the identity document you will verify later.</div>
-            <div class="fld-error-text"></div>
-          </div>
-          <div class="fld" id="fld-country">
-            <label class="fld-label">Country <span class="req">*</span></label>
-            <div id="rgCountry"></div>
-            <div class="fld-error-text"></div>
-          </div>
-          <div class="fld" id="fld-dateOfBirth">
-            <label class="fld-label" for="rgDob">Date of birth <span class="req">*</span></label>
-            <input type="date" id="rgDob" class="message-input" autocomplete="off">
-            <div class="fld-error-text"></div>
-          </div>
-          <div class="fld span-2" id="fld-phone">
-            <label class="fld-label" for="rgPhone">Phone number <span class="req">*</span></label>
-            <div class="input-row">
-              <span class="phone-prefix notranslate" id="rgPhonePrefix" translate="no">+</span>
-              <input type="tel" id="rgPhone" class="message-input" inputmode="tel" autocomplete="off" maxlength="20" placeholder="Phone number">
-            </div>
-            <div class="fld-hint">Choose your country first — the dial code is added for you.</div>
-            <div class="fld-error-text"></div>
-          </div>
-        </div>
-
-        <div class="form-section"><i class="fa-solid fa-envelope-circle-check"></i> Email verification</div>
-        <div class="fld" id="fld-email">
-          <label class="fld-label" for="rgEmail">Email address <span class="req">*</span></label>
-          <div class="input-row">
-            <input type="email" id="rgEmail" class="message-input" autocomplete="off" maxlength="254" placeholder="name@example.com" oninput="rgEmailEdited()">
-            <button type="button" class="ghost-btn" id="rgEmailClear" title="Remove this email" onclick="rgClearEmail()"><i class="fa-solid fa-xmark"></i></button>
-            <button type="button" class="send-btn" id="rgSendBtn" onclick="rgSendCode()"><i class="fa-solid fa-paper-plane"></i> Send code</button>
-          </div>
-          <div class="fld-hint" id="rgEmailPrefillNote" style="display:none;">This address was set for you by the Desk. You can keep it, replace it, or remove it and enter your own.</div>
-          <div class="lock-note"><i class="fa-solid fa-lock"></i><span>This email address will be permanently tied to your Transaction Account and <b>can never be changed</b> once you register. Use an address you own and will always have access to — it receives your withdrawal confirmation codes and security alerts.</span></div>
-          <div class="fld-error-text"></div>
-        </div>
-        <div class="verify-box hidden" id="rgCodeBox" style="margin-top:12px;">
-          <div style="font-size:0.78rem;" id="rgCodeMsg">We sent a 6-digit code to your email.</div>
-          <div class="input-row">
-            <input type="text" id="rgCode" class="message-input code-input" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="••••••" oninput="this.value=this.value.replace(/\D/g,'')">
-            <button type="button" class="send-btn" id="rgVerifyBtn" onclick="rgVerifyCode()"><i class="fa-solid fa-check"></i> Verify</button>
-          </div>
-          <div style="display:flex; justify-content:space-between; font-size:0.72rem; color:var(--text-muted);"><span id="rgCodeErr" style="color:var(--accent-rose); font-weight:700;"></span><button type="button" class="link-btn" id="rgResendBtn" onclick="rgSendCode()" disabled>Resend code</button></div>
-        </div>
-        <div class="verify-box verified hidden" id="rgVerified" style="margin-top:12px;"><span class="verified-tag"><i class="fa-solid fa-circle-check"></i> Email verified</span><span style="font-size:0.74rem; color:var(--text-muted);" id="rgVerifiedAddr" class="notranslate" translate="no"></span></div>
-
-        <div class="form-section"><i class="fa-solid fa-building-columns"></i> Account</div>
-        <div class="form-grid">
-          <div class="fld" id="fld-currency">
-            <label class="fld-label">Account currency <span class="req">*</span></label>
-            <select id="rgCurrency" class="message-input csel"><option value="USD">USD — US Dollar</option><option value="GBP">GBP — British Pound</option><option value="EUR">EUR — Euro</option></select>
-            <div class="fld-hint">Fixed once the account is created.</div>
-            <div class="fld-error-text"></div>
-          </div>
-          <div class="fld" id="fld-accountType">
-            <label class="fld-label">Account type</label>
-            <select id="rgAcctType" class="message-input csel" disabled><option value="Standard account" selected>Standard account</option></select>
-            <div class="fld-hint">You can upgrade to a Business account later.</div>
-          </div>
-          <div class="fld span-2" id="fld-language">
-            <label class="fld-label" for="rgLang">Preferred language</label>
-            <select id="rgLang" class="message-input" onchange="Xlate.setLanguage(this.value)"></select>
-            <div class="fld-hint">The whole portal — including your transaction account — will be shown in this language. You can change it any time from the globe button.</div>
-          </div>
-        </div>
-
-        <div class="form-section"><i class="fa-solid fa-key"></i> Security</div>
-        <div class="form-grid">
-          <div class="fld" id="fld-password">
-            <label class="fld-label" for="rgPw">Password <span class="req">*</span></label>
-            <div class="pw-wrap"><input type="password" id="rgPw" class="message-input" autocomplete="new-password" maxlength="128" oninput="rgPwInput()"><button type="button" class="pw-eye" onclick="togglePw('rgPw', this)" aria-label="Show password"><i class="fa-regular fa-eye"></i></button></div>
-            <div class="pw-meter"><i id="rgPwBar"></i></div>
-            <div class="fld-hint">At least 8 characters, with a letter and a number.</div>
-            <div class="fld-error-text"></div>
-          </div>
-          <div class="fld" id="fld-confirmPassword">
-            <label class="fld-label" for="rgPw2">Confirm password <span class="req">*</span></label>
-            <div class="pw-wrap"><input type="password" id="rgPw2" class="message-input" autocomplete="new-password" maxlength="128" oninput="rgPwInput()"><button type="button" class="pw-eye" onclick="togglePw('rgPw2', this)" aria-label="Show password"><i class="fa-regular fa-eye"></i></button></div>
-            <div class="pw-match" id="rgPwMatch"></div>
-            <div class="fld-error-text"></div>
-          </div>
-        </div>
-
-        <div class="fld" id="fld-acceptTerms" style="margin-top:18px;">
-          <label class="terms-row" for="rgTerms">
-            <input type="checkbox" id="rgTerms" onchange="this.closest('.fld').classList.remove('has-error')">
-            <span class="terms-box"><i class="fa-solid fa-check"></i></span>
-            <span>I have read and agree to the <button type="button" class="link-btn" onclick="event.preventDefault(); event.stopPropagation(); openTerms();">Terms of Service &amp; Escrow Policy</button>, including how funds are received, reviewed and held in escrow, and that my identity must be verified before I can withdraw.</span>
-          </label>
-          <div class="fld-error-text"></div>
-        </div>
-
-        <div class="callout warn" id="rgError" style="margin-top:14px;"></div>
-        <div style="display:flex; justify-content:flex-end; margin-top:18px;">
-          <button type="submit" class="send-btn" id="rgSubmit"><i class="fa-solid fa-user-shield"></i> Create account</button>
-        </div>
-      </form>
-    </div>
-  </div>
-</div>
-
-<!-- AFTER REGISTRATION — what next? -->
-<div class="modal-overlay hidden" id="obChoiceModal">
-  <div class="modal-box">
-    <div class="modal-body">
-      <div class="ob-hero">
-        <div class="ob-check"><i class="fa-solid fa-check"></i></div>
-        <div class="ob-title">Your Transaction Account is ready</div>
-        <div class="ob-sub notranslate" id="obName" translate="no" style="font-weight:700; color:var(--text-main);"></div>
-        <div class="ob-sub">Choose how you would like to continue.</div>
-        <div class="acct-chip"><i class="fa-solid fa-fingerprint"></i> Account ID <b id="obAcctId" class="notranslate" translate="no">—</b></div>
-      </div>
-      <div class="ob-cards">
-        <button type="button" class="ob-card primary" onclick="obChoose('transaction')"><i class="fa-solid fa-comments-dollar"></i><b>Start transaction</b><span>Go to your transaction group to agree the deal with the buyer and the Desk.</span></button>
-        <button type="button" class="ob-card" onclick="obChoose('kyc')"><i class="fa-solid fa-id-card"></i><b>Continue KYC verification</b><span>Verify your identity now, so you can withdraw as soon as your transaction reaches disbursement.</span></button>
-      </div>
-    </div>
-  </div>
-</div>
-
 <!-- TRANSACTION ACCOUNT — FULL DASHBOARD VIEW (seller only) -->
 <div class="tx-view hidden" id="txAccountView">
   <div class="tx-sidebar">
     <div class="tx-sidebar-brand"><div class="tx-sidebar-logo"><i class="fa-solid fa-shield-halved"></i></div> Transaction Account</div>
     <div class="tx-group-card">
-      <div class="tx-group-name notranslate" id="txSideGroupName" translate="no">—</div>
-      <div class="tx-side-country" id="txSideCountry"></div>
-      <span class="acct-type-badge" id="txSideType">Standard account</span>
-      <div id="txSideKycPill" class="tx-status-badge" style="margin-top:10px;">Not submitted</div>
+      <div class="tx-group-name" id="txSideGroupName">—</div>
+      <div class="tx-group-sub" id="txSideGroupSub">Seller</div>
+      <div id="txSideKycPill" class="tx-status-badge">Not submitted</div>
     </div>
     <nav class="tx-nav">
       <button class="tx-nav-item active" data-txnav="dashboard" onclick="setTxAccountNav('dashboard')"><i class="fa-solid fa-table-columns"></i> Dashboard</button>
-      <button class="tx-nav-item" data-txnav="tracking" onclick="setTxAccountNav('tracking')"><i class="fa-solid fa-satellite-dish"></i> Payment tracking <span class="nav-live-dot hidden" id="txTrackDot"></span></button>
       <button class="tx-nav-item" data-txnav="transactions" onclick="setTxAccountNav('transactions')"><i class="fa-solid fa-bars-staggered"></i> Transactions</button>
       <button class="tx-nav-item" data-txnav="withdraw" onclick="setTxAccountNav('withdraw')"><i class="fa-solid fa-arrow-up"></i> Withdraw</button>
       <button class="tx-nav-item" data-txnav="forms" onclick="setTxAccountNav('forms')"><i class="fa-solid fa-file-lines"></i> Forms</button>
       <button class="tx-nav-item" data-txnav="profile" onclick="setTxAccountNav('profile')"><i class="fa-solid fa-user"></i> Profile</button>
-      <button class="tx-nav-item" onclick="openLanguagePicker()"><i class="fa-solid fa-globe"></i> Language <span class="lang-code notranslate" translate="no" style="margin-inline-start:auto; font-size:0.66rem; font-weight:800;">EN</span></button>
     </nav>
-    <button class="tx-nav-item" style="margin-top:auto;" onclick="closeTxAccountView()"><i class="fa-solid fa-comments"></i> Back to chat</button>
-    <button class="tx-nav-item" style="color:var(--accent-rose);" onclick="sellerSignOut()"><i class="fa-solid fa-arrow-right-from-bracket"></i> Sign out</button>
+    <button class="tx-nav-item" style="margin-top:auto; color:var(--accent-rose);" onclick="closeTxAccountView()"><i class="fa-solid fa-arrow-right-from-bracket"></i> Back to chat</button>
   </div>
 
   <div class="tx-main">
@@ -712,39 +458,24 @@
         </div>
       </div>
       <div class="tx-topbar-right">
-        <div class="tx-acct-stack">
-          <div class="tx-currency-pill clickable" onclick="setTxAccountNav('profile')"><i class="fa-solid fa-coins"></i> Account currency: <b id="txCcyLabel">—</b></div>
-          <div class="tx-acctid-pill" id="txAcctIdPill" onclick="copyAccountId()" title="Copy your Account ID"><i class="fa-solid fa-fingerprint"></i> Account ID <b id="txAcctIdLabel" class="notranslate" translate="no">—</b> <i class="fa-regular fa-copy"></i></div>
-        </div>
-        <button class="icon-btn lang-btn" onclick="openLanguagePicker()" title="Language"><i class="fa-solid fa-globe"></i><span class="lang-code notranslate" translate="no">EN</span></button>
-        <button class="icon-btn" id="txBellBtn" onclick="setTxAccountNav('tracking')" title="Payment tracking"><i class="fa-solid fa-bell"></i><span class="badge-dot hidden" id="txBellDot"></span></button>
-        <div class="tx-avatar clickable notranslate" id="txAvatar" translate="no" onclick="setTxAccountNav('profile')">?</div>
+        <div class="tx-currency-pill clickable" onclick="setTxAccountNav('profile')"><i class="fa-solid fa-coins"></i> Account currency: <b id="txCcyLabel">—</b></div>
+        <button class="icon-btn" id="txBellBtn" onclick="setTxAccountNav('transactions')" title="Recent activity"><i class="fa-solid fa-bell"></i><span class="badge-dot hidden" id="txBellDot"></span></button>
+        <div class="tx-avatar clickable" id="txAvatar" onclick="setTxAccountNav('profile')">?</div>
       </div>
     </div>
 
     <div class="tx-scroll">
       <!-- DASHBOARD -->
       <div class="tx-page" id="txPageDashboard">
-        <div class="tx-identity">
-          <div class="tx-id-avatar notranslate" id="txIdAvatar" translate="no">?</div>
-          <div class="tx-id-main">
-            <div class="tx-id-name notranslate" id="txIdName" translate="no">—</div>
-            <div class="tx-id-sub"><span class="acct-type-badge" id="txIdType">Standard account</span><span id="txIdCountry"></span></div>
-          </div>
-          <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end;">
-            <span class="disb-pill off" id="txStagePill"><i class="fa-solid fa-circle"></i> <span>Awaiting disbursement</span></span>
-          </div>
-        </div>
         <div class="tx-kyc-banner hidden" id="txKycBanner">
           <div class="tx-kyc-banner-text"><i class="fa-solid fa-id-card"></i> <span id="txKycBannerText">Verify your identity to unlock withdrawals.</span></div>
           <button class="send-btn tx-kyc-banner-btn" id="txKycBannerBtn" onclick="openTxKycWizard()"><i class="fa-solid fa-upload"></i> Verify Now</button>
         </div>
         <div class="tx-stats-row">
-          <div class="tx-stat-card clickable" onclick="setTxAccountNav('withdraw')"><div class="tx-stat-icon cyan"><i class="fa-solid fa-wallet"></i></div><div class="tx-stat-label">Available Balance</div><div class="tx-stat-value notranslate" id="txAvailableBalance" translate="no">0.00</div></div>
-          <div class="tx-stat-card clickable" onclick="setTxAccountNav('tracking')"><div class="tx-stat-icon amber"><i class="fa-solid fa-lock"></i></div><div class="tx-stat-label">Held in Vault</div><div class="tx-stat-value notranslate" id="txHeldBalance" translate="no">0.00</div><div class="tx-stat-note" id="txHeldNote">Nothing in review</div></div>
-          <div class="tx-stat-card clickable" onclick="setTxAccountNav('withdraw')"><div class="tx-stat-icon violet"><i class="fa-solid fa-hourglass-half"></i></div><div class="tx-stat-label">Pending Withdrawals</div><div class="tx-stat-value notranslate" id="txPendingWd" translate="no">0.00</div><div class="tx-stat-note" id="txPendingWdNote">None in progress</div></div>
-          <div class="tx-stat-card clickable" onclick="openTxDepositModal()"><div class="tx-stat-icon violet"><i class="fa-solid fa-arrow-down"></i></div><div class="tx-stat-label">Total Deposited</div><div class="tx-stat-value notranslate" id="txTotalDeposited" translate="no">0.00</div><div class="tx-stat-note">Tap to record a deposit</div></div>
-          <div class="tx-stat-card clickable" onclick="setTxAccountNav('transactions')"><div class="tx-stat-icon cyan"><i class="fa-solid fa-arrow-up"></i></div><div class="tx-stat-label">Last Withdrawal</div><div class="tx-stat-value notranslate" id="txLastWithdrawal" translate="no" style="font-size:1.05rem;">—</div><div class="tx-stat-note" id="txLastWithdrawalNote">No withdrawals yet</div></div>
+          <div class="tx-stat-card clickable" onclick="setTxAccountNav('withdraw')"><div class="tx-stat-icon cyan"><i class="fa-solid fa-wallet"></i></div><div class="tx-stat-label">Available Balance</div><div class="tx-stat-value" id="txAvailableBalance">0.00</div></div>
+          <div class="tx-stat-card clickable" onclick="setTxAccountNav('transactions')"><div class="tx-stat-icon amber"><i class="fa-solid fa-lock"></i></div><div class="tx-stat-label">Held in Vault</div><div class="tx-stat-value" id="txHeldBalance">0.00</div><div class="tx-stat-note" id="txHeldNote">Nothing in review</div></div>
+          <div class="tx-stat-card clickable" onclick="openTxDepositModal()"><div class="tx-stat-icon violet"><i class="fa-solid fa-arrow-down"></i></div><div class="tx-stat-label">Total Deposited</div><div class="tx-stat-value" id="txTotalDeposited">0.00</div><div class="tx-stat-note">Tap to record a deposit</div></div>
+          <div class="tx-stat-card clickable" onclick="setTxAccountNav('transactions')"><div class="tx-stat-icon cyan"><i class="fa-solid fa-arrow-up"></i></div><div class="tx-stat-label">Last Withdrawal</div><div class="tx-stat-value" id="txLastWithdrawal" style="font-size:1.05rem;">—</div><div class="tx-stat-note" id="txLastWithdrawalNote">No withdrawals yet</div></div>
           <div class="tx-stat-card clickable" id="txIdentityCard" onclick="handleTxIdentityCardClick()"><div class="tx-stat-icon amber"><i class="fa-solid fa-file-circle-question"></i></div><div class="tx-stat-label">Identity Status</div><div id="txKycBadgeSmall" class="tx-status-badge">Not submitted</div><div class="tx-stat-note" id="txIdentityCardHint">Tap to verify</div></div>
         </div>
 
@@ -769,20 +500,8 @@
             <div id="txVerifyIdentityAction" style="margin-top:8px;">
               <button class="admin-btn" style="width:100%; justify-content:center;" onclick="openTxKycWizard()"><i class="fa-solid fa-id-card"></i> Verify Identity</button>
             </div>
-            <div class="tx-verify-row" style="margin-top:14px;">
-              <div><div style="font-weight:700; font-size:0.82rem;">Account type</div><div class="tx-verify-sub" id="txBizNote">Standard account · daily withdrawal limit applies</div></div>
-              <span id="txBizIcon" class="tx-verify-icon"><i class="fa-solid fa-minus"></i></span>
-            </div>
-            <div id="txBizAction" style="margin-top:8px;">
-              <button class="admin-btn" style="width:100%; justify-content:center;" onclick="openBusinessModal()"><i class="fa-solid fa-briefcase"></i> Upgrade to Business account</button>
-            </div>
           </div>
         </div>
-      </div>
-
-      <!-- PAYMENT TRACKING (the live 5-stage escrow review — visible to the seller only) -->
-      <div class="tx-page hidden" id="txPageTracking">
-        <div id="txTrackingList"></div>
       </div>
 
       <!-- TRANSACTIONS (full history) -->
@@ -793,60 +512,60 @@
         </div>
         <div class="tx-panel">
           <div class="tx-panel-head"><span>All deposits &amp; withdrawals</span></div>
-          <div style="overflow-x:auto;">
           <table class="tx-table">
             <thead><tr><th>Date</th><th>Type</th><th>Amount</th><th>Status</th><th>Note</th></tr></thead>
             <tbody id="txFullActivityBody"><tr><td colspan="5" class="tx-empty">No activity yet.</td></tr></tbody>
           </table>
-          </div>
         </div>
       </div>
 
       <!-- WITHDRAW -->
       <div class="tx-page hidden" id="txPageWithdraw">
-        <div class="stage-banner off" id="wdStageBanner"><i class="fa-solid fa-hourglass-half"></i><div id="wdStageText"></div></div>
-        <div class="tx-panel" style="max-width:680px;">
+        <div class="tx-panel" style="max-width:560px;">
           <div class="tx-panel-head"><span>Withdraw funds</span></div>
           <div id="txWithdrawKycLock" class="tx-kyc-banner" style="display:none; margin-bottom:14px;">
             <div class="tx-kyc-banner-text"><i class="fa-solid fa-id-card"></i> <span id="txWithdrawKycLockText">Identity verification required before you can withdraw.</span></div>
             <button class="send-btn tx-kyc-banner-btn" id="txWithdrawKycLockBtn" onclick="openTxKycWizard()"><i class="fa-solid fa-upload"></i> Verify Now</button>
           </div>
-          <form class="create-group-form" id="txWithdrawForm" autocomplete="off" onsubmit="submitTxWithdrawal(); return false;">
+          <div class="create-group-form" id="txWithdrawForm">
             <label class="branding-field">Method
               <select id="txWithdrawMethod" class="message-input csel" style="width:100%;" onchange="toggleTxWithdrawFields()">
                 <option value="crypto">Crypto</option>
                 <option value="bank">Bank Transfer</option>
               </select>
             </label>
-            <div id="txWithdrawCryptoFields" style="display:flex; flex-direction:column; gap:14px;">
-              <div class="form-grid">
-                <label class="branding-field">Asset
-                  <select id="txWdAsset" class="message-input csel" style="width:100%;"><option value="USDT">USDT</option><option value="BTC">BTC</option><option value="ETH">ETH</option></select>
-                </label>
-                <label class="branding-field">Network
-                  <select id="txWdNetwork" class="message-input csel" style="width:100%;"><option value="TRC20">TRC20</option><option value="BEP20">BEP20</option></select>
-                </label>
-              </div>
-              <label class="branding-field">Destination Wallet Address<input type="text" id="txWdDestination" class="message-input" style="width:100%;" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+            <div id="txWithdrawCryptoFields">
+              <label class="branding-field">Asset
+                <select id="txWdAsset" class="message-input csel" style="width:100%;">
+                  <option value="USDT">USDT</option><option value="BTC">BTC</option><option value="ETH">ETH</option>
+                </select>
+              </label>
+              <label class="branding-field">Network
+                <select id="txWdNetwork" class="message-input csel" style="width:100%;">
+                  <option value="TRC20">TRC20</option><option value="BEP20">BEP20</option>
+                </select>
+              </label>
+              <label class="branding-field">Destination Wallet Address<input type="text" id="txWdDestination" class="message-input" style="width:100%;"></label>
             </div>
-            <div id="txWithdrawBankFields" style="display:none; flex-direction:column; gap:14px;">
-              <label class="branding-field">Beneficiary Name<input type="text" id="txWdBeneficiary" class="message-input" style="width:100%;" autocomplete="off"></label>
-              <label class="branding-field">Bank Name<input type="text" id="txWdBankName" class="message-input" style="width:100%;" autocomplete="off"></label>
-              <label class="branding-field">Account Number / IBAN<input type="text" id="txWdBankAccount" class="message-input" style="width:100%;" autocomplete="off" autocapitalize="characters"></label>
-              <label class="branding-field">SWIFT / BIC (optional)<input type="text" id="txWdSwift" class="message-input" style="width:100%;" autocomplete="off" autocapitalize="characters"></label>
-              <div class="fld" id="fld-bankCountry"><label class="fld-label">Bank Country</label><div id="txWdBankCountry"></div></div>
+            <div id="txWithdrawBankFields" style="display:none;">
+              <label class="branding-field">Beneficiary Name<input type="text" id="txWdBeneficiary" class="message-input" style="width:100%;"></label>
+              <label class="branding-field">Bank Name<input type="text" id="txWdBankName" class="message-input" style="width:100%;"></label>
+              <label class="branding-field">Account Number / IBAN<input type="text" id="txWdBankAccount" class="message-input" style="width:100%;"></label>
+              <label class="branding-field">SWIFT / Sort Code (optional)<input type="text" id="txWdSwift" class="message-input" style="width:100%;"></label>
+              <label class="branding-field">Bank Country<select id="txWdBankCountry" class="message-input csel" data-countries="1" data-search="1" style="width:100%;"></select></label>
             </div>
-            <label class="branding-field">Amount<input type="number" id="txWdAmount" class="message-input" style="width:100%;" placeholder="0.00" min="0" step="0.01" autocomplete="off" oninput="wdAmountChanged()"></label>
-            <div class="limit-line" id="wdLimitLine"></div>
-            <div class="callout" id="wdCryptoCallout"></div>
-          </form>
+            <label class="branding-field">Amount<input type="number" id="txWdAmount" class="message-input" style="width:100%;" placeholder="0.00" min="0" step="0.01"></label>
+          </div>
           <div id="txWithdrawSubmitRow" style="display:flex; justify-content:flex-end; margin-top:14px;">
-            <button class="send-btn" id="wdSubmitBtn" onclick="submitTxWithdrawal()"><i class="fa-solid fa-arrow-up"></i> Request withdrawal</button>
+            <button class="send-btn" onclick="submitTxWithdrawal()"><i class="fa-solid fa-arrow-up"></i> Request Withdrawal</button>
           </div>
         </div>
         <div class="tx-panel" style="margin-top:16px;">
-          <div class="tx-panel-head"><span>Your withdrawals</span></div>
-          <div class="wd-list" id="txWithdrawalsList"><p class="ledger-empty">No withdrawals yet.</p></div>
+          <div class="tx-panel-head"><span>Recent withdrawals</span></div>
+          <table class="tx-table">
+            <thead><tr><th>Date</th><th>Amount</th><th>Status</th></tr></thead>
+            <tbody id="txWithdrawalsOnlyBody"><tr><td colspan="3" class="tx-empty">No withdrawals yet.</td></tr></tbody>
+          </table>
         </div>
       </div>
 
@@ -860,21 +579,14 @@
 
       <!-- PROFILE -->
       <div class="tx-page hidden" id="txPageProfile">
-        <div class="tx-panel" style="max-width:560px;">
+        <div class="tx-panel" style="max-width:480px;">
           <div class="tx-panel-head"><span>Account details</span></div>
-          <div class="tx-profile-row"><span>Full name</span><b class="notranslate" id="txProfileName" translate="no">—</b></div>
-          <div class="tx-profile-row"><span>Account ID</span><b class="notranslate" id="txProfileAcctId" translate="no">—</b></div>
-          <div class="tx-profile-row"><span>Account type</span><b id="txProfileType">—</b></div>
-          <div class="tx-profile-row"><span>Email</span><b class="notranslate" id="txProfileEmail" translate="no">—</b></div>
-          <div class="tx-profile-row"><span></span><span style="font-size:0.68rem; color:var(--text-faint); text-align:end;"><i class="fa-solid fa-lock"></i> Tied to your account permanently — it cannot be changed.</span></div>
-          <div class="tx-profile-row"><span>Phone number</span><b class="notranslate" id="txProfilePhone" translate="no">—</b></div>
+          <div class="tx-profile-row"><span>Full name</span><b id="txProfileName">—</b></div>
+          <div class="tx-profile-row"><span>Email</span><b id="txProfileEmail">—</b></div>
           <div class="tx-profile-row"><span>Date of birth</span><b id="txProfileDob">—</b></div>
           <div class="tx-profile-row"><span>Country</span><b id="txProfileCountry">—</b></div>
           <div class="tx-profile-row"><span>Account currency</span><b id="txProfileCurrency">—</b></div>
-          <div class="tx-profile-row"><span>Language</span><b><button type="button" class="link-btn" id="txProfileLang" onclick="openLanguagePicker()">—</button></b></div>
           <div class="tx-profile-row"><span>Identity status</span><b id="txProfileKyc">—</b></div>
-          <div class="tx-profile-row"><span>Registered</span><b id="txProfileRegistered">—</b></div>
-          <div class="tx-profile-row"><span>Terms accepted</span><b id="txProfileTerms">—</b></div>
         </div>
       </div>
     </div>
@@ -886,8 +598,7 @@
   <div class="modal-box">
     <div class="modal-header"><span><i class="fa-solid fa-arrow-down"></i> Record a Deposit</span><i class="fa-solid fa-xmark" onclick="closeModal('txDepositModal')"></i></div>
     <div class="modal-body">
-      <p style="color:var(--text-muted); font-size:0.78rem; margin:0 0 10px; line-height:1.55;">Send crypto from a wallet you control, then record it here. The Desk confirms it on-chain, and the <b>full amount</b> is then added to your available balance &mdash; it is never a fee. A qualifying deposit also unlocks crypto withdrawals on your account, permanently.</p>
-      <div id="txDepositHint" class="callout show warn" style="display:none; margin-bottom:12px;"></div>
+      <p style="color:var(--text-muted); font-size:0.78rem; margin:0 0 14px;">This records that you sent crypto — it is not proof of payment. The Desk Officer confirms it on-chain before it becomes available.</p>
       <div class="create-group-form">
         <label class="branding-field">Asset
           <select id="txDepositAsset" class="message-input csel" style="width:100%;">
@@ -908,257 +619,121 @@
   </div>
 </div>
 
-<!-- TRANSACTION ACCOUNT — KYC WIZARD (seller only) -->
+<!-- TRANSACTION ACCOUNT — KYC STEP-BY-STEP WIZARD (seller only) -->
 <div class="modal-overlay hidden" id="txKycWizardModal">
   <div class="modal-box wide">
-    <div class="modal-header"><span><i class="fa-solid fa-id-card"></i> Verify Your Identity</span><i class="fa-solid fa-xmark" onclick="closeKycWizard()"></i></div>
+    <div class="modal-header"><span><i class="fa-solid fa-id-card"></i> Verify Your Identity</span><i class="fa-solid fa-xmark" onclick="closeModal('txKycWizardModal')"></i></div>
     <div class="modal-body">
-      <div class="tx-wizard-steps" id="kycDots"></div>
-      <div class="tx-wizard-step-count" id="kycCount"></div>
+      <div class="tx-wizard-steps" id="txWizardStepsIndicator"></div>
+      <div class="tx-wizard-step-count" id="txWizardStepCount"></div>
 
-      <div class="kyc-step" data-kstep="type">
-        <div class="tx-wizard-step-head"><div class="tx-wizard-step-icon"><i class="fa-solid fa-id-card"></i></div><div><div class="tx-wizard-title">Choose your ID document</div><p class="tx-wizard-sub">Select the government-issued document you'll upload. You'll be asked for the front — and the back, where applicable.</p></div></div>
-        <div class="tx-doc-grid" id="kycDocGrid">
-          <button type="button" class="tx-doc-card" data-value="passport" onclick="kycPickDoc('passport')"><i class="fa-solid fa-passport"></i><span>Passport</span></button>
-          <button type="button" class="tx-doc-card" data-value="national_id" onclick="kycPickDoc('national_id')"><i class="fa-solid fa-id-card-clip"></i><span>National ID Card</span></button>
-          <button type="button" class="tx-doc-card" data-value="drivers_license" onclick="kycPickDoc('drivers_license')"><i class="fa-solid fa-id-badge"></i><span>Driver's License</span></button>
+      <div class="tx-wizard-step" id="txWizStep0">
+        <div class="tx-wizard-step-head">
+          <div class="tx-wizard-step-icon"><i class="fa-solid fa-id-card"></i></div>
+          <div>
+            <div class="tx-wizard-title">Choose your ID document</div>
+            <p class="tx-wizard-sub">Select the government-issued document you'll upload. You'll be asked for the front — and the back, where applicable.</p>
+          </div>
+        </div>
+        <select id="txKycDocType" class="csel-native-hidden">
+          <option value="passport">Passport</option>
+          <option value="national_id">National ID Card</option>
+          <option value="drivers_license">Driver's License</option>
+        </select>
+        <div class="tx-doc-grid" id="txDocTypeGrid">
+          <button type="button" class="tx-doc-card" data-value="passport" onclick="selectTxKycDocType('passport')"><i class="fa-solid fa-passport"></i><span>Passport</span></button>
+          <button type="button" class="tx-doc-card" data-value="national_id" onclick="selectTxKycDocType('national_id')"><i class="fa-solid fa-id-card-clip"></i><span>National ID Card</span></button>
+          <button type="button" class="tx-doc-card" data-value="drivers_license" onclick="selectTxKycDocType('drivers_license')"><i class="fa-solid fa-id-badge"></i><span>Driver's License</span></button>
         </div>
       </div>
 
-      <div class="kyc-step" data-kstep="details">
-        <div class="tx-wizard-step-head"><div class="tx-wizard-step-icon"><i class="fa-solid fa-keyboard"></i></div><div><div class="tx-wizard-title">Details on your document</div><p class="tx-wizard-sub">Type them exactly as printed. We check them against your account and the photo you upload. Expired documents are not accepted.</p></div></div>
-        <div class="form-grid">
-          <div class="fld span-2" id="kfld-idName"><label class="fld-label" for="kycIdName">Full name on the document</label><input type="text" id="kycIdName" class="message-input" autocomplete="off"><div class="fld-error-text"></div></div>
-          <div class="fld" id="kfld-idNumber"><label class="fld-label" for="kycIdNumber" id="kycIdNumberLabel">Document number</label><input type="text" id="kycIdNumber" class="message-input" autocomplete="off" autocapitalize="characters"><div class="fld-error-text"></div></div>
-          <div class="fld" id="kfld-idCountry"><label class="fld-label">Issuing country</label><div id="kycCountry"></div><div class="fld-error-text"></div></div>
-          <div class="fld" id="kfld-idDob"><label class="fld-label" for="kycIdDob">Date of birth</label><input type="date" id="kycIdDob" class="message-input"><div class="fld-error-text"></div></div>
-          <div class="fld" id="kfld-idExpiry"><label class="fld-label" for="kycIdExpiry">Expiry date</label><input type="date" id="kycIdExpiry" class="message-input"><div class="fld-error-text"></div></div>
+      <div class="tx-wizard-step hidden" id="txWizStep1">
+        <div class="tx-wizard-step-head">
+          <div class="tx-wizard-step-icon"><i class="fa-solid fa-id-card"></i></div>
+          <div><div class="tx-wizard-title" id="txWizStep1Title">ID — Front</div><p class="tx-wizard-sub">The front side, fully visible, with all four corners in frame.</p></div>
         </div>
+        <label class="tx-upload-zone" for="txKycIdFront" id="txKycIdFrontZone">
+          <img class="tx-upload-preview hidden" id="txKycIdFrontPreview" alt="">
+          <i class="fa-solid fa-cloud-arrow-up tx-upload-icon"></i>
+          <span class="tx-upload-title">Tap to upload</span>
+          <span class="tx-upload-hint" id="txKycIdFrontName">JPG, PNG or PDF · up to 15MB</span>
+        </label>
+        <input type="file" id="txKycIdFront" accept="image/*,.pdf" class="tx-file-hidden" onchange="handleTxKycFileChosen(this,'idFront')">
+        <div class="tx-wizard-status" id="txWizStep1Status"></div>
+      </div>
+      <div class="tx-wizard-step hidden" id="txWizStep2">
+        <div class="tx-wizard-step-head">
+          <div class="tx-wizard-step-icon"><i class="fa-solid fa-id-card"></i></div>
+          <div><div class="tx-wizard-title">ID — Back</div><p class="tx-wizard-sub">The reverse side, fully visible.</p></div>
+        </div>
+        <label class="tx-upload-zone" for="txKycIdBack" id="txKycIdBackZone">
+          <img class="tx-upload-preview hidden" id="txKycIdBackPreview" alt="">
+          <i class="fa-solid fa-cloud-arrow-up tx-upload-icon"></i>
+          <span class="tx-upload-title">Tap to upload</span>
+          <span class="tx-upload-hint" id="txKycIdBackName">JPG, PNG or PDF · up to 15MB</span>
+        </label>
+        <input type="file" id="txKycIdBack" accept="image/*,.pdf" class="tx-file-hidden" onchange="handleTxKycFileChosen(this,'idBack')">
+        <div class="tx-wizard-status" id="txWizStep2Status"></div>
       </div>
 
-      <div class="kyc-step" data-kstep="idFront">
-        <div class="tx-wizard-step-head"><div class="tx-wizard-step-icon"><i class="fa-solid fa-id-card"></i></div><div><div class="tx-wizard-title" id="kycFrontTitle">ID — Front</div><p class="tx-wizard-sub">The front side, fully visible, in focus, with all four corners in frame.</p></div></div>
-        <label class="tx-upload-zone" for="kycFile_idFront" id="kycZone_idFront"><img class="tx-upload-preview hidden" id="kycPrev_idFront" alt=""><i class="fa-solid fa-cloud-arrow-up tx-upload-icon"></i><span class="tx-upload-title">Tap to upload</span><span class="tx-upload-hint" id="kycName_idFront">JPG, PNG or PDF · up to 15MB</span></label>
-        <input type="file" id="kycFile_idFront" accept="image/*,.pdf" class="tx-file-hidden" onchange="kycFileChosen(this,'idFront')">
-        <div class="tx-wizard-status" id="kycStatus_idFront"></div>
-      </div>
-
-      <div class="kyc-step" data-kstep="idBack">
-        <div class="tx-wizard-step-head"><div class="tx-wizard-step-icon"><i class="fa-solid fa-id-card"></i></div><div><div class="tx-wizard-title">ID — Back</div><p class="tx-wizard-sub">The reverse side, fully visible and in focus.</p></div></div>
-        <label class="tx-upload-zone" for="kycFile_idBack" id="kycZone_idBack"><img class="tx-upload-preview hidden" id="kycPrev_idBack" alt=""><i class="fa-solid fa-cloud-arrow-up tx-upload-icon"></i><span class="tx-upload-title">Tap to upload</span><span class="tx-upload-hint" id="kycName_idBack">JPG, PNG or PDF · up to 15MB</span></label>
-        <input type="file" id="kycFile_idBack" accept="image/*,.pdf" class="tx-file-hidden" onchange="kycFileChosen(this,'idBack')">
-        <div class="tx-wizard-status" id="kycStatus_idBack"></div>
-      </div>
-
-      <div class="kyc-step" data-kstep="proof">
-        <div class="tx-wizard-step-head"><div class="tx-wizard-step-icon"><i class="fa-solid fa-house-chimney"></i></div><div><div class="tx-wizard-title">Proof of Address</div><p class="tx-wizard-sub">Select the document type, then upload it.</p></div></div>
-        <div class="tx-doc-grid narrow" id="kycProofGrid">
-          <button type="button" class="tx-doc-card" data-value="bank_statement" onclick="kycPickProof('bank_statement')"><i class="fa-solid fa-building-columns"></i><span>Bank Statement</span></button>
-          <button type="button" class="tx-doc-card" data-value="utility_bill" onclick="kycPickProof('utility_bill')"><i class="fa-solid fa-droplet"></i><span>Utility Bill</span></button>
-          <button type="button" class="tx-doc-card" data-value="electricity_bill" onclick="kycPickProof('electricity_bill')"><i class="fa-solid fa-bolt"></i><span>Electricity Bill</span></button>
-          <button type="button" class="tx-doc-card" data-value="council_tax" onclick="kycPickProof('council_tax')"><i class="fa-solid fa-landmark"></i><span>Council Tax Bill</span></button>
-          <button type="button" class="tx-doc-card" data-value="other" onclick="kycPickProof('other')"><i class="fa-solid fa-file-lines"></i><span>Other</span></button>
+      <div class="tx-wizard-step hidden" id="txWizStep3">
+        <div class="tx-wizard-step-head">
+          <div class="tx-wizard-step-icon"><i class="fa-solid fa-house-chimney"></i></div>
+          <div><div class="tx-wizard-title">Proof of Address</div><p class="tx-wizard-sub">Select the document type, then upload it.</p></div>
+        </div>
+        <select id="txKycProofAddressType" class="csel-native-hidden">
+          <option value="bank_statement">Bank Statement</option>
+          <option value="utility_bill">Utility Bill</option>
+          <option value="electricity_bill">Electricity Bill</option>
+          <option value="council_tax">Council Tax / Local Tax Bill</option>
+          <option value="other">Other Official Document</option>
+        </select>
+        <div class="tx-doc-grid narrow" id="txProofAddressTypeGrid">
+          <button type="button" class="tx-doc-card" data-value="bank_statement" onclick="selectTxKycProofAddressType('bank_statement')"><i class="fa-solid fa-building-columns"></i><span>Bank Statement</span></button>
+          <button type="button" class="tx-doc-card" data-value="utility_bill" onclick="selectTxKycProofAddressType('utility_bill')"><i class="fa-solid fa-droplet"></i><span>Utility Bill</span></button>
+          <button type="button" class="tx-doc-card" data-value="electricity_bill" onclick="selectTxKycProofAddressType('electricity_bill')"><i class="fa-solid fa-bolt"></i><span>Electricity Bill</span></button>
+          <button type="button" class="tx-doc-card" data-value="council_tax" onclick="selectTxKycProofAddressType('council_tax')"><i class="fa-solid fa-landmark"></i><span>Council Tax Bill</span></button>
+          <button type="button" class="tx-doc-card" data-value="other" onclick="selectTxKycProofAddressType('other')"><i class="fa-solid fa-file-lines"></i><span>Other</span></button>
         </div>
         <p class="tx-doc-note"><i class="fa-solid fa-circle-info"></i>Must be dated within the last 3 months and clearly show your full name and address.</p>
-        <label class="tx-upload-zone" for="kycFile_proof" id="kycZone_proof" style="margin-top:14px;"><img class="tx-upload-preview hidden" id="kycPrev_proof" alt=""><i class="fa-solid fa-cloud-arrow-up tx-upload-icon"></i><span class="tx-upload-title">Tap to upload</span><span class="tx-upload-hint" id="kycName_proof">JPG, PNG or PDF · up to 15MB</span></label>
-        <input type="file" id="kycFile_proof" accept="image/*,.pdf" class="tx-file-hidden" onchange="kycFileChosen(this,'proof')">
-        <div class="tx-wizard-status" id="kycStatus_proof"></div>
+        <label class="tx-upload-zone" for="txKycProofAddress" id="txKycProofAddressZone" style="margin-top:14px;">
+          <img class="tx-upload-preview hidden" id="txKycProofAddressPreview" alt="">
+          <i class="fa-solid fa-cloud-arrow-up tx-upload-icon"></i>
+          <span class="tx-upload-title">Tap to upload</span>
+          <span class="tx-upload-hint" id="txKycProofAddressName">JPG, PNG or PDF · up to 15MB</span>
+        </label>
+        <input type="file" id="txKycProofAddress" accept="image/*,.pdf" class="tx-file-hidden" onchange="handleTxKycFileChosen(this,'proofAddress')">
+        <div class="tx-wizard-status" id="txWizStep3Status"></div>
       </div>
 
-      <div class="kyc-step" data-kstep="selfie">
-        <div class="tx-wizard-step-head"><div class="tx-wizard-step-icon"><i class="fa-solid fa-face-smile"></i></div><div><div class="tx-wizard-title">Face verification</div><p class="tx-wizard-sub">Look straight at the camera and keep your face inside the oval. Good light, no sunglasses, hat or mask. This must be a live photo.</p></div></div>
-        <div class="kyc-cam" id="kycCam">
-          <video id="kycVideo" autoplay playsinline muted></video>
-          <img id="kycShot" class="shot hidden" alt="">
-          <div class="kyc-oval" id="kycOval"></div>
-          <div class="kyc-cam-status" id="kycCamStatus">Starting camera…</div>
+      <div class="tx-wizard-step hidden" id="txWizStep4">
+        <div class="tx-wizard-step-head">
+          <div class="tx-wizard-step-icon"><i class="fa-solid fa-camera-retro"></i></div>
+          <div><div class="tx-wizard-title">Selfie</div><p class="tx-wizard-sub">A clear photo of your face, taken just now — good lighting, no sunglasses or hat.</p></div>
         </div>
-        <div style="text-align:center; margin-top:12px;"><span class="face-badge wait" id="kycFaceBadge"><i class="fa-solid fa-face-smile"></i> <span>Waiting for your face</span></span></div>
-        <div style="display:flex; gap:10px; justify-content:center; margin-top:12px; flex-wrap:wrap;">
-          <button type="button" class="send-btn" id="kycCaptureBtn" onclick="kycCapture()"><i class="fa-solid fa-camera"></i> <span>Take photo</span></button>
-          <button type="button" class="ghost-btn" id="kycRetakeBtn" onclick="kycRetake()" style="display:none;"><i class="fa-solid fa-rotate-left"></i> Retake</button>
-        </div>
-        <div class="tx-wizard-status" id="kycStatus_selfie" style="text-align:center;"></div>
-        <div class="callout warn" id="kycCamError" style="margin-top:12px;"></div>
+        <label class="tx-upload-zone" for="txKycSelfie" id="txKycSelfieZone">
+          <img class="tx-upload-preview hidden" id="txKycSelfiePreview" alt="">
+          <i class="fa-solid fa-cloud-arrow-up tx-upload-icon"></i>
+          <span class="tx-upload-title">Tap to upload</span>
+          <span class="tx-upload-hint" id="txKycSelfieName">Opens your camera · JPG or PNG</span>
+        </label>
+        <input type="file" id="txKycSelfie" accept="image/*" capture="user" class="tx-file-hidden" onchange="handleTxKycFileChosen(this,'selfie')">
+        <div class="tx-wizard-status" id="txWizStep4Status"></div>
       </div>
 
-      <div class="kyc-step" data-kstep="review">
-        <div class="tx-wizard-step-head"><div class="tx-wizard-step-icon"><i class="fa-solid fa-circle-check"></i></div><div><div class="tx-wizard-title">Review &amp; submit</div><p class="tx-wizard-sub">Everything's ready. Valid, clear documents are checked automatically and sent straight to our compliance team.</p></div></div>
-        <div id="kycSummary" style="font-size:0.8rem; color:var(--text-muted); line-height:1.8;"></div>
-        <div id="kycResult" style="margin-top:14px;"></div>
+      <div class="tx-wizard-step hidden" id="txWizStep5">
+        <div class="tx-wizard-step-head">
+          <div class="tx-wizard-step-icon"><i class="fa-solid fa-circle-check"></i></div>
+          <div><div class="tx-wizard-title">Review &amp; submit</div><p class="tx-wizard-sub">Everything's uploaded — ready to send for review.</p></div>
+        </div>
+        <div id="txWizSummary" style="font-size:0.8rem; color:var(--text-muted); line-height:1.7;"></div>
       </div>
 
       <div style="display:flex; justify-content:space-between; margin-top:18px;">
-        <button class="ghost-btn" id="kycBackBtn" onclick="kycBack()">Back</button>
-        <button class="send-btn" id="kycNextBtn" onclick="kycNext()">Continue</button>
+        <button class="ghost-btn" id="txWizBackBtn" onclick="txKycWizardBack()">Back</button>
+        <button class="send-btn" id="txWizNextBtn" onclick="txKycWizardNext()">Continue</button>
       </div>
     </div>
-  </div>
-</div>
-
-<!-- BUSINESS ACCOUNT UPGRADE (unlimited withdrawals) -->
-<div class="modal-overlay hidden" id="bizModal">
-  <div class="modal-box wide">
-    <div class="modal-header"><span><i class="fa-solid fa-briefcase"></i> Upgrade to a Business account</span><i class="fa-solid fa-xmark" onclick="closeModal('bizModal')"></i></div>
-    <div class="modal-body">
-      <p style="color:var(--text-muted); font-size:0.8rem; margin:0 0 6px;">Business accounts have <b>no daily withdrawal limit</b>. Tell us about your company — our compliance team reviews every application, usually within one business day.</p>
-      <form id="bizForm" autocomplete="off" onsubmit="submitBusiness(); return false;" novalidate>
-        <div class="form-section">Company</div>
-        <div class="form-grid">
-          <div class="fld span-2"><label class="fld-label" for="bzName">Registered company name <span class="req">*</span></label><input id="bzName" class="message-input" maxlength="200" autocomplete="off"></div>
-          <div class="fld"><label class="fld-label" for="bzTrading">Trading name (if different)</label><input id="bzTrading" class="message-input" maxlength="200" autocomplete="off"></div>
-          <div class="fld"><label class="fld-label" for="bzType">Business type <span class="req">*</span></label>
-            <select id="bzType" class="message-input"><option value="">Select…</option><option>Limited company</option><option>Corporation</option><option>Partnership</option><option>Sole proprietorship</option><option>Non-profit</option><option>Other</option></select></div>
-          <div class="fld"><label class="fld-label" for="bzReg">Company registration number <span class="req">*</span></label><input id="bzReg" class="message-input" maxlength="60" autocomplete="off" autocapitalize="characters"></div>
-          <div class="fld"><label class="fld-label" for="bzTax">Tax identification number <span class="req">*</span></label><input id="bzTax" class="message-input" maxlength="60" autocomplete="off" autocapitalize="characters"></div>
-          <div class="fld"><label class="fld-label">Country of incorporation <span class="req">*</span></label><div id="bzCountry"></div></div>
-          <div class="fld"><label class="fld-label" for="bzDate">Date of incorporation <span class="req">*</span></label><input type="date" id="bzDate" class="message-input"></div>
-          <div class="fld"><label class="fld-label" for="bzIndustry">Industry</label><input id="bzIndustry" class="message-input" maxlength="120" autocomplete="off"></div>
-          <div class="fld"><label class="fld-label" for="bzWebsite">Website</label><input id="bzWebsite" class="message-input" maxlength="200" placeholder="https://" autocomplete="off"></div>
-          <div class="fld span-2"><label class="fld-label" for="bzAddress">Registered business address <span class="req">*</span></label><input id="bzAddress" class="message-input" maxlength="300" autocomplete="off"></div>
-        </div>
-        <div class="form-section">Authorised contact &amp; ownership</div>
-        <div class="form-grid">
-          <div class="fld"><label class="fld-label" for="bzContact">Authorised contact — full name <span class="req">*</span></label><input id="bzContact" class="message-input" maxlength="120" autocomplete="off"></div>
-          <div class="fld"><label class="fld-label" for="bzRole">Role / position</label><input id="bzRole" class="message-input" maxlength="120" autocomplete="off"></div>
-          <div class="fld"><label class="fld-label" for="bzUbo">Ultimate beneficial owner <span class="req">*</span></label><input id="bzUbo" class="message-input" maxlength="200" autocomplete="off"></div>
-          <div class="fld"><label class="fld-label" for="bzUboPct">Ownership % <span class="req">*</span></label><input type="number" id="bzUboPct" class="message-input" min="1" max="100" step="0.01"></div>
-        </div>
-        <div class="form-section">Funds</div>
-        <div class="form-grid">
-          <div class="fld"><label class="fld-label" for="bzVolume">Expected monthly volume</label>
-            <select id="bzVolume" class="message-input"><option value="">Select…</option><option>Under 100,000</option><option>100,000 – 1,000,000</option><option>1,000,000 – 10,000,000</option><option>Over 10,000,000</option></select></div>
-          <div class="fld span-2"><label class="fld-label" for="bzSource">Source of funds <span class="req">*</span></label><textarea id="bzSource" class="message-input" rows="2" maxlength="400" style="resize:vertical;"></textarea></div>
-        </div>
-        <div class="form-section">Documents</div>
-        <div class="form-grid">
-          <div class="fld"><label class="fld-label">Certificate of incorporation <span class="req">*</span></label><input type="file" id="bzFileReg" accept="image/*,.pdf" onchange="bizUpload(this,'registrationDocUrl')"><div class="fld-hint" id="bzStatReg"></div></div>
-          <div class="fld"><label class="fld-label">Tax registration document <span class="req">*</span></label><input type="file" id="bzFileTax" accept="image/*,.pdf" onchange="bizUpload(this,'taxDocUrl')"><div class="fld-hint" id="bzStatTax"></div></div>
-          <div class="fld span-2"><label class="fld-label">Proof of business address (optional)</label><input type="file" id="bzFileAddr" accept="image/*,.pdf" onchange="bizUpload(this,'addressDocUrl')"><div class="fld-hint" id="bzStatAddr"></div></div>
-        </div>
-        <div class="callout warn" id="bizError" style="margin-top:14px;"></div>
-        <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:16px;">
-          <button type="button" class="ghost-btn" onclick="closeModal('bizModal')">Cancel</button>
-          <button type="submit" class="send-btn" id="bizSubmitBtn"><i class="fa-solid fa-paper-plane"></i> Submit application</button>
-        </div>
-      </form>
-    </div>
-  </div>
-</div>
-
-<!-- WITHDRAWAL — EMAIL CODE CONFIRMATION -->
-<div class="modal-overlay hidden" id="wdCodeModal">
-  <div class="modal-box">
-    <div class="modal-header"><span><i class="fa-solid fa-envelope-circle-check"></i> Confirm your withdrawal</span><i class="fa-solid fa-xmark" onclick="closeModal('wdCodeModal')"></i></div>
-    <div class="modal-body">
-      <div class="pop-icon info"><i class="fa-solid fa-shield-halved"></i></div>
-      <div class="pop-body" id="wdCodeMsg">We emailed a 6-digit confirmation code. Enter it to authorise this withdrawal.</div>
-      <div class="pop-facts" id="wdCodeFacts"></div>
-      <input type="text" id="wdCodeInput" class="message-input code-input" style="width:100%; box-sizing:border-box; margin-top:16px;" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="••••••" oninput="this.value=this.value.replace(/\D/g,'')" onkeydown="if(event.key==='Enter') wdConfirmCode()">
-      <div id="wdCodeErr" style="color:var(--accent-rose); font-weight:700; font-size:0.76rem; min-height:1.2em; margin-top:6px; text-align:center;"></div>
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-top:10px;">
-        <button type="button" class="link-btn" id="wdResendBtn" onclick="wdResendCode()" disabled>Resend code</button>
-        <div style="display:flex; gap:10px;"><button class="ghost-btn" onclick="closeModal('wdCodeModal')">Cancel</button><button class="send-btn" id="wdConfirmBtn" onclick="wdConfirmCode()"><i class="fa-solid fa-check"></i> Confirm</button></div>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- GENERIC POPUP (disbursement gate, daily limit, crypto requirement, …) -->
-<div class="modal-overlay hidden" id="popupModal" style="z-index:3100">
-  <div class="modal-box" style="max-width:460px;">
-    <div class="modal-body" style="position:relative;">
-      <i class="fa-solid fa-xmark" id="popupClose" onclick="closePopup()" style="position:absolute; top:12px; inset-inline-end:14px; cursor:pointer; color:var(--text-muted);"></i>
-      <div id="popupBody"></div>
-    </div>
-  </div>
-</div>
-
-<!-- TERMS VIEWER -->
-<div class="modal-overlay hidden" id="termsModal" style="z-index:260;">
-  <div class="modal-box wide">
-    <div class="modal-header"><span><i class="fa-solid fa-file-contract"></i> Terms of Service &amp; Escrow Policy</span><i class="fa-solid fa-xmark" onclick="closeModal('termsModal')"></i></div>
-    <div class="modal-body">
-      <div class="terms-viewer" id="termsViewer"></div>
-      <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:14px;">
-        <button class="ghost-btn" onclick="closeModal('termsModal')">Close</button>
-        <button class="send-btn" onclick="acceptTermsFromViewer()"><i class="fa-solid fa-check"></i> I agree</button>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- LANGUAGE PICKER -->
-<div class="modal-overlay hidden" id="langModal" style="z-index:270;">
-  <div class="modal-box wide">
-    <div class="modal-header"><span><i class="fa-solid fa-globe"></i> Choose your language</span><i class="fa-solid fa-xmark" onclick="closeModal('langModal')"></i></div>
-    <div class="modal-body">
-      <input type="text" id="langSearch" class="message-input lang-search" placeholder="Search languages…" oninput="renderLanguageList(this.value)" autocomplete="off">
-      <div class="lang-list" id="langList"></div>
-    </div>
-  </div>
-</div>
-
-<!-- SELLER SIGN-IN / FORGOT PASSWORD (a registered Transaction Account opens only with email + password) -->
-<div class="modal-overlay hidden" id="sellerLoginModal" style="z-index:3200">
-  <div class="modal-box" style="max-width:440px;">
-    <div class="modal-header"><span><i class="fa-solid fa-lock"></i> <span id="slTitle">Sign in to your Transaction Account</span></span></div>
-    <div class="modal-body">
-      <div id="slViewLogin">
-        <p class="fld-hint" style="margin:0 0 12px;">Your account holds your balance and payouts, so it is protected. Sign in with the email and password you created when you registered.</p>
-        <div class="fld"><label class="fld-label" for="slEmail">Email address</label><input type="email" id="slEmail" class="message-input" autocomplete="username" maxlength="254"></div>
-        <div class="fld"><label class="fld-label" for="slPw">Password</label>
-          <div class="pw-wrap"><input type="password" id="slPw" class="message-input" autocomplete="current-password" maxlength="128" onkeydown="if(event.key==='Enter') slLogin()"><button type="button" class="pw-eye" onclick="togglePw('slPw', this)" aria-label="Show password"><i class="fa-regular fa-eye"></i></button></div></div>
-        <div class="callout warn" id="slError"></div>
-        <button class="send-btn" id="slLoginBtn" style="width:100%; justify-content:center; margin-top:12px;" onclick="slLogin()"><i class="fa-solid fa-right-to-bracket"></i> Sign in</button>
-        <div style="text-align:center; margin-top:12px;"><button type="button" class="link-btn" onclick="slShow('forgot1')">Forgot your password?</button></div>
-      </div>
-      <div id="slViewForgot1" class="hidden">
-        <p class="fld-hint" style="margin:0 0 12px;">Enter the email address on your account. We will email you a 6-digit code to set a new password.</p>
-        <div class="fld"><label class="fld-label" for="slFEmail">Email address</label><input type="email" id="slFEmail" class="message-input" autocomplete="username" maxlength="254" onkeydown="if(event.key==='Enter') slForgotRequest()"></div>
-        <div class="callout warn" id="slError1"></div>
-        <button class="send-btn" id="slF1Btn" style="width:100%; justify-content:center; margin-top:12px;" onclick="slForgotRequest()"><i class="fa-solid fa-paper-plane"></i> Email me a code</button>
-        <div style="text-align:center; margin-top:12px;"><button type="button" class="link-btn" onclick="slShow('login')">Back to sign in</button></div>
-      </div>
-      <div id="slViewForgot2" class="hidden">
-        <p class="fld-hint" style="margin:0 0 12px;" id="slF2Msg">If an account exists for that address, a code is on its way. Check your spam folder too.</p>
-        <div class="fld"><label class="fld-label" for="slCode">6-digit code</label><input type="text" id="slCode" class="message-input code-input" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="••••••" oninput="this.value=this.value.replace(/\D/g,'')" onkeydown="if(event.key==='Enter') slForgotVerify()"></div>
-        <div class="callout warn" id="slError2"></div>
-        <button class="send-btn" id="slF2Btn" style="width:100%; justify-content:center; margin-top:12px;" onclick="slForgotVerify()"><i class="fa-solid fa-check"></i> Verify code</button>
-        <div style="text-align:center; margin-top:12px; display:flex; justify-content:center; gap:16px;"><button type="button" class="link-btn" onclick="slForgotRequest(true)">Resend code</button><button type="button" class="link-btn" onclick="slShow('login')">Back to sign in</button></div>
-      </div>
-      <div id="slViewForgot3" class="hidden">
-        <p class="fld-hint" style="margin:0 0 12px;">Choose a new password. At least 8 characters, with a letter and a number. Every device will be signed out.</p>
-        <div class="fld"><label class="fld-label" for="slNewPw">New password</label>
-          <div class="pw-wrap"><input type="password" id="slNewPw" class="message-input" autocomplete="new-password" maxlength="128"><button type="button" class="pw-eye" onclick="togglePw('slNewPw', this)" aria-label="Show password"><i class="fa-regular fa-eye"></i></button></div></div>
-        <div class="fld"><label class="fld-label" for="slNewPw2">Confirm new password</label>
-          <div class="pw-wrap"><input type="password" id="slNewPw2" class="message-input" autocomplete="new-password" maxlength="128" onkeydown="if(event.key==='Enter') slForgotReset()"><button type="button" class="pw-eye" onclick="togglePw('slNewPw2', this)" aria-label="Show password"><i class="fa-regular fa-eye"></i></button></div></div>
-        <div class="callout warn" id="slError3"></div>
-        <button class="send-btn" id="slF3Btn" style="width:100%; justify-content:center; margin-top:12px;" onclick="slForgotReset()"><i class="fa-solid fa-key"></i> Save new password</button>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- SELLER ACCOUNT DISABLED -->
-<div class="lock-overlay hidden" id="disabledOverlay">
-  <div class="lock-card">
-    <div class="pop-icon bad"><i class="fa-solid fa-user-lock"></i></div>
-    <div class="pop-title">Your account has been disabled</div>
-    <div class="pop-body">Access to your Transaction Account and this transaction group has been suspended by the Desk. If you believe this is a mistake, or you wish to make a complaint, please contact us by email.</div>
-    <div class="lock-reason hidden" id="disabledReason"></div>
-    <a class="mail-btn" id="disabledMail" href="mailto:complaints@usvistra.com"><i class="fa-solid fa-envelope"></i> <span class="notranslate" translate="no" id="disabledMailText">complaints@usvistra.com</span></a>
-    <div class="pop-body" style="margin-top:14px; font-size:0.72rem;">Please quote your Account ID: <b class="notranslate" translate="no" id="disabledAcct">—</b></div>
-  </div>
-</div>
-
-<!-- ACCESS BLOCKED FROM THIS NETWORK (IP) -->
-<div class="lock-overlay hidden" id="ipBlockOverlay">
-  <div class="lock-card">
-    <div class="pop-icon bad"><i class="fa-solid fa-ban"></i></div>
-    <div class="pop-title">Access blocked from this network</div>
-    <div class="pop-body">For security reasons, access to this account is not permitted from your current network address. If you think this is a mistake, please contact us.</div>
-    <a class="mail-btn" id="ipBlockMail" href="mailto:complaints@usvistra.com"><i class="fa-solid fa-envelope"></i> <span class="notranslate" translate="no" id="ipBlockMailText">complaints@usvistra.com</span></a>
   </div>
 </div>
 
@@ -1282,14 +857,10 @@
 
 <div class="toast-container" id="toastContainer"></div>
 
-<script src="/i18n.js"></script>
 <script src="/countries.js"></script>
 <script src="/languages.js"></script>
-<script src="/legal.js"></script>
+<script src="/i18n.js"></script>
 <script src="/app.js"></script>
-<script src="/ui31.js"></script>
-<script src="/xlate.js"></script>
-<script src="/seller31.js"></script>
-<script src="/admin31.js"></script>
+<script src="/v4.js"></script>
 </body>
 </html>

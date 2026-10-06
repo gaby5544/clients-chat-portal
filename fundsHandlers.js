@@ -1,122 +1,70 @@
 // Money movement for the seller Transaction Account — everything an admin does
 // to a seller's funds lives here:
-//   * record incoming funds (who paid, what for, how much). By default a payment
-//     starts the 5-stage ESCROW REVIEW: it sits in the vault (balance_held) and is
-//     released to the seller's available balance only when the review finishes.
-//   * run that review (server-side timers, manual approvals, pause/skip/restart)
-//   * move a withdrawal through its four stages: Pending, Processing, Completed
-//     or Declined
+//   * record incoming funds (who paid, what for, how much), run each held payment
+//     through the 5-stage escrow review (escrow.js), release / reverse it
+//   * move a withdrawal through its four stages: pending -> processing -> completed,
+//     or declined (with a reason) — the admin may pick any stage
 //   * the read-only "Funds Desk" queries that let an admin open ANY seller's account
 //
-// Only ADMIN / SUPER_ADMIN may do any of this (Moderators cannot), and every
-// change is pushed live to the seller's own private room and to the
-// 'finance-admins' room — never to the Buyer or a Moderator.
+// Only ADMIN / SUPER_ADMIN may do any of this (Moderators cannot), and every change
+// is pushed live to the seller's own private room and to the 'finance-admins' room —
+// never to the Buyer or a Moderator. (A Desk note the admin chooses to release to the
+// buyer is the one deliberate exception, delivered as a buyer-only chat message.)
 
 const { store } = require('./db');
-const { sanitizeText, isValidEmail, RateLimiter, normalizePhone } = require('./security');
+const { sanitizeText, escapeHtml, isValidEmail, RateLimiter } = require('./security');
 const F = require('./finance');
-const ER = require('./escrowReview');
-const POL = require('./policy');
-const CD = require('./public/countries');
-const { translateOne } = require('./translate');
+const Escrow = require('./escrow');
 const { sendPushToUser } = require('./webpush');
-const E = require('./email');
-const { postSystemMessage } = require('./chatShape');
-const { ensureAccountId } = require('./accounts');
+const { notifyIncomingFunds, notifyWithdrawalStatus, notifyDeskNote } = require('./email');
+const N = require('./notifyService');
 
 const financeLimiter = new RateLimiter({ windowMs: 60000, max: 60 });
 setInterval(() => financeLimiter.sweep(), 60000).unref();
 
 const METHODS = new Set(['bank_transfer', 'wire', 'crypto', 'card', 'cheque', 'cash', 'other']);
-const PAYER_TYPES = new Set(['individual', 'company']);
 const MAX_AMOUNT = 999999999.99;
 
-// Four admin-selectable withdrawal stages. Completed and Declined are final.
-const WITHDRAWAL_TRANSITIONS = {
-  pending: ['processing', 'declined', 'completed'],
-  processing: ['pending', 'declined', 'completed']
-};
-const WD_LABEL = F.WD_LABEL;
-const WD_DEFAULT_NOTE = {
-  pending: 'Request received — awaiting review',
-  processing: 'Approved — payout in progress',
-  completed: 'Payout sent'
-};
+// Withdrawal stages the admin can choose from (older 'held_in_vault'/'failed' rows are normalised on read).
+const WD_STAGES = ['pending', 'processing', 'completed', 'rejected'];
+const WD_LABEL = { pending: 'Pending', processing: 'Processing', completed: 'Completed', rejected: 'Declined' };
+const WD_DEFAULT_NOTE = { pending: 'Request received — awaiting review', processing: 'Approved — payout in progress', completed: 'Payout sent' };
 
-const fmt = F.fmtMoney;
+const fmt = F.fmtFull;
 
 function activeSocketsOf(io) { return io._activeSockets || new Map(); }
-function isSellerOnline(io, token) {
-  if (!token) return false;
-  return Array.from(activeSocketsOf(io).values()).some((v) => v.sessionToken === token);
-}
-
-// Translate a {title, body} notice into the seller's chosen language.
-async function localize(group, notice) {
-  const lang = group && group.seller_language;
-  if (!notice || !lang || lang === 'en') return notice;
-  const [title, body] = await Promise.all([translateOne(notice.title || '', lang, 'en'), translateOne(notice.body || '', lang, 'en')]);
-  return { ...notice, title: title.text || notice.title, body: body.text || notice.body };
-}
-
-// ---------------- Per-record locking (the ticker and admin actions never interleave on one record) ----------------
-const locks = new Map();
-function withLock(id, fn) {
-  const prev = locks.get(id) || Promise.resolve();
-  const next = prev.then(fn, fn);
-  const cleanup = () => { if (locks.get(id) === next) locks.delete(id); };
-  next.then(cleanup, cleanup);
-  locks.set(id, next);
-  return next;
-}
 
 // ---------------- Snapshots ----------------
-async function limitsFor(g, wds) {
-  const limit = await POL.getDailyLimit(store);
-  const c = POL.dailyLimitCheck(g, wds, 0, limit);
-  return { groupId: g.id, daily: c.unlimited ? null : limit, used: c.used, remaining: c.remaining, unlimited: c.unlimited, currency: g.seller_currency || null };
-}
-
-function balanceBreakdown(g, inc, wds) {
-  const inVault = inc.filter((i) => ['in_review', 'held_in_vault'].includes(i.status)).reduce((s, i) => s + Number(i.amount_ledger), 0);
-  const pendingWd = wds.filter((w) => w.funds_reserved && ['pending', 'processing'].includes(F.normWdStatus(w.status))).reduce((s, w) => s + Number(w.amount_ledger), 0);
-  return { inVault: F.round2(inVault), pendingWithdrawals: F.round2(pendingWd) };
-}
-
 async function sellerSnapshot(groupId) {
   const g = await store.getGroup(groupId);
   if (!g) return null;
   const [deps, wds, inc] = await Promise.all([
     store.getDepositsForGroup(groupId), store.getWithdrawalsForGroup(groupId), store.getIncomingFundsForGroup(groupId)
   ]);
-  const account = F.publicSellerAccount(g, false);
-  account.balances = { ...account.balances, ...balanceBreakdown(g, inc, wds) };
-  const now = Date.now();
+  const opts = { accountId: g.seller_account_id };
   return {
-    account,
+    account: F.publicSellerAccount(g),
     deposits: deps.map(F.publicDeposit),
-    withdrawals: wds.map((w) => F.publicWithdrawal(w, false)),
-    incoming: inc.map((i) => F.publicIncoming(i, false, now)),
-    limits: await limitsFor(g, wds)
+    withdrawals: wds.map((w) => F.publicWithdrawal(w)),
+    incoming: inc.map((i) => F.publicIncoming(i, false, opts))
   };
 }
 
 function summaryOf(g, counts) {
-  const country = CD.find(F.plainName(g.seller_country));
+  const c = require('./public/countries.js').byName(g.seller_country);
   return {
     groupId: g.id,
     groupName: g.name,
-    sellerName: F.plainName(g.seller_full_name) || g.custom_name_b || 'Seller',
+    sellerName: g.seller_full_name || g.custom_name_b || 'Seller',
     email: g.email_b || null,
-    phone: g.seller_phone || null,
-    accountId: g.seller_account_id || null,
-    country: F.plainName(g.seller_country) || null,
-    countryFlag: country ? CD.flagEmoji(country.c) : null,
     registered: !!g.seller_registered,
-    disabled: !!g.seller_disabled,
-    disbursementEnabled: !!g.disbursement_enabled,
     currency: g.seller_currency || null,
     kycStatus: g.kyc_status,
+    accountId: g.seller_account_id || null,
+    country: g.seller_country || null,
+    countryCode: c ? c.code : null,
+    disabled: !!g.seller_disabled,
+    disbursementEnabled: !!g.disbursement_enabled,
     businessStatus: g.business_status || 'none',
     balances: {
       available: Number(g.balance_available || 0),
@@ -125,7 +73,6 @@ function summaryOf(g, counts) {
     },
     activeWithdrawals: counts.activeWithdrawals || 0,
     heldIncoming: counts.heldIncoming || 0,
-    inReview: counts.inReview || 0,
     pendingDeposits: counts.pendingDeposits || 0
   };
 }
@@ -135,22 +82,18 @@ async function adminLedger(g) {
     store.getDepositsForGroup(g.id), store.getWithdrawalsForGroup(g.id), store.getIncomingFundsForGroup(g.id)
   ]);
   const counts = {
-    activeWithdrawals: wds.filter((w) => ['pending', 'processing'].includes(F.normWdStatus(w.status))).length,
+    activeWithdrawals: wds.filter((w) => ['pending', 'held_in_vault', 'processing'].includes(w.status)).length,
     heldIncoming: inc.filter((i) => i.status === 'held_in_vault').length,
-    inReview: inc.filter((i) => i.status === 'in_review').length,
     pendingDeposits: deps.filter((d) => d.status === 'held_in_vault').length
   };
-  const now = Date.now();
-  const account = F.publicSellerAccount(g, true);
-  account.balances = { ...account.balances, ...balanceBreakdown(g, inc, wds) };
+  const opts = { accountId: g.seller_account_id };
   return {
     ledger: {
       groupId: g.id,
-      account,
+      account: F.publicSellerAccount(g, { forAdmin: true }),
       deposits: deps.map(F.publicDeposit),
-      withdrawals: wds.map((w) => F.publicWithdrawal(w, true)),
-      incoming: inc.map((i) => F.publicIncoming(i, true, now)),
-      limits: await limitsFor(g, wds)
+      withdrawals: wds.map((w) => F.publicWithdrawal(w, { forAdmin: true })),
+      incoming: inc.map((i) => F.publicIncoming(i, true, opts))
     },
     summary: summaryOf(g, counts)
   };
@@ -162,83 +105,72 @@ async function pushAdminLedger(io, groupId) {
   const { ledger, summary } = await adminLedger(g);
   io.to('finance-admins').emit('funds-desk-ledger', ledger);
   io.to('finance-admins').emit('funds-desk-summary', summary);
-  if (g.seller_registered) io.to('finance-admins').emit('seller-account-updated', ledger.account);
 }
 
-// Push the seller's full, current state to everything that is allowed to see
-// it: the seller's own private room, any finance admin currently sitting in
-// that group's chat, and the Funds Desk. `notice` (optional) is a popup line
-// for the seller (translated into their language). Sending whole lists (not
-// deltas) means the seller's screen can never drift out of step.
+// Push the seller's full, current state to everything allowed to see it: the
+// seller's own private room, any finance admin sitting in that group's chat, and
+// the Funds Desk. `notice` (optional) is a popup line for the seller. Sending whole
+// lists (not deltas) means the seller's screen can never drift from what the admin did.
 async function pushSellerState(io, groupId, notice) {
   const snap = await sellerSnapshot(groupId);
   if (!snap) return;
-  const g = await store.getGroup(groupId);
   const emitAll = (target) => {
     target.emit('seller-account-state', snap.account);
     target.emit('deposits-list', { groupId, deposits: snap.deposits });
     target.emit('incoming-list', { groupId, incoming: snap.incoming });
     target.emit('withdrawals-list', { groupId, withdrawals: snap.withdrawals });
-    target.emit('withdrawal-limits', snap.limits);
   };
   emitAll(io.to(`seller:${groupId}`));
-  const adminSnap = await adminLedger(g);
   for (const [sockId, v] of activeSocketsOf(io)) {
     if (v.groupId === groupId && v.isAdmin && (v.adminRole === 'ADMIN' || v.adminRole === 'SUPER_ADMIN')) {
       const s = io.sockets.sockets.get(sockId);
-      if (s) {
-        s.emit('seller-account-state', adminSnap.ledger.account);
-        s.emit('deposits-list', { groupId, deposits: adminSnap.ledger.deposits });
-        s.emit('incoming-list', { groupId, incoming: snap.incoming });
-        s.emit('withdrawals-list', { groupId, withdrawals: snap.withdrawals });
-      }
+      if (s) emitAll(s);
     }
   }
-  if (notice) io.to(`seller:${groupId}`).emit('seller-notice', await localize(g, notice));
-  io.to('finance-admins').emit('funds-desk-ledger', adminSnap.ledger);
-  io.to('finance-admins').emit('funds-desk-summary', adminSnap.summary);
+  if (notice) io.to(`seller:${groupId}`).emit('seller-notice', notice);
+  await pushAdminLedger(io, groupId);
 }
 
-// Direct (non-room) snapshot for one socket — used on join/refresh.
-async function emitSnapshotTo(socket, groupId, forAdmin) {
+async function emitSnapshotTo(socket, groupId) {
   const snap = await sellerSnapshot(groupId);
   if (!snap) return;
-  if (forAdmin) {
-    const g = await store.getGroup(groupId);
-    const a = await adminLedger(g);
-    socket.emit('seller-account-state', a.ledger.account);
-  } else {
-    socket.emit('seller-account-state', snap.account);
-  }
+  socket.emit('seller-account-state', snap.account);
   socket.emit('deposits-list', { groupId, deposits: snap.deposits });
   socket.emit('incoming-list', { groupId, incoming: snap.incoming });
   socket.emit('withdrawals-list', { groupId, withdrawals: snap.withdrawals });
-  socket.emit('withdrawal-limits', snap.limits);
 }
 
-async function alertSellerOffline(io, group, { title, body }) {
+async function alertSeller(io, group, { title, body }) {
   const token = group.seller_session_token;
-  if (token && !isSellerOnline(io, token)) {
-    try {
-      const t = await localize(group, { title, body });
-      await sendPushToUser(token, { title: t.title, body: t.body, url: '/' });
-    } catch (e) { /* push is best-effort */ }
-  }
+  if (token && !N.isOnline(io, token)) await N.pushToToken(token, { title, body, url: '/' });
 }
 
 // ---------------- Input validation for "record incoming funds" ----------------
+function parseEscrowSettings(p, now = Date.now()) {
+  const e = p.escrow || {};
+  const mode = e.mode === 'manual' ? 'manual' : 'auto';
+  let totalSeconds = Escrow.QUICK_DURATIONS['1d'];
+  if (e.completeBy) {
+    const d = new Date(e.completeBy);
+    if (Number.isNaN(d.getTime())) return { error: 'The "complete by" date for the escrow review is not valid.' };
+    totalSeconds = Math.floor((d.getTime() - now) / 1000);
+    if (totalSeconds < Escrow.MIN_TOTAL_SECONDS || totalSeconds > 60 * 86400) return { error: 'The escrow review "complete by" time must be between a few seconds and 60 days from now.' };
+  } else if (e.quick && Escrow.QUICK_DURATIONS[e.quick]) totalSeconds = Escrow.QUICK_DURATIONS[e.quick];
+  else if (Number.isFinite(Number(e.totalSeconds)) && Number(e.totalSeconds) >= 5) totalSeconds = Math.min(60 * 86400, Math.floor(Number(e.totalSeconds)));
+  return { mode, totalSeconds, showTime: !!e.showTime };
+}
+
 function parseIncoming(p, group) {
   const payerName = sanitizeText(p.payerName, 200);
   if (!payerName) return { error: 'Please enter who the payment is from.' };
   const purpose = sanitizeText(p.purpose, 500);
   if (!purpose) return { error: 'Please describe what the payment is for.' };
   if (!METHODS.has(p.method)) return { error: 'Please choose a payment method.' };
-  let asset = null; let network = null; let walletAddress = null;
+  let asset = null; let network = null;
   if (p.method === 'crypto') {
     if (!F.CRYPTO_ASSETS.has(p.asset)) return { error: 'Please choose the crypto asset received.' };
     asset = p.asset;
     network = sanitizeText(p.network, 20) || null;
-    walletAddress = sanitizeText(p.walletAddress, 200) || null;
   }
   const amount = F.round2(Number(p.amount));
   if (!Number.isFinite(amount) || amount <= 0) return { error: 'Please enter a valid amount.' };
@@ -247,8 +179,7 @@ function parseIncoming(p, group) {
   const fxRate = F.fxRate(amountCurrency, group.seller_currency);
   const amountLedger = F.convertCurrency(amount, amountCurrency, group.seller_currency);
   if (amountLedger <= 0) return { error: 'That amount is too small once converted to the seller\'s currency.' };
-  const treatment = p.treatment || 'review';
-  if (!['review', 'credit', 'hold'].includes(treatment)) return { error: 'Please choose how the funds should be handled.' };
+  if (!['credit', 'hold'].includes(p.treatment)) return { error: 'Please choose whether to credit the funds now or hold them in the vault.' };
 
   let receivedAt = new Date().toISOString();
   if (p.receivedAt) {
@@ -260,115 +191,98 @@ function parseIncoming(p, group) {
   }
   const payerEmail = p.payerEmail ? sanitizeText(p.payerEmail, 254) : '';
   if (payerEmail && !isValidEmail(payerEmail)) return { error: 'The payer email does not look valid.' };
-  let payerPhone = null;
-  if (p.payerPhone) {
-    payerPhone = normalizePhone(p.payerPhone);
-    if (!payerPhone) return { error: 'The payer phone number does not look valid (include the country code).' };
-  }
-  const payerType = PAYER_TYPES.has(p.payerType) ? p.payerType : 'individual';
   const proofUrl = typeof p.proofUrl === 'string' && /^\/uploads\/[A-Za-z0-9._-]+$/.test(p.proofUrl) ? p.proofUrl : null;
-  const payerCountry = p.payerCountry ? (CD.find(p.payerCountry) ? CD.find(p.payerCountry).n : sanitizeText(p.payerCountry, 100)) : null;
+  const internalNote = sanitizeText(p.internalNote, 1000) || null;
 
-  let review = null;
-  if (treatment === 'review') {
-    const r = ER.initialState({
-      mode: p.reviewMode === 'manual' ? 'manual' : 'auto',
-      totalSeconds: p.reviewTotalSeconds, timers: Array.isArray(p.reviewTimers) ? p.reviewTimers : undefined,
-      speed: p.reviewSpeed, showTime: !!p.reviewShowTime
-    });
-    if (r.error) return { error: r.error };
-    review = r.value;
+  let escrow = null;
+  if (p.treatment === 'hold') {
+    escrow = parseEscrowSettings(p);
+    if (escrow.error) return { error: escrow.error };
   }
-
   return {
     value: {
-      payerName, purpose, method: p.method, asset, network, walletAddress,
-      amount, amountCurrency, fxRate, amountLedger, treatment, receivedAt,
-      payerEmail: payerEmail || null, payerPhone, payerType, payerCountry,
-      payerBank: sanitizeText(p.payerBank, 200) || null, invoiceRef: sanitizeText(p.invoiceRef, 120) || null,
+      payerName, purpose, method: p.method, asset, network,
+      amount, amountCurrency, fxRate, amountLedger, treatment: p.treatment, receivedAt,
+      payerEmail: payerEmail || null, payerCountry: sanitizeText(p.payerCountry, 100) || null,
+      payerCompany: sanitizeText(p.payerCompany, 200) || null, payerPhone: sanitizeText(p.payerPhone, 40) || null,
+      payerBank: sanitizeText(p.payerBank, 200) || null, orderRef: sanitizeText(p.orderRef, 120) || null,
       externalRef: sanitizeText(p.externalRef, 200) || null,
-      internalNote: sanitizeText(p.internalNote, 1000) || null, noteShared: !!p.noteShared && !!sanitizeText(p.internalNote, 1000),
-      proofUrl, notifySeller: p.notifySeller !== false, review
+      internalNote, buyerVisibleNote: !!(internalNote && p.buyerVisibleNote), proofUrl,
+      notifySeller: p.notifySeller !== false, escrow
     }
   };
 }
 
-function amountTextFor(rec, group) {
-  const L = Number(rec.amount_ledger);
-  return rec.amount_currency === group.seller_currency
-    ? fmt(rec.amount, rec.amount_currency)
-    : `${fmt(rec.amount, rec.amount_currency)} (≈ ${fmt(L, group.seller_currency)})`;
+// ---------------- Releasing funds (shared by the admin button and the escrow timer) ----------------
+const locks = new Map(); // record id -> promise chain (one mutation at a time per payment, in this process)
+function withLock(id, fn) {
+  const prev = locks.get(id) || Promise.resolve();
+  const next = prev.catch(() => {}).then(fn);
+  locks.set(id, next);
+  next.finally(() => { if (locks.get(id) === next) locks.delete(id); }).catch(() => {});
+  return next;
 }
 
-// ---------------- Escrow review: completion + change fan-out ----------------
-const REVIEW_FIELDS = ['review_stage', 'review_checks', 'review_elapsed_ms', 'review_stage_times', 'review_last_tick'];
-const pickReview = (o) => REVIEW_FIELDS.reduce((m, k) => { if (o[k] !== undefined) m[k] = o[k]; return m; }, {});
-
-// Stage 5 finished: move the money from the vault to the seller's available balance.
-async function finishReview(io, rec, by) {
+/**
+ * Move a held payment into the seller's available balance. Used when an admin
+ * clicks Release and when the escrow review reaches its final stage.
+ * Returns { ok, error?, rec }.
+ */
+async function releaseIncoming(io, rec, { by = null, note = null } = {}) {
   const group = await store.getGroup(rec.group_id);
-  if (!group) return null;
+  if (!group) return { ok: false, error: 'Group not found.' };
+  if (rec.status !== 'held_in_vault') return { ok: false, error: 'Only funds held in the vault can be released.' };
   const L = Number(rec.amount_ledger);
   const moved = await store.adjustBalances(group.id, { held: -L, available: L });
-  if (!moved) { console.error('[escrow] release failed: held balance does not cover', rec.id); return null; }
-  const done = await store.advanceIncomingFunds(rec.id, {
-    status: 'credited', reason: 'Funds credited to the seller', by: by || null, expectedStatus: 'in_review'
-  });
-  if (!done) { await store.adjustBalances(group.id, { held: L, available: -L }); return null; }
-  const acct = rec.target_account_id || group.seller_account_id;
-  const amountText = amountTextFor(rec, group);
-  try {
-    await postSystemMessage(io, group.id, `✅ Escrow review complete. ${amountText} — funds transferred to the seller account ${acct || ''} and credited.`.replace('  ', ' '));
-  } catch (e) { /* chat notice is best-effort */ }
-  const title = 'Funds credited';
-  const body = `${amountText} from ${rec.payer_name} — funds transferred to the seller account ${acct || ''}`.trim();
+  if (!moved) return { ok: false, error: 'The seller\'s balance no longer covers this change.' };
+  const updated = await store.advanceIncomingFunds(rec.id, { status: 'credited', reason: note || 'Cleared and released to your available balance', by, expectedStatus: 'held_in_vault' });
+  if (!updated) { await store.adjustBalances(group.id, { held: L, available: -L }); return { ok: false, error: 'This entry was changed by someone else. Please review its current status.' }; }
+  // Mark the review finished so the tracker shows every stage as passed.
+  if (updated.review && updated.review.current_stage < Escrow.DONE) {
+    Escrow.forceComplete(updated.review, Date.now(), 'Funds released');
+    await store.updateIncomingReview(updated.id, updated.review);
+  }
+  const amountText = rec.amount_currency === group.seller_currency ? fmt(rec.amount, rec.amount_currency) : `${fmt(rec.amount, rec.amount_currency)} (≈ ${fmt(L, group.seller_currency)})`;
+  const title = 'Funds released to your balance';
+  const body = `${amountText} from ${rec.payer_name}`;
   await pushSellerState(io, group.id, { kind: 'incoming', title, body, id: rec.id });
-  await alertSellerOffline(io, group, { title, body });
-  if (group.email_b) {
-    await E.notifyIncomingFunds(group.email_b, {
-      groupName: group.name, amountText, payerName: rec.payer_name, purpose: rec.purpose, status: 'released', accountId: acct, lang: group.seller_language
-    });
-  }
-  return done;
+  await alertSeller(io, group, { title, body });
+  if (group.email_b) await notifyIncomingFunds(group.email_b, { groupName: group.name, amountText, payerName: rec.payer_name, purpose: rec.purpose, status: 'released', name: group.seller_full_name, lang: group.seller_language });
+  return { ok: true, rec: updated };
 }
 
-async function afterReviewChange(io, updated, before, by) {
-  if (!updated) return;
-  if (Number(updated.review_stage) > 5) { await finishReview(io, updated, by); return; }
-  let notice = null;
-  if (Number(before.review_stage) < 4 && Number(updated.review_stage) >= 4) {
-    notice = { kind: 'incoming', title: 'Payment confirmed', body: `Your payment of ${fmt(updated.amount, updated.amount_currency)} has passed review and is moving to your vault account.`, id: updated.id };
-  }
-  await pushSellerState(io, updated.group_id, notice);
-}
-
-// Server ticker: reviews keep moving whether or not anyone has a page open.
-function startEscrowTicker(io) {
-  let busy = false;
-  const t = setInterval(async () => {
-    if (busy) return;
-    busy = true;
-    try {
-      const list = await store.getIncomingFundsByStatus('in_review');
-      const now = Date.now();
-      for (const rec of list) {
-        if (rec.review_mode !== 'auto' || rec.review_paused) continue;
-        await withLock(rec.id, async () => {
-          const cur = await store.getIncomingFundsById(rec.id);
-          if (!cur || cur.status !== 'in_review') return;
-          const fields = ER.tick(cur, now);
-          if (!fields) return;
-          const stageChanged = fields.review_stage !== undefined && Number(fields.review_stage) !== Number(cur.review_stage);
-          const checksChanged = fields.review_checks !== undefined && Number(fields.review_checks) !== Number(cur.review_checks);
-          if (!stageChanged && !checksChanged) return; // baseline stays valid; nothing to persist or push
-          const updated = await store.updateIncomingFunds(cur.id, fields);
-          await afterReviewChange(io, updated, cur, null);
-        }).catch((e) => console.error('[escrow] tick failed:', e.message));
-      }
-    } catch (e) { console.error('[escrow] ticker error:', e.message); } finally { busy = false; }
-  }, 1000);
-  t.unref();
-  return t;
+// ---------------- Escrow review: timer loop ----------------
+let escrowLoopStarted = false;
+function startEscrowLoop(io) {
+  if (escrowLoopStarted) return;
+  escrowLoopStarted = true;
+  const run = async () => {
+    let records = [];
+    try { records = await store.getActiveReviewRecords(); } catch (e) { return; }
+    for (const rec of records) {
+      withLock(rec.id, async () => {
+        const fresh = await store.getIncomingFundsById(rec.id);
+        if (!fresh || fresh.status !== 'held_in_vault' || !fresh.review) return;
+        const prevStage = fresh.review.current_stage;
+        const out = Escrow.tick(fresh.review, Date.now());
+        if (!out.changed) return;
+        await store.updateIncomingReview(fresh.id, fresh.review);
+        const group = await store.getGroup(fresh.group_id);
+        if (out.completed) {
+          const res = await releaseIncoming(io, fresh, { by: null, note: 'Escrow review complete — funds credited' });
+          if (!res.ok) { console.warn('[escrow] auto-release failed:', res.error); await pushSellerState(io, fresh.group_id, null); }
+        } else if (fresh.review.current_stage !== prevStage && group) {
+          const stage = Escrow.STAGES[fresh.review.current_stage - 1];
+          const body = `Your payment of ${fmt(fresh.amount, fresh.amount_currency)} from ${fresh.payer_name} is now at: ${stage.title}.`;
+          await pushSellerState(io, fresh.group_id, { kind: 'escrow', title: 'Payment update', body, id: fresh.id });
+          await alertSeller(io, group, { title: 'Payment update', body });
+        } else {
+          await pushSellerState(io, fresh.group_id, null);
+        }
+      }).catch((e) => console.error('[escrow] tick error:', e.message));
+    }
+  };
+  setInterval(run, 3000).unref();
 }
 
 function registerFundsHandlers(io, socket, ctx) {
@@ -376,7 +290,7 @@ function registerFundsHandlers(io, socket, ctx) {
 
   // ADMIN+ only, and rate-limited: this moves money.
   function guard() {
-    if (!metaHasMinRole('ADMIN')) { socket.emit('error-msg', 'Only an Admin or Super Admin can change money records.'); return false; }
+    if (!metaHasMinRole('ADMIN')) return false;
     if (!financeLimiter.allow(meta().sessionToken)) { socket.emit('error-msg', 'Too many actions — please wait a moment and try again.'); return false; }
     return true;
   }
@@ -384,13 +298,12 @@ function registerFundsHandlers(io, socket, ctx) {
   // ---- Funds Desk: read ----
   socket.on('admin-get-funds-overview', async () => {
     if (!metaHasMinRole('ADMIN')) return;
-    const [groups, pendingWds, heldInc, reviewInc, pendingDeps] = await Promise.all([
-      store.getAllGroups(), store.getPendingWithdrawals(), store.getIncomingFundsByStatus('held_in_vault'),
-      store.getIncomingFundsByStatus('in_review'), store.getPendingDeposits()
+    const [groups, pendingWds, heldInc, pendingDeps] = await Promise.all([
+      store.getAllGroups(), store.getPendingWithdrawals(), store.getIncomingFundsByStatus('held_in_vault'), store.getPendingDeposits()
     ]);
     const tally = (list) => list.reduce((m, r) => { m[r.group_id] = (m[r.group_id] || 0) + 1; return m; }, {});
-    const w = tally(pendingWds); const h = tally(heldInc); const d = tally(pendingDeps); const r = tally(reviewInc);
-    socket.emit('funds-overview', groups.map((g) => summaryOf(g, { activeWithdrawals: w[g.id], heldIncoming: h[g.id], inReview: r[g.id], pendingDeposits: d[g.id] })));
+    const w = tally(pendingWds); const h = tally(heldInc); const d = tally(pendingDeps);
+    socket.emit('funds-overview', groups.map((g) => summaryOf(g, { activeWithdrawals: w[g.id], heldIncoming: h[g.id], pendingDeposits: d[g.id] })));
   });
 
   socket.on('admin-get-seller-ledger', async ({ groupId }) => {
@@ -407,58 +320,66 @@ function registerFundsHandlers(io, socket, ctx) {
     try {
       if (!guard()) return;
       const p = payload || {};
-      let group = await store.getGroup(String(p.groupId || ''));
+      const group = await store.getGroup(String(p.groupId || ''));
       if (!group) return socket.emit('error-msg', 'That group no longer exists.');
       if (!group.seller_registered || !group.seller_currency) {
         return socket.emit('error-msg', 'This seller has not created their Transaction Account yet — funds can be recorded once they have.');
       }
-      group = await ensureAccountId(store, group);
       const { error, value: v } = parseIncoming(p, group);
       if (error) return socket.emit('error-msg', error);
 
+      const credited = v.treatment === 'credit';
       const L = v.amountLedger;
-      const status = v.treatment === 'review' ? 'in_review' : v.treatment === 'credit' ? 'credited' : 'held_in_vault';
-      const adj = status === 'credited' ? { available: L, total: L } : { held: L, total: L };
-      const undo = status === 'credited' ? { available: -L, total: -L } : { held: -L, total: -L };
-      const moved = await store.adjustBalances(group.id, adj);
+      const moved = await store.adjustBalances(group.id, credited ? { available: L, total: L } : { held: L, total: L });
       if (!moved) return socket.emit('error-msg', 'Could not update the seller\'s balance. Nothing was recorded.');
-      const r = v.review;
+
+      // Every recorded payment gets a review: a held one starts running; a credited one is shown already complete.
+      const review = credited
+        ? Escrow.createReview({ completed: true })
+        : Escrow.createReview({ mode: v.escrow.mode, totalSeconds: v.escrow.totalSeconds });
+      if (!credited) review.show_time_to_seller = !!v.escrow.showTime;
+
       let rec;
       try {
         rec = await store.createIncomingFunds({
           groupId: group.id, payerName: v.payerName, payerEmail: v.payerEmail, payerCountry: v.payerCountry,
-          payerPhone: v.payerPhone, payerType: v.payerType, payerBank: v.payerBank, invoiceRef: v.invoiceRef, walletAddress: v.walletAddress,
+          payerCompany: v.payerCompany, payerPhone: v.payerPhone, payerBank: v.payerBank, orderRef: v.orderRef,
           purpose: v.purpose, method: v.method, asset: v.asset, network: v.network, externalRef: v.externalRef,
           amount: v.amount, amountCurrency: v.amountCurrency, amountLedger: L, fxRate: v.fxRate,
-          receivedAt: v.receivedAt, status,
-          historyNote: status === 'credited' ? 'Funds received and credited to your available balance'
-            : status === 'in_review' ? 'Payment received — escrow review started' : 'Funds received — held in the vault pending clearance',
-          proofUrl: v.proofUrl, internalNote: v.internalNote, noteShared: v.noteShared, recordedBy: meta().sessionToken,
-          targetAccountId: group.seller_account_id,
-          reviewMode: r ? r.review_mode : 'none', reviewStage: r ? r.review_stage : 6, reviewChecks: 0, reviewElapsedMs: 0,
-          reviewLastTick: r ? r.review_last_tick : null, reviewPaused: false, reviewSpeed: r ? r.review_speed : 1,
-          reviewShowTime: r ? r.review_show_time : false, reviewTimers: r ? r.review_timers : null, reviewStageTimes: []
+          receivedAt: v.receivedAt, status: credited ? 'credited' : 'held_in_vault',
+          historyNote: credited ? 'Funds received and credited to your available balance' : 'Funds received — held in the vault while the payment is reviewed',
+          proofUrl: v.proofUrl, internalNote: v.internalNote, buyerVisibleNote: v.buyerVisibleNote,
+          recordedBy: meta().sessionToken, review
         });
       } catch (err) {
-        await store.adjustBalances(group.id, undo); // undo — no record, no money
+        await store.adjustBalances(group.id, credited ? { available: -L, total: -L } : { held: -L, total: -L }); // undo — no record, no money
         throw err;
       }
 
-      const amountText = amountTextFor(rec, group);
-      const title = status === 'credited' ? 'Funds received' : status === 'in_review' ? 'Payment received — under escrow review' : 'Funds received — held in vault';
+      const amountText = v.amountCurrency === group.seller_currency
+        ? fmt(v.amount, v.amountCurrency)
+        : `${fmt(v.amount, v.amountCurrency)} (≈ ${fmt(L, group.seller_currency)})`;
+      const title = credited ? 'Funds received' : 'Funds received — held in vault';
       const body = `${amountText} from ${v.payerName} — ${v.purpose}`;
       await pushSellerState(io, group.id, v.notifySeller ? { kind: 'incoming', title, body, id: rec.id } : null);
       socket.emit('incoming-funds-recorded', { id: rec.id, ref: F.refFor('incoming', rec.id), groupId: group.id });
       if (v.notifySeller) {
-        // Both parties see a line in the transaction chat (this is the "buyer and seller notified" check).
-        try {
-          await postSystemMessage(io, group.id, status === 'in_review'
-            ? `💰 A payment of ${amountText} has been received (ref ${rec.ref || F.refFor('incoming', rec.id)}) and is now under escrow review.`
-            : `💰 A payment of ${amountText} has been received (ref ${F.refFor('incoming', rec.id)}).`);
-          if (v.noteShared && v.internalNote) await postSystemMessage(io, group.id, `📝 Note from the Desk: ${v.internalNote}`);
-        } catch (e) { /* chat notice is best-effort */ }
-        await alertSellerOffline(io, group, { title, body });
-        if (group.email_b) await E.notifyIncomingFunds(group.email_b, { groupName: group.name, amountText, payerName: v.payerName, purpose: v.purpose, status: rec.status, accountId: group.seller_account_id, lang: group.seller_language });
+        await alertSeller(io, group, { title, body });
+        if (group.email_b) await notifyIncomingFunds(group.email_b, { groupName: group.name, amountText, payerName: v.payerName, purpose: v.purpose, status: rec.status, name: group.seller_full_name, lang: group.seller_language });
+      }
+
+      // Optional: release the internal note to the buyer as a buyer-only message in the group chat.
+      if (v.internalNote && v.buyerVisibleNote) {
+        const noteMsg = await store.insertMessage({
+          id: 'desk-' + Date.now() + Math.random().toString(36).slice(2, 6),
+          groupId: group.id, senderName: 'DESK NOTE',
+          text: escapeHtml(`📝 Note from the Desk: ${v.internalNote}`), audience: 'buyer'
+        });
+        if (ctx.publicMessage) N.emitToAudience(io, group.id, 'buyer', 'message', await ctx.publicMessage(noteMsg));
+        if (group.buyer_session_token && !N.isOnline(io, group.buyer_session_token)) {
+          await N.pushToToken(group.buyer_session_token, { title: 'Note from the Desk', body: v.internalNote.slice(0, 160), url: '/' });
+        }
+        if (group.email_a) notifyDeskNote(group.email_a, { groupName: group.name, note: v.internalNote }).catch(() => {});
       }
     } catch (err) {
       console.error('[admin-record-incoming-funds] error:', err);
@@ -466,206 +387,167 @@ function registerFundsHandlers(io, socket, ctx) {
     }
   });
 
-  // ---- Edit the internal note / share it with the buyer ----
-  socket.on('admin-set-incoming-note', async ({ id, note, shared }) => {
-    try {
-      if (!guard()) return;
-      const rec = await store.getIncomingFundsById(String(id || ''));
-      if (!rec) return socket.emit('error-msg', 'That entry no longer exists.');
-      const clean = sanitizeText(note, 1000) || null;
-      const share = !!shared && !!clean;
-      const wasShared = !!rec.note_shared && rec.internal_note === clean;
-      await store.updateIncomingFunds(rec.id, { internal_note: clean, note_shared: share });
-      if (share && !wasShared) await postSystemMessage(io, rec.group_id, `📝 Note from the Desk: ${clean}`);
-      await pushSellerState(io, rec.group_id, null);
-    } catch (err) {
-      console.error('[admin-set-incoming-note] error:', err);
-      socket.emit('error-msg', 'Could not save that note.');
-    }
-  });
-
-  // ---- Escrow review console actions ----
-  socket.on('admin-review-action', async ({ id, action, opts }) => {
-    try {
-      if (!guard()) return;
-      const rid = String(id || '');
-      await withLock(rid, async () => {
-        const cur = await store.getIncomingFundsById(rid);
-        if (!cur) return socket.emit('error-msg', 'That entry no longer exists.');
-        if (cur.status !== 'in_review') return socket.emit('error-msg', 'This payment is no longer under review.');
-        const now = Date.now();
-        const live = { ...cur, ...(ER.tick(cur, now) || {}) }; // fold elapsed time in before acting
-        let res;
-        switch (action) {
-          case 'confirm': res = ER.confirmCheck(live, now); break;
-          case 'approve': case 'skip': res = ER.approveStage(live, now); break;
-          case 'restart': res = ER.restart(live, now); break;
-          case 'pause': res = ER.setPaused(live, true, now); break;
-          case 'resume': res = ER.setPaused(live, false, now); break;
-          case 'configure': res = ER.configure(live, opts || {}, now); break;
-          default: return;
-        }
-        if (res.error) return socket.emit('error-msg', res.error);
-        const updated = await store.updateIncomingFunds(cur.id, { ...pickReview(live), ...res.fields });
-        await afterReviewChange(io, updated, cur, meta().sessionToken);
-      });
-    } catch (err) {
-      console.error('[admin-review-action] error:', err);
-      socket.emit('error-msg', 'Something went wrong updating that review.');
-    }
-  });
-
   // ---- Release / reverse recorded funds ----
   socket.on('admin-update-incoming-funds', async ({ id, action, reason }) => {
     try {
       if (!guard()) return;
-      const rec = await store.getIncomingFundsById(String(id || ''));
-      if (!rec) return socket.emit('error-msg', 'That entry no longer exists.');
-      const group = await store.getGroup(rec.group_id);
-      if (!group) return;
-      const L = Number(rec.amount_ledger);
-      const from = rec.status;
-      const note = sanitizeText(reason, 500);
-      const by = meta().sessionToken;
+      await withLock(String(id || ''), async () => {
+        const rec = await store.getIncomingFundsById(String(id || ''));
+        if (!rec) return socket.emit('error-msg', 'That entry no longer exists.');
+        const group = await store.getGroup(rec.group_id);
+        if (!group) return;
+        const L = Number(rec.amount_ledger);
+        const from = rec.status;
+        const note = sanitizeText(reason, 500);
+        const by = meta().sessionToken;
 
-      if (action === 'release' && from === 'in_review') {
-        // Override: skip the remaining review and release now.
-        return withLock(rec.id, async () => {
-          const cur = await store.getIncomingFundsById(rec.id);
-          if (!cur || cur.status !== 'in_review') return socket.emit('error-msg', 'This payment is no longer under review.');
-          const times = (Array.isArray(cur.review_stage_times) ? cur.review_stage_times : []).concat([{ stage: Number(cur.review_stage), at: new Date().toISOString(), override: true }]);
-          const updated = await store.updateIncomingFunds(cur.id, { review_stage: 6, review_checks: 0, review_elapsed_ms: 0, review_stage_times: times });
-          await finishReview(io, updated, by);
-        });
-      }
-
-      let adj; let undo; let toStatus; let historyNote;
-      if (action === 'release') {
-        if (from !== 'held_in_vault') return socket.emit('error-msg', 'Only funds held in the vault can be released.');
-        adj = { held: -L, available: L }; undo = { held: L, available: -L };
-        toStatus = 'credited'; historyNote = note || 'Cleared and released to your available balance';
-      } else if (action === 'reverse') {
-        if (!['held_in_vault', 'credited', 'in_review'].includes(from)) return socket.emit('error-msg', 'This entry has already been reversed.');
+        if (action === 'release') {
+          const res = await releaseIncoming(io, rec, { by, note: note || null });
+          if (!res.ok) socket.emit('error-msg', res.error);
+          return;
+        }
+        if (action !== 'reverse') return;
+        if (!['held_in_vault', 'credited'].includes(from)) return socket.emit('error-msg', 'This entry has already been reversed.');
         if (!note) return socket.emit('error-msg', 'A reason is required to reverse funds.');
-        adj = from === 'credited' ? { available: -L, total: -L } : { held: -L, total: -L };
-        undo = from === 'credited' ? { available: L, total: L } : { held: L, total: L };
-        toStatus = 'reversed'; historyNote = note;
-      } else {
-        return;
-      }
-
-      const moved = await store.adjustBalances(group.id, adj);
-      if (!moved) {
-        return socket.emit('error-msg', action === 'reverse' && from === 'credited'
-          ? 'The seller has already withdrawn or reserved part of these funds — their available balance is too low to reverse this credit.'
-          : 'The seller\'s balance no longer covers this change.');
-      }
-      const updated = await store.advanceIncomingFunds(rec.id, { status: toStatus, reason: historyNote, by, expectedStatus: from });
-      if (!updated) {
-        await store.adjustBalances(group.id, undo); // someone else changed it first — put the money back
-        return socket.emit('error-msg', 'This entry was changed by someone else. Please review its current status.');
-      }
-
-      const amountText = amountTextFor(rec, group);
-      const title = toStatus === 'credited' ? 'Funds released to your balance' : 'Incoming payment reversed';
-      const body = `${amountText} from ${rec.payer_name}${toStatus === 'reversed' ? ` — ${note}` : ''}`;
-      await pushSellerState(io, group.id, { kind: 'incoming', title, body, id: rec.id });
-      await alertSellerOffline(io, group, { title, body });
-      if (group.email_b) {
-        await E.notifyIncomingFunds(group.email_b, {
-          groupName: group.name, amountText, payerName: rec.payer_name, purpose: rec.purpose,
-          status: toStatus === 'credited' ? 'released' : 'reversed', reason: note, accountId: rec.target_account_id, lang: group.seller_language
-        });
-      }
+        const adj = from === 'credited' ? { available: -L, total: -L } : { held: -L, total: -L };
+        const undo = from === 'credited' ? { available: L, total: L } : { held: L, total: L };
+        const moved = await store.adjustBalances(group.id, adj);
+        if (!moved) {
+          return socket.emit('error-msg', from === 'credited'
+            ? 'The seller has already withdrawn or reserved part of these funds — their available balance is too low to reverse this credit.'
+            : 'The seller\'s balance no longer covers this change.');
+        }
+        const updated = await store.advanceIncomingFunds(rec.id, { status: 'reversed', reason: note, by, expectedStatus: from });
+        if (!updated) { await store.adjustBalances(group.id, undo); return socket.emit('error-msg', 'This entry was changed by someone else. Please review its current status.'); }
+        const amountText = rec.amount_currency === group.seller_currency ? fmt(rec.amount, rec.amount_currency) : `${fmt(rec.amount, rec.amount_currency)} (≈ ${fmt(L, group.seller_currency)})`;
+        const title = 'Incoming payment reversed';
+        const body = `${amountText} from ${rec.payer_name} — ${note}`;
+        await pushSellerState(io, group.id, { kind: 'incoming', title, body, id: rec.id });
+        await alertSeller(io, group, { title, body });
+        if (group.email_b) await notifyIncomingFunds(group.email_b, { groupName: group.name, amountText, payerName: rec.payer_name, purpose: rec.purpose, status: 'reversed', reason: note, name: group.seller_full_name, lang: group.seller_language });
+      });
     } catch (err) {
       console.error('[admin-update-incoming-funds] error:', err);
       socket.emit('error-msg', 'Something went wrong updating that entry. Please check the ledger.');
     }
   });
 
-  // ---- Withdrawals: four admin-selected stages — Pending, Processing, Completed, Declined ----
-  async function setWithdrawalStage({ withdrawalId, toStatus, reason, payoutReference }) {
+  // ---- Escrow review console (admin only) ----
+  socket.on('admin-escrow-action', async ({ id, action, value }) => {
     try {
       if (!guard()) return;
-      const to = F.normWdStatus(toStatus);
-      if (!F.WD_STATUSES.includes(toStatus) && !['rejected', 'failed'].includes(toStatus)) return socket.emit('error-msg', 'Please choose a valid stage.');
-      const wd = await store.getWithdrawalById(String(withdrawalId || ''));
-      if (!wd) return socket.emit('error-msg', 'That withdrawal no longer exists.');
-      const from = F.normWdStatus(wd.status);
-      if (from === to) return socket.emit('error-msg', `This withdrawal is already ${WD_LABEL[to]}.`);
-      if (!(WITHDRAWAL_TRANSITIONS[from] || []).includes(to)) {
-        return socket.emit('error-msg', `A ${WD_LABEL[from].toLowerCase()} withdrawal cannot be moved to ${WD_LABEL[to]}.${['completed', 'declined'].includes(from) ? ' Completed and declined withdrawals are final.' : ''}`);
-      }
-      const declining = to === 'declined';
-      const note = sanitizeText(reason, 500);
-      if (declining && !note) return socket.emit('error-msg', 'A reason is required to decline a withdrawal.');
-      const group = await store.getGroup(wd.group_id);
-      if (!group) return;
-      const amt = F.round2(wd.amount_ledger);
-      const by = meta().sessionToken;
-
-      // 1) Balance movement (atomic + guarded). Funds were reserved (available -> pending) when the seller confirmed.
-      let adj = null; let undo = null; let reservedNow = null;
-      const reserved = !!wd.funds_reserved;
-      if (declining) {
-        if (reserved) { adj = { held: -amt, available: amt }; undo = { held: amt, available: -amt }; reservedNow = false; }
-      } else if (to === 'completed') {
-        if (reserved) { adj = { held: -amt }; undo = { held: amt }; }
-        else { adj = { available: -amt }; undo = { available: amt }; } // legacy request that was never reserved
-        reservedNow = false; // the money has left the account
-      } else if (!reserved) { // pending/processing but never reserved (legacy) -> reserve now
-        adj = { available: -amt, held: amt }; undo = { available: amt, held: -amt }; reservedNow = true;
-      }
-      if (adj) {
-        let moved = await store.adjustBalances(group.id, adj);
-        if (!moved && declining) {
-          // The reserved money left the seller's available balance when they confirmed, so a decline
-          // must ALWAYS give it back — even if the pending pool was since adjusted by hand.
-          const held = F.round2((await store.getGroup(group.id)).balance_held || 0);
-          const take = Math.min(held, amt);
-          adj = { held: -take, available: amt }; undo = { held: take, available: -amt };
-          moved = await store.adjustBalances(group.id, adj);
+      await withLock(String(id || ''), async () => {
+        const rec = await store.getIncomingFundsById(String(id || ''));
+        if (!rec || !rec.review) return socket.emit('error-msg', 'That payment has no escrow review.');
+        if (rec.status !== 'held_in_vault') return socket.emit('error-msg', 'The escrow review only runs while the funds are held in the vault.');
+        const now = Date.now();
+        const review = rec.review;
+        let res;
+        switch (action) {
+          case 'mode': res = Escrow.setMode(review, value, now); break;
+          case 'speed': res = Escrow.setSpeed(review, value, now); break;
+          case 'pause': res = Escrow.setPaused(review, true, now); break;
+          case 'resume': res = Escrow.setPaused(review, false, now); break;
+          case 'show-time': res = Escrow.setShowTime(review, !!value, now); break;
+          case 'skip': res = Escrow.skipStage(review, now); break;
+          case 'restart': res = Escrow.restart(review, now); break;
+          case 'confirm-check': res = Escrow.confirmCheck(review, now); break;
+          case 'approve-stage': res = Escrow.approveStage(review, now); break;
+          case 'timers': {
+            const v = value || {};
+            if (v.completeBy) {
+              const d = new Date(v.completeBy);
+              const total = Number.isNaN(d.getTime()) ? NaN : Math.floor((d.getTime() - now) / 1000);
+              res = Escrow.setTimers(review, { totalSeconds: total }, now);
+            } else if (v.quick && Escrow.QUICK_DURATIONS[v.quick]) res = Escrow.setTimers(review, { totalSeconds: Escrow.QUICK_DURATIONS[v.quick] }, now);
+            else if (Array.isArray(v.perStage)) res = Escrow.setTimers(review, { timers: v.perStage }, now);
+            else res = { ok: false, error: 'Please choose how long the review should take.' };
+            break;
+          }
+          default: return;
         }
-        if (!moved) return socket.emit('error-msg', 'The seller\'s balance no longer covers this change — please check the ledger.');
-      }
-
-      // 2) Status change (compare-and-set, so a double-click or a second admin can't apply it twice).
-      const ref = to === 'completed' ? (sanitizeText(payoutReference, 120) || null) : null;
-      const updated = await store.advanceWithdrawal(wd.id, {
-        status: to, reason: declining ? note : (note || WD_DEFAULT_NOTE[to] || null), by, expectedStatus: wd.status
+        if (!res.ok) return socket.emit('error-msg', res.error || 'That action could not be applied.');
+        await store.updateIncomingReview(rec.id, review);
+        if (res.completed) {
+          const out = await releaseIncoming(io, { ...rec, review }, { by: meta().sessionToken, note: 'Escrow review complete — funds credited' });
+          if (!out.ok) socket.emit('error-msg', out.error);
+        } else {
+          await pushSellerState(io, rec.group_id, null);
+        }
       });
-      if (!updated) {
-        if (undo) await store.adjustBalances(group.id, undo);
-        return socket.emit('error-msg', 'This withdrawal was changed by someone else. Please review its current status.');
-      }
-      const extra = {};
-      if (reservedNow !== null) extra.funds_reserved = reservedNow;
-      if (ref) extra.payout_reference = ref;
-      const final = Object.keys(extra).length ? ((await store.updateWithdrawal(wd.id, extra)) || updated) : updated;
-
-      const pub = F.publicWithdrawal(final, true);
-      const label = WD_LABEL[to];
-      const title = 'Withdrawal update';
-      const body = `${pub.ref} (${fmt(wd.amount, wd.amount_currency)}) is now ${label}${declining ? ` — ${note}` : ''}${ref ? ` — reference ${ref}` : ''}`;
-      await pushSellerState(io, group.id, { kind: 'withdrawal', title, body, id: wd.id, status: to });
-      socket.emit('admin-notice', { message: declining
-        ? (reserved ? `${pub.ref} declined — ${fmt(wd.amount, wd.amount_currency)} returned to the seller's available balance.` : `${pub.ref} declined (no funds had been reserved, so nothing needed returning).`)
-        : `${pub.ref} is now ${label}.` });
-      io.to('finance-admins').emit('withdrawal-updated', pub);
-      if (['completed', 'declined'].includes(to)) io.to('finance-admins').emit('withdrawal-resolved', pub);
-      await alertSellerOffline(io, group, { title, body });
-      if (group.email_b) await E.notifyWithdrawalStatus(group.email_b, { groupName: group.name, amount: fmt(wd.amount, wd.amount_currency), currency: '', status: to, reason: final.status_reason, reference: final.payout_reference, lang: group.seller_language });
-      if (ctx.broadcastGroupsList) await ctx.broadcastGroupsList();
     } catch (err) {
-      console.error('[admin-set-withdrawal-stage] error:', err);
+      console.error('[admin-escrow-action] error:', err);
+      socket.emit('error-msg', 'Something went wrong updating the escrow review.');
+    }
+  });
+
+  // ---- Withdrawals: pending -> processing -> completed, or declined (any stage may be chosen) ----
+  socket.on('admin-advance-withdrawal', async ({ withdrawalId, toStatus, reason }) => {
+    try {
+      if (!guard()) return;
+      await withLock('wd:' + String(withdrawalId || ''), async () => {
+        const wd = await store.getWithdrawalById(String(withdrawalId || ''));
+        if (!wd) return socket.emit('error-msg', 'That withdrawal no longer exists.');
+        const target = F.normalizeWdStatus(String(toStatus || ''));
+        if (!WD_STAGES.includes(target)) return socket.emit('error-msg', 'Please choose a valid stage.');
+        const from = F.normalizeWdStatus(wd.status);
+        if (from === target) return socket.emit('error-msg', `This withdrawal is already ${WD_LABEL[target]}.`);
+        if (from === 'completed') return socket.emit('error-msg', 'A completed withdrawal is final and cannot be changed.');
+        if (from === 'rejected' && target === 'completed') return socket.emit('error-msg', 'A declined withdrawal must be reopened as Pending or Processing before it can be completed.');
+        const note = sanitizeText(reason, 500);
+        if (target === 'rejected' && !note) return socket.emit('error-msg', 'A reason is required to decline a withdrawal.');
+        const group = await store.getGroup(wd.group_id);
+        if (!group) return;
+        const amt = F.round2(wd.amount_ledger);
+        const by = meta().sessionToken;
+        const reserved = !!wd.funds_reserved;
+
+        // Balance movement (atomic + guarded). `reserved` = the amount is currently held out of "available".
+        let adj = null; let undo = null; let nowReserved = reserved;
+        if (target === 'pending' || target === 'processing') {
+          if (!reserved) { adj = { available: -amt, held: amt }; undo = { available: amt, held: -amt }; nowReserved = true; }
+        } else if (target === 'completed') {
+          adj = reserved ? { held: -amt } : { available: -amt }; undo = reserved ? { held: amt } : { available: amt }; nowReserved = false;
+        } else if (target === 'rejected') {
+          if (reserved) { adj = { held: -amt, available: amt }; undo = { held: amt, available: -amt }; }
+          nowReserved = false;
+        }
+        if (adj) {
+          const moved = await store.adjustBalances(group.id, adj);
+          if (!moved) {
+            return socket.emit('error-msg', target === 'completed' || reserved
+              ? 'The seller\'s held balance does not cover this change — please check the ledger.'
+              : 'The seller no longer has enough available balance to cover this withdrawal.');
+          }
+        }
+        const updated = await store.advanceWithdrawal(wd.id, {
+          status: target, reason: target === 'rejected' ? note : (note || WD_DEFAULT_NOTE[target] || null), by,
+          expectedStatus: wd.status, fundsReserved: nowReserved
+        });
+        if (!updated) {
+          if (undo) await store.adjustBalances(group.id, undo);
+          return socket.emit('error-msg', 'This withdrawal was changed by someone else. Please review its current status.');
+        }
+
+        const pub = F.publicWithdrawal(updated);
+        const label = WD_LABEL[target];
+        const title = 'Withdrawal update';
+        const body = `${pub.ref} (${fmt(wd.amount, wd.amount_currency)}) is now ${label}${target === 'rejected' ? ` — ${note}` : ''}`;
+        await pushSellerState(io, group.id, { kind: 'withdrawal', title, body, id: wd.id, status: target });
+        io.to('finance-admins').emit('withdrawal-updated', F.publicWithdrawal(updated, { forAdmin: true }));
+        if (['completed', 'rejected'].includes(target)) io.to('finance-admins').emit('withdrawal-resolved', F.publicWithdrawal(updated, { forAdmin: true }));
+        await alertSeller(io, group, { title, body });
+        if (group.email_b) await notifyWithdrawalStatus(group.email_b, { groupName: group.name, amount: wd.amount, currency: wd.amount_currency, status: target, reason: updated.status_reason, ref: pub.ref, name: group.seller_full_name, lang: group.seller_language });
+        if (ctx.broadcastGroupsList) await ctx.broadcastGroupsList();
+      });
+    } catch (err) {
+      console.error('[admin-advance-withdrawal] error:', err);
       socket.emit('error-msg', 'Something went wrong updating that withdrawal. Please check the ledger.');
     }
-  }
-  socket.on('admin-set-withdrawal-stage', setWithdrawalStage);
-  socket.on('admin-advance-withdrawal', setWithdrawalStage); // legacy event name
+  });
 }
 
 module.exports = {
-  registerFundsHandlers, startEscrowTicker, pushSellerState, pushAdminLedger, emitSnapshotTo, sellerSnapshot, adminLedger,
-  summaryOf, localize, limitsFor, WITHDRAWAL_TRANSITIONS, WD_LABEL
+  registerFundsHandlers, pushSellerState, pushAdminLedger, emitSnapshotTo, sellerSnapshot, adminLedger, summaryOf,
+  startEscrowLoop, releaseIncoming, withLock, WD_STAGES, WD_LABEL
 };

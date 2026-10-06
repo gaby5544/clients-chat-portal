@@ -31,10 +31,10 @@ function getPublicKey() {
   return vapidKeys.publicKey;
 }
 
-async function sendPushToUser(sessionToken, { title, body, url, tag, requireInteraction }) {
+async function sendPushToUser(sessionToken, { title, body, url }) {
   const subs = await store.getPushSubscriptionsForUser(sessionToken);
   if (!subs.length) return;
-  const payload = JSON.stringify({ title, body, url: url || '/', tag: tag || undefined, requireInteraction: !!requireInteraction });
+  const payload = JSON.stringify({ title, body, url: url || '/' });
   await Promise.all(subs.map(async (sub) => {
     try {
       await webpush.sendNotification(

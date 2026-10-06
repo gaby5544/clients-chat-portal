@@ -8,18 +8,20 @@ self.addEventListener('push', (event) => {
   let data = { title: 'Quantum Secure Transaction Desk', body: 'You have a new message.', url: '/' };
   try { if (event.data) data = { ...data, ...event.data.json() }; } catch (e) { /* use defaults */ }
 
-  event.waitUntil(
+  event.waitUntil(Promise.all([
     self.registration.showNotification(data.title, {
       body: data.body,
       icon: '/icon-192.png',
       badge: '/icon-192.png',
       data: { url: data.url || '/' },
-      tag: data.tag || 'qsd-message',
+      tag: 'qsd-message',
       renotify: true,
-      requireInteraction: !!data.requireInteraction,
-      vibrate: [200, 100, 200, 100, 200] // three pulses, like the in-app sound
-    })
-  );
+      requireInteraction: true,
+      vibrate: [220, 110, 220, 110, 220]
+    }),
+    // Any open (even backgrounded) tab is told to play its 3x alert sound.
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => list.forEach((c) => c.postMessage({ type: 'push-sound', title: data.title, body: data.body })))
+  ]));
 });
 
 self.addEventListener('notificationclick', (event) => {

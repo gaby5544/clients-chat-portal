@@ -5,16 +5,15 @@ const fs = require('fs');
 const crypto = require('crypto');
 const rateLimit = require('express-rate-limit');
 const { store } = require('./db');
-const { validateTransactionForm, escapeHtml, isValidEmail, hashPassword, verifyPassword, isStrongEnoughPassword, generateSixDigitCode, hashCode, getReqIp, PASSWORD_RULE_TEXT } = require('./security');
-const { translateMany, provider: translateProvider } = require('./translate');
-const { isIpBlocked, recordIp } = require('./sellerHandlers');
-const E = require('./email');
+const { validateTransactionForm, escapeHtml, isValidEmail, hashPassword, verifyPassword, passwordProblem, generateSixDigitCode, hashCode, codeMatches } = require('./security');
 const { generateTransactionPdf, generateFundsReceiptPdf } = require('./pdfReceipt');
 const F = require('./finance');
 const { resolveAdminRole, hasMinRole } = require('./roles');
 const { getPublicKey } = require('./webpush');
-const { notifyPasswordResetCode } = E;
-const { trustSellerToken, revokeAllSellerTokens } = require('./accounts');
+const { notifyPasswordResetCode, isEmailConfigured, COMPLAINTS_EMAIL } = require('./email');
+const IP = require('./ipTools');
+const { translateBatch } = require('./translate');
+const LANGS = require('./public/languages.js');
 const { v4: uuidv4 } = require('uuid');
 
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
@@ -34,8 +33,7 @@ const storage = multer.diskStorage({
   filename: (req, file, cb) => {
     const safeExt = path.extname(file.originalname).slice(0, 10).replace(/[^a-zA-Z0-9.]/g, '');
     const randomName = crypto.randomBytes(16).toString('hex');
-    // ?private=1 (KYC, business documents, proof of payment) → p_ prefix → only reachable through a signed link.
-    cb(null, `${req.query && req.query.private === '1' ? 'p_' : ''}${randomName}${safeExt}`);
+    cb(null, `${randomName}${safeExt}`);
   }
 });
 
@@ -72,18 +70,7 @@ function requireAdmin(req, res, next) {
 function buildRouter() {
   const router = express.Router();
 
-  // Chat attachments keep their unguessable public URLs. Private files (p_…) need a valid signature + expiry.
-  router.use('/uploads', (req, res, next) => {
-    let name = '';
-    try { name = path.posix.normalize(decodeURIComponent((req.path || '').replace(/^\/+/, ''))); } catch (e) { return res.status(400).send('Bad request'); }
-    if (name.split('/').includes('..')) return res.status(403).send('Not allowed');
-    if (path.posix.basename(name).startsWith('p_')) {
-      if (!F.verifyFileSig(name, req.query.exp, req.query.sig)) return res.status(403).send('This link has expired or is not valid. Reload the page to get a fresh one.');
-      res.set({ 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' });
-      return express.static(UPLOAD_DIR, { maxAge: 0, etag: false, lastModified: false })(req, res, next);
-    }
-    return express.static(UPLOAD_DIR, { maxAge: '7d' })(req, res, next);
-  });
+  router.use('/uploads', express.static(UPLOAD_DIR, { maxAge: '7d' }));
 
   // ---- File upload (drag-and-drop / attachment) ----
   router.post('/api/upload', uploadLimiter, (req, res) => {
@@ -167,24 +154,28 @@ function buildRouter() {
     }
     const rec = kind === 'incoming' ? await store.getIncomingFundsById(id) : await store.getWithdrawalById(id);
     // A receipt only exists for money that actually landed / actually left.
-    if (!rec || (kind === 'incoming' && rec.status !== 'credited') || (kind === 'withdrawal' && F.normWdStatus(rec.status) !== 'completed')) {
+    if (!rec || (kind === 'incoming' && rec.status !== 'credited') || (kind === 'withdrawal' && rec.status !== 'completed')) {
       return res.status(404).json({ error: 'Receipt not found' });
     }
     const group = await store.getGroup(rec.group_id);
     if (!group) return res.status(404).json({ error: 'Receipt not found' });
-    const record = kind === 'incoming' ? F.publicIncoming(rec, false) : F.publicWithdrawal(rec, false);
-    generateFundsReceiptPdf(res, { kind, record, group, raw: rec });
+    const record = kind === 'incoming' ? F.publicIncoming(rec, false, { accountId: group.seller_account_id }) : F.publicWithdrawal(rec);
+    generateFundsReceiptPdf(res, { kind, record, group });
   });
 
-  // ---- Translation (chat messages, interface text, notifications) ----
-  // Requires a known session so the provider key can't be used by strangers.
+  // ---- Machine translation (chat messages, interface text, notifications) ----
+  // The browser never talks to a translation vendor directly: every request goes through here, so
+  // the provider key stays private, results are cached for everyone, and a vendor outage degrades
+  // to "show the original" instead of a broken screen. Public on purpose (the login screen is
+  // translated too), so it is rate-limited and size-capped.
   router.post('/api/translate', translateLimiter, async (req, res) => {
-    const { sessionToken, texts, target, source } = req.body || {};
-    if (!sessionToken || !(await store.getUser(String(sessionToken)))) return res.status(401).json({ error: 'Unknown session' });
-    if (!Array.isArray(texts) || !texts.length || texts.length > 60 || !target) return res.status(400).json({ error: 'Invalid request' });
-    const clean = texts.map((t) => String(t == null ? '' : t).slice(0, 2000));
-    const out = await translateMany(clean, String(target), source ? String(source) : null);
-    res.json({ provider: translateProvider(), results: out.map((r) => ({ text: r.text, ok: r.ok })) });
+    const { texts, target } = req.body || {};
+    if (!Array.isArray(texts) || !texts.length || texts.length > 80) return res.status(400).json({ error: 'Send between 1 and 80 texts.' });
+    if (!LANGS.get(target)) return res.status(400).json({ error: 'Unsupported language.' });
+    const clean = texts.map((t) => (typeof t === 'string' ? t.slice(0, 2000) : ''));
+    if (clean.reduce((n, t) => n + t.length, 0) > 24000) return res.status(413).json({ error: 'Too much text in one request.' });
+    const { translations, failed } = await translateBatch(clean, target);
+    res.json({ translations, failed });
   });
 
   // ---- Web Push: subscribe / unsubscribe ----
@@ -233,13 +224,22 @@ function buildRouter() {
   // "no such account" and "wrong password" — never reveal which was wrong.
   const BAD_LOGIN = { error: 'Incorrect email or password.' };
 
+  // A seller may hold a Transaction Account in several groups under the same email, so every auth call
+  // names the group (the invite link they are on). Without a groupId the first match is used (old clients).
+  const pickGroup = (matches, groupId) => (typeof groupId === 'string' && groupId ? matches.find((g) => g.id === groupId) : matches[0]);
+
   router.post('/api/auth/login', loginLimiter, async (req, res) => {
-    const { email, password } = req.body || {};
+    const { email, password, groupId } = req.body || {};
+    const ip = IP.fromRequest(req);
     if (!isValidEmail(email) || typeof password !== 'string' || !password) return res.status(400).json(BAD_LOGIN);
     const matches = await store.findGroupsBySellerEmail(email.trim());
-    const group = matches[0]; // one seller account per email
+    const group = pickGroup(matches, groupId);
     if (!group) return res.status(401).json(BAD_LOGIN);
-    const ip = getReqIp(req);
+    // An IP the Desk blocked for this seller can never sign in to it.
+    if (await store.isIpBlocked(group.id, ip)) {
+      await store.logIpEvent({ groupId: group.id, kind: 'login_blocked', ip, userAgent: req.headers['user-agent'] });
+      return res.status(403).json({ error: `Access from this network has been blocked by the Desk. Please contact ${COMPLAINTS_EMAIL}.`, blocked: true });
+    }
     if (group.seller_locked_until && new Date(group.seller_locked_until) > new Date()) {
       return res.status(423).json({ error: 'Too many failed attempts. Please try again later.' });
     }
@@ -253,62 +253,60 @@ function buildRouter() {
       await store.updateGroup(group.id, fields);
       return res.status(401).json(BAD_LOGIN);
     }
-    // Admin-blocked IPs are refused at sign-in (after the password check, so this never reveals which accounts exist).
-    if (isIpBlocked(group, ip)) {
-      return res.status(403).json({ error: 'Sign-in from this network has been blocked for this account. Please contact ' + E.COMPLAINTS_EMAIL + '.', code: 'ip_blocked', contact: E.COMPLAINTS_EMAIL });
-    }
     await store.updateGroup(group.id, { seller_failed_logins: 0, seller_locked_until: null });
-    const token = uuidv4();
-    await trustSellerToken(store, group, token); // this browser is now allowed into the account
-    await recordIp(group, ip, 'login');
-    res.json({
-      success: true, groupId: group.id, sessionToken: token, groupName: group.name,
-      disabled: !!group.seller_disabled, contact: E.COMPLAINTS_EMAIL, language: group.seller_language || 'en'
-    });
+    // Hand back a fresh session token and authorise it for this seller's seat — the client then
+    // does the same 'join-room' it would from an invite link, just without needing the link.
+    const sessionToken = uuidv4();
+    await store.addSellerSession(group.id, sessionToken, ip);
+    await store.logIpEvent({ groupId: group.id, kind: 'login', ip, userAgent: req.headers['user-agent'] });
+    res.json({ success: true, groupId: group.id, sessionToken, groupName: group.name, language: group.seller_language || 'en', disabled: !!group.seller_disabled });
   });
 
   router.post('/api/auth/forgot-password/request', resetLimiter, async (req, res) => {
-    const { email } = req.body || {};
+    const { email, groupId } = req.body || {};
     // Always return success even if the email isn't found — never reveal
     // whether an account exists for a given address.
     if (!isValidEmail(email)) return res.json({ success: true });
     const matches = await store.findGroupsBySellerEmail(email.trim());
-    const group = matches[0];
+    const group = pickGroup(matches, groupId);
     if (group) {
       const code = generateSixDigitCode();
       await store.createPasswordReset({ groupId: group.id, codeHash: hashCode(code), expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString() });
       await notifyPasswordResetCode(group.email_b, { code, groupName: group.name, lang: group.seller_language });
+      if (!isEmailConfigured()) console.log(`[verification] password reset code for ${group.email_b}: ${code} (email delivery is not configured — shown here for testing)`);
     }
     res.json({ success: true });
   });
 
   router.post('/api/auth/forgot-password/verify', resetLimiter, async (req, res) => {
-    const { email, code } = req.body || {};
+    const { email, code, groupId } = req.body || {};
     if (!isValidEmail(email) || !/^\d{6}$/.test(String(code || ''))) return res.status(400).json({ error: 'Invalid code.' });
     const matches = await store.findGroupsBySellerEmail(email.trim());
-    const group = matches[0];
+    const group = pickGroup(matches, groupId);
     if (!group) return res.status(400).json({ error: 'Invalid or expired code.' });
     const reset = await store.getLatestPasswordReset(group.id);
-    if (!reset || new Date(reset.expires_at) < new Date() || reset.code_hash !== hashCode(code)) {
-      return res.status(400).json({ error: 'Invalid or expired code.' });
-    }
+    if (!reset || new Date(reset.expires_at) < new Date()) return res.status(400).json({ error: 'Invalid or expired code.' });
+    // 5 wrong guesses burns the code — a 6-digit code must not be brute-forceable.
+    if ((await store.bumpPasswordResetAttempts(reset.id)) > 5) return res.status(400).json({ error: 'Too many incorrect attempts. Please request a new code.' });
+    if (!codeMatches(String(code), reset.code_hash)) return res.status(400).json({ error: 'Invalid or expired code.' });
     const resetToken = uuidv4();
     await store.setPasswordResetToken(reset.id, resetToken);
     res.json({ success: true, resetToken });
   });
 
   router.post('/api/auth/forgot-password/reset', resetLimiter, async (req, res) => {
-    const { email, resetToken, newPassword } = req.body || {};
-    if (!isValidEmail(email) || !resetToken || !isStrongEnoughPassword(newPassword)) {
-      return res.status(400).json({ error: PASSWORD_RULE_TEXT });
+    const { email, resetToken, newPassword, groupId } = req.body || {};
+    const weak = passwordProblem(newPassword);
+    if (!isValidEmail(email) || !resetToken || weak) {
+      return res.status(400).json({ error: weak || 'Invalid or expired reset link.' });
     }
     const matches = await store.findGroupsBySellerEmail(email.trim());
-    const group = matches[0];
+    const group = pickGroup(matches, groupId);
     if (!group) return res.status(400).json({ error: 'Invalid or expired reset link.' });
     const consumed = await store.consumePasswordResetByToken(group.id, resetToken);
     if (!consumed) return res.status(400).json({ error: 'Invalid or expired reset link.' });
     await store.updateGroup(group.id, { seller_password_hash: hashPassword(newPassword), seller_failed_logins: 0, seller_locked_until: null });
-    await revokeAllSellerTokens(store, await store.getGroup(group.id)); // a reset signs every device out
+    await store.deleteSellerSessions(group.id); // every device must sign in again with the new password
     res.json({ success: true });
   });
 
@@ -316,9 +314,7 @@ function buildRouter() {
     status: 'ok',
     time: new Date().toISOString(),
     version: require('./package.json').version,
-    build: 'transaction-desk-2026-10',
-    emailConfigured: E.isEmailConfigured(),
-    translationProvider: translateProvider()
+    build: 'transaction-desk-2026-10'
   }));
 
   return router;
