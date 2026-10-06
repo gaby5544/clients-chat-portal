@@ -109,7 +109,7 @@ module.exports = { generateTransactionPdf };
 // ---------------------------------------------------------------------------
 const SYMBOL = { USD: '$', GBP: '£', EUR: '€' };
 function money(amount, ccy) {
-  const n = Number(amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const n = Number(amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   return SYMBOL[ccy] ? `${SYMBOL[ccy]}${n}` : `${n} ${ccy || ''}`.trim();
 }
 const METHOD_LABEL = { bank_transfer: 'Bank transfer', wire: 'Wire transfer (SWIFT)', crypto: 'Cryptocurrency', card: 'Card payment', cheque: 'Cheque', cash: 'Cash', other: 'Other', bank: 'Bank transfer' };
@@ -133,122 +133,124 @@ function flowRow(doc, y, cols) {
   return y + tallest;
 }
 
-// Plain-text-safe country (Helvetica cannot draw flag emoji).
-function asciiSafe(t) { return String(t == null ? '' : t).replace(/[^\x20-\x7E -ÿ–—•…€]/g, ''); }
-
-const STAGE_TITLES = ['Payment received', 'Payer verification', 'Authenticity review', 'Payment confirmed', 'Funds in seller vault account'];
-
-function generateFundsReceiptPdf(res, { kind, record, group, raw }) {
+function generateFundsReceiptPdf(res, { kind, record, group }) {
+  const crypto = require('crypto');
   const isIncoming = kind === 'incoming';
   const ref = record.ref;
-  const doc = new PDFDocument({ size: 'A4', margin: 0, info: { Title: `${isIncoming ? 'Incoming funds' : 'Withdrawal'} receipt ${ref}`, Author: 'Quantum Secure Transaction Desk' } });
+  const accountId = group.seller_account_id || '—';
+  const holder = (group.seller_full_name || group.name || '').replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"');
+  const ccy = group.seller_currency;
+  const doc = new PDFDocument({ size: 'A4', margin: 0, info: { Title: `${ref} — Receipt`, Author: 'Quantum Secure Transaction Desk', Subject: `Receipt for Account ${accountId}` } });
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `attachment; filename="${ref}-receipt.pdf"`);
   doc.pipe(res);
 
-  const W_PAGE = doc.page.width; const L = 50; const R = 310; const W = 230; const FULL = 495;
-  const accountId = group.seller_account_id || record.targetAccountId || record.sellerAccountId || '';
-  const holder = asciiSafe(String(group.seller_full_name || group.name).replace(/&#x2F;/g, '/').replace(/&#39;/g, "'").replace(/&amp;/g, '&'));
+  const PW = doc.page.width; const PH = doc.page.height; const L = 48; const CW = PW - 96;
+  const GOLD = '#c9a44c'; const INK = '#0b1020'; const PAPER = '#f7f8fb'; const GREEN = '#0f9d6b'; const AMBER = '#c58a12'; const RED = '#c0392b';
+
+  // ---- Statement of status ----
+  let statusText; let statusColor;
+  if (isIncoming) {
+    if (record.status === 'credited') { statusText = 'RECEIVED & CREDITED'; statusColor = GREEN; }
+    else if (record.status === 'held_in_vault') { statusText = 'RECEIVED · HELD IN VAULT'; statusColor = AMBER; }
+    else { statusText = 'REVERSED'; statusColor = RED; }
+  } else { statusText = 'COMPLETED'; statusColor = GREEN; }
 
   // ---- Header ----
-  doc.rect(0, 0, W_PAGE, 132).fill(NAVY);
-  doc.rect(0, 0, W_PAGE, 5).fillColor(CYAN).fill();
-  doc.rect(W_PAGE * 0.55, 0, W_PAGE * 0.45, 5).fillColor(VIOLET).fill();
-  doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(19).text('QUANTUM SECURE', L, 30, { characterSpacing: 1.5 });
-  doc.fillColor('#ffffff').font('Helvetica').fontSize(11).text('TRANSACTION DESK', L, 53, { characterSpacing: 3 });
-  doc.fillColor(CYAN).font('Helvetica-Bold').fontSize(10).text(isIncoming ? 'OFFICIAL RECEIPT — INCOMING FUNDS' : 'OFFICIAL RECEIPT — WITHDRAWAL', L, 88, { characterSpacing: 1 });
-  doc.fillColor('#9aa5b8').font('Helvetica').fontSize(9).text(`Reference ${ref}   •   Issued ${fdate(new Date())}`, L, 106);
-  // seal
-  const cx = W_PAGE - 90; const cy = 66;
-  doc.circle(cx, cy, 36).lineWidth(1.5).strokeColor(CYAN).stroke();
-  doc.circle(cx, cy, 31).lineWidth(0.6).strokeColor('#4b5a73').stroke();
-  doc.fillColor(CYAN).font('Helvetica-Bold').fontSize(8).text('VERIFIED', cx - 36, cy - 12, { width: 72, align: 'center', characterSpacing: 1.5 });
-  doc.fillColor('#ffffff').font('Helvetica').fontSize(7).text(isIncoming ? 'ESCROW' : 'PAYOUT', cx - 36, cy + 1, { width: 72, align: 'center', characterSpacing: 1 });
-  doc.fillColor('#9aa5b8').fontSize(7).text('SETTLED', cx - 36, cy + 11, { width: 72, align: 'center', characterSpacing: 1 });
+  doc.rect(0, 0, PW, 132).fill(INK);
+  doc.rect(0, 0, PW, 5).fill(GOLD);
+  doc.rect(0, 132, PW, 2).fill(GOLD);
+  doc.circle(L + 16, 52, 16).lineWidth(1.5).strokeColor(GOLD).stroke();
+  doc.font('Helvetica-Bold').fontSize(15).fillColor(GOLD).text('Q', L + 11, 44);
+  doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(15).text('QUANTUM SECURE', L + 44, 36, { characterSpacing: 1.5 });
+  doc.fillColor('#9aa5b8').font('Helvetica').fontSize(9).text('TRANSACTION DESK  ·  FUNDS & SETTLEMENT', L + 44, 56, { characterSpacing: 1.2 });
+  doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(22).text(isIncoming ? 'PAYMENT RECEIPT' : 'WITHDRAWAL RECEIPT', L, 86, { characterSpacing: 1 });
+  doc.fillColor('#9aa5b8').font('Helvetica').fontSize(9).text(`Issued ${fdate(new Date())}`, L, 114);
+  // status stamp
+  const stW = doc.widthOfString(statusText) + 34;
+  doc.roundedRect(PW - L - stW, 44, stW, 26, 13).fill(statusColor);
+  doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(9).text(statusText, PW - L - stW, 53, { width: stW, align: 'center', characterSpacing: 0.8 });
 
+  // ---- Account holder strip ----
   let y = 156;
-  const ensure = (h) => { if (y + h > doc.page.height - 80) { doc.addPage(); y = 50; } };
-  const heading = (t) => { ensure(60); doc.font('Helvetica-Bold').fontSize(12).fillColor(TEXT_MAIN).text(t, L, y); doc.moveTo(L, y + 18).lineTo(L + 40, y + 18).strokeColor(CYAN).lineWidth(2).stroke(); y += 28; };
-  const rule = () => { doc.moveTo(L, y).lineTo(545, y).strokeColor(BORDER).lineWidth(1).stroke(); y += 18; };
+  doc.roundedRect(L, y, CW, 70, 8).fill(PAPER);
+  doc.roundedRect(L, y, CW, 70, 8).lineWidth(0.8).strokeColor(BORDER).stroke();
+  const cell = (x, w, label, value, big) => {
+    doc.font('Helvetica-Bold').fontSize(7.5).fillColor(TEXT_MUTED).text(label.toUpperCase(), x, y + 14, { width: w, characterSpacing: 0.6 });
+    doc.font(big ? 'Helvetica-Bold' : 'Helvetica').fontSize(big ? 15 : 11).fillColor(big ? INK : TEXT_MAIN).text(value || '—', x, y + 29, { width: w, lineBreak: false, ellipsis: true });
+  };
+  cell(L + 18, 170, 'Account holder', holder);
+  cell(L + 200, 150, 'Account ID', accountId, true);
+  cell(L + 372, CW - 390, 'Receipt reference', ref);
+  y += 90;
 
-  // ---- Amount card ----
-  const converted = record.amountCurrency !== group.seller_currency;
-  const cardH = converted ? 92 : 72;
-  doc.roundedRect(L, y, FULL, cardH, 10).fillColor('#f0f9ff').fill();
-  doc.roundedRect(L, y, FULL, cardH, 10).strokeColor(CYAN).lineWidth(1.2).stroke();
-  doc.rect(L, y + 10, 4, cardH - 20).fillColor(VIOLET).fill();
-  doc.font('Helvetica-Bold').fontSize(9).fillColor(TEXT_MUTED).text(isIncoming ? 'AMOUNT RECEIVED & CREDITED' : 'AMOUNT PAID OUT', L + 22, y + 14, { characterSpacing: 1 });
-  doc.font('Helvetica-Bold').fontSize(26).fillColor(VIOLET).text(money(record.amount, record.amountCurrency), L + 22, y + 28);
-  if (converted) {
-    doc.font('Helvetica').fontSize(9).fillColor(TEXT_MUTED).text(`${isIncoming ? 'Credited to' : 'Debited from'} your ${group.seller_currency} account as ${money(record.amountLedger, group.seller_currency)} (indicative rate ${Number(record.fxRate || 1).toFixed(4)}).`, L + 22, y + 65, { width: 440 });
+  // ---- Amount hero ----
+  const converted = record.amountCurrency !== ccy;
+  const heroH = converted ? 96 : 78;
+  doc.roundedRect(L, y, CW, heroH, 10).fill(INK);
+  doc.roundedRect(L, y, 6, heroH, 3).fill(GOLD);
+  doc.font('Helvetica-Bold').fontSize(8.5).fillColor('#9aa5b8').text(isIncoming ? 'AMOUNT RECEIVED' : 'AMOUNT WITHDRAWN', L + 26, y + 16, { characterSpacing: 1 });
+  doc.font('Helvetica-Bold').fontSize(28).fillColor('#ffffff').text(money(record.amount, record.amountCurrency), L + 26, y + 31, { lineBreak: false });
+  if (isIncoming && record.feeAmount > 0) {
+    doc.font('Helvetica').fontSize(9).fillColor('#9aa5b8').text(`Fee ${money(record.feeAmount, record.amountCurrency)}  ·  Net ${money(record.amount - record.feeAmount, record.amountCurrency)}`, L + 26, y + 66, { lineBreak: false });
   }
-  y += cardH + 22;
+  if (converted) {
+    doc.font('Helvetica').fontSize(9).fillColor(GOLD).text(`${isIncoming ? 'Credited' : 'Debited'} to your ${ccy} account as ${money(record.amountLedger, ccy)}  (indicative rate ${Number(record.fxRate || 1).toFixed(4)})`, L + 26, y + heroH - 22, { width: CW - 52 });
+  }
+  y += heroH + 22;
 
-  // ---- Account ----
-  heading('Account');
-  y = flowRow(doc, y, [{ x: L, w: W, label: 'Account holder', value: holder }, { x: R, w: W, label: 'Account ID', value: accountId }]);
-  y = flowRow(doc, y, [{ x: L, w: W, label: 'Account type', value: group.seller_account_type || 'Standard account' }, { x: R, w: W, label: 'Account currency', value: group.seller_currency }]);
-  rule();
+  const heading = (title) => {
+    doc.font('Helvetica-Bold').fontSize(8.5).fillColor(GOLD).text(title.toUpperCase(), L, y, { characterSpacing: 1.4 });
+    doc.moveTo(L, y + 14).lineTo(PW - L, y + 14).lineWidth(0.8).strokeColor(BORDER).stroke();
+    y += 24;
+  };
+  const W2 = (CW - 24) / 2; const R2 = L + W2 + 24;
 
   if (isIncoming) {
-    heading('Payment');
-    y = flowRow(doc, y, [{ x: L, w: W, label: 'Received from', value: asciiSafe(record.payerName) }, { x: R, w: W, label: 'Payer country', value: asciiSafe(record.payerCountry) }]);
-    y = flowRow(doc, y, [{ x: L, w: FULL, label: 'Payment for', value: asciiSafe(record.purpose) }]);
+    heading('Payment details');
+    y = flowRow(doc, y, [{ x: L, w: W2, label: 'Received from', value: record.payerName }, { x: R2, w: W2, label: 'Payer country', value: record.payerCountry }]);
+    y = flowRow(doc, y, [{ x: L, w: CW, label: 'Payment for', value: record.purpose }]);
+    heading('Transfer information');
     const methodText = `${METHOD_LABEL[record.method] || record.method}${record.asset ? ` — ${record.asset}${record.network ? ` (${record.network})` : ''}` : ''}`;
-    y = flowRow(doc, y, [{ x: L, w: W, label: 'Payment method', value: methodText }, { x: R, w: W, label: 'Date received', value: fdate(record.receivedAt) }]);
-    y = flowRow(doc, y, [{ x: L, w: W, label: 'Bank reference / transaction hash', value: record.externalRef }, { x: R, w: W, label: 'Invoice / order reference', value: record.invoiceRef }]);
-    if (record.sharedNote) y = flowRow(doc, y, [{ x: L, w: FULL, label: 'Note from the Desk', value: asciiSafe(record.sharedNote) }]);
-    rule();
-
-    // Escrow review trail
-    heading('Escrow review trail');
-    const times = (raw && Array.isArray(raw.review_stage_times)) ? raw.review_stage_times : [];
-    const reviewed = raw && raw.review_mode && raw.review_mode !== 'none';
-    if (reviewed) {
-      STAGE_TITLES.forEach((t, i) => {
-        ensure(34);
-        const when = times.find((x) => Number(x.stage) === i + 1);
-        doc.circle(L + 8, y + 8, 7).fillColor('#10b981').fill();
-        doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(9).text('✓', L + 4.2, y + 4.6, { lineBreak: false });
-        if (i < 4) doc.moveTo(L + 8, y + 16).lineTo(L + 8, y + 32).strokeColor('#a7f3d0').lineWidth(1.5).stroke();
-        doc.font('Helvetica-Bold').fontSize(10).fillColor(TEXT_MAIN).text(`${i + 1}. ${t}`, L + 26, y, { continued: false });
-        let sub = when ? `Passed ${fdate(when.at)}` : 'Passed';
-        if (i === 3) sub = `Funds confirmed by escrow • Funds transferred to the seller account ${accountId}${when ? ` • ${fdate(when.at)}` : ''}`;
-        if (i === 4) sub = `Funds credited to the seller${record.statusHistory && record.statusHistory.length ? ` • ${fdate(record.statusHistory[record.statusHistory.length - 1].at)}` : ''}`;
-        doc.font('Helvetica').fontSize(8.5).fillColor(TEXT_MUTED).text(sub, L + 26, y + 13, { width: 460 });
-        y += 34;
-      });
-      y += 4;
-    } else {
-      doc.font('Helvetica').fontSize(10).fillColor(TEXT_MAIN).text(`Funds credited directly to the seller account ${accountId}.`, L, y, { width: FULL });
-      y += 28;
+    y = flowRow(doc, y, [{ x: L, w: W2, label: 'Payment method', value: methodText }, { x: R2, w: W2, label: 'Date received', value: fdate(record.receivedAt) }]);
+    if (record.method !== 'crypto' && (record.bankName || record.senderAccount)) {
+      y = flowRow(doc, y, [{ x: L, w: W2, label: 'Sending bank', value: record.bankName }, { x: R2, w: W2, label: 'Sender account', value: record.senderAccount ? maskTail(record.senderAccount) : '' }]);
     }
-    rule();
-    heading('Settlement');
-    const last = (record.statusHistory || []).slice(-1)[0];
-    y = flowRow(doc, y, [{ x: L, w: W, label: 'Status', value: record.status === 'credited' ? 'Credited to the seller account' : record.status }, { x: R, w: W, label: 'Credited on', value: fdate(last && last.at) }]);
-    y = flowRow(doc, y, [{ x: L, w: FULL, label: 'Funds transferred to the seller account', value: accountId }]);
+    y = flowRow(doc, y, [{ x: L, w: CW, label: record.method === 'crypto' ? 'Transaction hash' : 'Bank reference', value: record.externalRef }]);
+    if (record.status === 'held_in_vault') {
+      y += 2;
+      doc.roundedRect(L, y, CW, 38, 6).fill('#fff7e6');
+      doc.font('Helvetica').fontSize(9).fillColor('#7a5a10').text('These funds have been received and are held in your vault account while they pass the Desk\'s verification stages. They are released to your available balance automatically when the final stage completes.', L + 14, y + 8, { width: CW - 28 });
+      y += 50;
+    }
   } else {
-    heading('Withdrawal');
-    y = flowRow(doc, y, [{ x: L, w: W, label: 'Requested on', value: fdate(record.createdAt) }, { x: R, w: W, label: 'Completed on', value: fdate(record.updatedAt) }]);
+    heading('Withdrawal details');
+    y = flowRow(doc, y, [{ x: L, w: W2, label: 'Requested on', value: fdate(record.createdAt) }, { x: R2, w: W2, label: 'Completed on', value: fdate(record.updatedAt) }]);
     const isCrypto = record.method === 'crypto';
-    y = flowRow(doc, y, [{ x: L, w: W, label: 'Method', value: isCrypto ? `Cryptocurrency — ${record.asset}${record.network ? ` (${record.network})` : ''}` : 'Bank transfer' }, { x: R, w: W, label: 'Status', value: 'Completed' }]);
+    y = flowRow(doc, y, [{ x: L, w: W2, label: 'Method', value: isCrypto ? `Cryptocurrency — ${record.asset}${record.network ? ` (${record.network})` : ''}` : 'Bank transfer' }, { x: R2, w: W2, label: 'Status', value: 'Completed' }]);
+    heading('Destination');
     if (isCrypto) {
-      y = flowRow(doc, y, [{ x: L, w: FULL, label: 'Destination wallet', value: record.destination }]);
+      y = flowRow(doc, y, [{ x: L, w: CW, label: 'Destination wallet', value: record.destination }]);
     } else {
-      y = flowRow(doc, y, [{ x: L, w: W, label: 'Beneficiary', value: asciiSafe(record.beneficiaryName) }, { x: R, w: W, label: 'Bank', value: asciiSafe(`${record.bankName || ''}${record.bankCountry ? `, ${record.bankCountry}` : ''}`) }]);
-      y = flowRow(doc, y, [{ x: L, w: W, label: 'Account / IBAN', value: maskTail(record.bankAccount) }, { x: R, w: W, label: 'SWIFT / Sort code', value: record.bankSwift }]);
+      y = flowRow(doc, y, [{ x: L, w: W2, label: 'Beneficiary', value: record.beneficiaryName }, { x: R2, w: W2, label: 'Bank', value: `${record.bankName || ''}${record.bankCountry ? `, ${record.bankCountry}` : ''}` }]);
+      y = flowRow(doc, y, [{ x: L, w: W2, label: 'Account / IBAN', value: maskTail(record.bankAccount) }, { x: R2, w: W2, label: 'SWIFT / sort code', value: record.bankSwift }]);
     }
-    if (record.payoutReference) y = flowRow(doc, y, [{ x: L, w: FULL, label: isCrypto ? 'Transaction hash (TXID)' : 'Bank payout reference', value: record.payoutReference }]);
-    if (record.statusReason) y = flowRow(doc, y, [{ x: L, w: FULL, label: 'Note', value: asciiSafe(record.statusReason) }]);
+    if (record.statusReason) y = flowRow(doc, y, [{ x: L, w: CW, label: 'Payout note / reference', value: record.statusReason }]);
   }
 
-  // ---- Footer on every page ----
-  const pages = doc.bufferedPageRange ? null : null;
-  const footerY = doc.page.height - 62;
-  doc.moveTo(L, footerY).lineTo(545, footerY).strokeColor(BORDER).lineWidth(1).stroke();
-  doc.font('Helvetica').fontSize(7.5).fillColor(TEXT_MUTED)
-    .text('This receipt was generated automatically from your Transaction Account ledger and is valid without a signature. Quote the reference above in any correspondence. Queries: complaints@usvistra.com', L, footerY + 10, { width: FULL });
+  // ---- Integrity block ----
+  const fingerprint = crypto.createHash('sha256').update([ref, accountId, record.amount, record.amountCurrency, record.receivedAt || record.createdAt || ''].join('|')).digest('hex').slice(0, 16).toUpperCase().replace(/(.{4})/g, '$1 ').trim();
+  const by = PH - 118;
+  doc.roundedRect(L, by, CW, 40, 6).fill(PAPER);
+  doc.font('Helvetica-Bold').fontSize(7.5).fillColor(TEXT_MUTED).text('DOCUMENT FINGERPRINT', L + 14, by + 9, { characterSpacing: 0.8 });
+  doc.font('Courier-Bold').fontSize(11).fillColor(INK).text(fingerprint, L + 14, by + 21);
+  doc.font('Helvetica').fontSize(8).fillColor(TEXT_MUTED).text(`Account ${accountId}`, PW - L - 200, by + 16, { width: 186, align: 'right' });
+
+  const fy = PH - 62;
+  doc.moveTo(L, fy).lineTo(PW - L, fy).lineWidth(0.8).strokeColor(BORDER).stroke();
+  doc.font('Helvetica').fontSize(7.5).fillColor(TEXT_MUTED).text(
+    `This receipt was generated automatically from the ledger of Transaction Account ${accountId}. Quote the reference ${ref} and your Account ID when contacting the Desk. Questions or complaints: ${process.env.COMPLAINTS_EMAIL || 'complaints@usvistra.com'}. This document is not a bank statement and is valid only with a matching fingerprint on the Desk's records.`,
+    L, fy + 9, { width: CW, align: 'left' });
   doc.end();
 }
 

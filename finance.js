@@ -4,8 +4,6 @@
 // (admin notes, proof files, admin session tokens) are stripped in one place.
 
 const crypto = require('crypto');
-const ER = require('./escrowReview');
-const CD = require('./public/countries');
 
 const CURRENCIES = new Set(['USD', 'GBP', 'EUR']);
 const CRYPTO_ASSETS = new Set(['BTC', 'ETH', 'USDT']);
@@ -24,24 +22,6 @@ function fxRate(from, to) {
 function convertCurrency(amount, from, to) {
   return round2(Number(amount) * fxRate(from, to));
 }
-
-// ---- Universal money display: $2,000,000.00 / £1,250.50 / €9,999.99 (full grouping, 2 decimals) ----
-const CCY_SYMBOL = { USD: '$', GBP: '\u00a3', EUR: '\u20ac' };
-function fmtMoney(amount, ccy) {
-  const n = Number(amount || 0);
-  const body = n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  return CCY_SYMBOL[ccy] ? `${CCY_SYMBOL[ccy]}${body}` : `${body} ${ccy || ''}`.trim();
-}
-
-// ---- Withdrawal statuses: pending | processing | declined | completed (legacy values are mapped) ----
-const WD_STATUSES = ['pending', 'processing', 'declined', 'completed'];
-const WD_LABEL = { pending: 'Pending', processing: 'Processing', declined: 'Declined', completed: 'Completed' };
-function normWdStatus(st) {
-  if (st === 'rejected' || st === 'failed') return 'declined';
-  if (st === 'held_in_vault') return 'pending';
-  return WD_STATUSES.includes(st) ? st : 'pending';
-}
-const INCOMING_LABEL = { in_review: 'Under escrow review', credited: 'Credited', held_in_vault: 'Held in vault', reversed: 'Reversed' };
 
 // ---- Human-friendly references (derived from the record id — no extra column) ----
 const REF_PREFIX = { incoming: 'IN', deposit: 'DP', withdrawal: 'WD' };
@@ -64,22 +44,6 @@ function verifyReceiptSig(kind, id, sig) {
   const given = Buffer.from(sig);
   return expected.length === given.length && crypto.timingSafeEqual(expected, given);
 }
-// ---- Private files (KYC documents, business documents, proof of payment) ----
-// Stored as /uploads/p_<random>.<ext>. They are NEVER served from a bare URL: every link that leaves the server
-// (only to the owning seller or to an admin) carries an HMAC signature and an expiry.
-const PRIVATE_RE = /^\/uploads\/p_[A-Za-z0-9._-]+$/;
-const signPrivateFile = (name, exp) => crypto.createHmac('sha256', RECEIPT_SECRET).update(`file:${name}:${exp}`).digest('hex').slice(0, 40);
-function signFileUrl(url, ttlSec = 6 * 3600) {
-  if (typeof url !== 'string' || !PRIVATE_RE.test(url)) return url || null;
-  const exp = Math.floor(Date.now() / 1000) + ttlSec;
-  return `${url}?exp=${exp}&sig=${signPrivateFile(url.slice('/uploads/'.length), exp)}`;
-}
-function verifyFileSig(name, exp, sig) {
-  const e = Number(exp);
-  if (!Number.isFinite(e) || e < Date.now() / 1000 || typeof sig !== 'string' || sig.length !== 40) return false;
-  const a = Buffer.from(signPrivateFile(name, e)); const b = Buffer.from(sig);
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
-}
 function receiptUrl(kind, id) {
   return `/api/receipts/${kind}/${encodeURIComponent(id)}?sig=${signReceipt(kind, id)}`;
 }
@@ -96,77 +60,92 @@ function safeHistory(history) {
 }
 
 // ---- Seller account state (sensitive: only the seller + finance admins) ----
-function dateOnly(v) {
-  return v ? (v instanceof Date ? v.toISOString() : String(v)).slice(0, 10) : null;
-}
-function plainName(v) { return v == null ? v : String(v).replace(/&#x2F;/g, '/').replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&'); }
+const COMPLAINTS_EMAIL = process.env.COMPLAINTS_EMAIL || 'complaints@usvistra.com';
+const ACCOUNT_TYPE_LABEL = { standard: 'Standard account', business: 'Business account' };
 
-function publicSellerAccount(g, forAdmin) {
-  const country = CD.find(plainName(g.seller_country));
+function dateOnly(v) {
+  if (!v) return null;
+  return (v instanceof Date ? v.toISOString() : String(v)).slice(0, 10);
+}
+function jsonOf(v, fallback) {
+  if (v === null || v === undefined) return fallback;
+  if (typeof v === 'string') { try { return JSON.parse(v); } catch (e) { return fallback; } }
+  return v;
+}
+
+function publicSellerAccount(g, { forAdmin = false } = {}) {
+  const business = jsonOf(g.business_profile, null);
   const out = {
     groupId: g.id,
     groupName: g.name,
     registered: g.seller_registered,
-    fullName: plainName(g.seller_full_name) || null,
+    fullName: g.seller_full_name || null,
     email: g.email_b || null,
+    emailLocked: !!g.seller_email_locked,
+    emailVerified: !!g.seller_email_verified_at,
     phone: g.seller_phone || null,
-    accountId: g.seller_account_id || null,
-    accountType: g.seller_account_type || 'Standard account',
-    language: g.seller_language || 'en',
     currency: g.seller_currency || null,
     currencyLocked: !!g.currency_locked_at,
     dateOfBirth: dateOnly(g.seller_date_of_birth),
-    country: plainName(g.seller_country) || null,
-    countryCode: country ? country.c : null,
-    countryFlag: country ? CD.flagEmoji(country.c) : null,
+    country: g.seller_country || null,
+    countryIso: g.seller_country_iso || null,
+    accountId: g.seller_account_id || null,
+    accountType: g.seller_account_type || 'standard',
+    accountTypeLabel: ACCOUNT_TYPE_LABEL[g.seller_account_type] || 'Standard account',
+    language: g.seller_language || 'en',
+    termsAcceptedAt: g.seller_terms_accepted_at || null,
+    termsVersion: g.seller_terms_version || null,
     registeredAt: g.seller_registered_at || null,
-    onboardingChoice: g.seller_onboarding_choice || null,
     disabled: !!g.seller_disabled,
     disabledReason: g.seller_disabled ? (g.seller_disabled_reason || null) : null,
+    disabledAt: g.seller_disabled ? (g.seller_disabled_at || null) : null,
+    complaintsEmail: COMPLAINTS_EMAIL,
     disbursementEnabled: !!g.disbursement_enabled,
-    disbursementUpdatedAt: g.disbursement_updated_at || null,
     cryptoDepositVerified: !!g.crypto_deposit_verified,
     business: {
       status: g.business_status || 'none',
-      rejectionReason: g.business_status === 'rejected' ? (g.business_rejection_reason || null) : null,
-      submittedAt: g.business_submitted_at || null
+      companyName: business ? business.companyName || null : null,
+      submittedAt: g.business_submitted_at || null,
+      reviewedAt: g.business_reviewed_at || null,
+      rejectionReason: g.business_rejection_reason || null
     },
     kyc: {
       status: g.kyc_status,
       docType: g.kyc_doc_type || null,
-      idFrontUrl: signFileUrl(g.kyc_id_front_url),
-      idBackUrl: signFileUrl(g.kyc_id_back_url),
-      proofAddressUrl: signFileUrl(g.kyc_proof_address_url),
+      idFrontUrl: g.kyc_id_front_url || null,
+      idBackUrl: g.kyc_id_back_url || null,
+      proofAddressUrl: g.kyc_proof_address_url || null,
       proofAddressType: g.kyc_proof_address_type || null,
-      selfieUrl: signFileUrl(g.kyc_selfie_url),
+      selfieUrl: g.kyc_selfie_url || null,
       submittedAt: g.kyc_submitted_at || null,
       reviewedAt: g.kyc_reviewed_at || null,
-      rejectionReason: g.kyc_rejection_reason || null,
-      attempts: Number(g.kyc_attempts || 0)
+      rejectionReason: g.kyc_rejection_reason || null
     },
     balances: {
       available: Number(g.balance_available || 0),
       held: Number(g.balance_held || 0),
+      pending: Number(g.balance_pending || 0),
       totalDeposited: Number(g.total_deposited || 0)
     }
   };
   if (forAdmin) {
-    out.termsAcceptedAt = g.seller_terms_accepted_at || null;
-    out.termsVersion = g.seller_terms_version || null;
-    out.registrationIp = g.seller_registration_ip || null;
-    out.lastIp = g.seller_last_ip || null;
-    out.ipLog = Array.isArray(g.seller_ip_log) ? g.seller_ip_log.slice(-30).reverse() : [];
-    out.blockedIps = Array.isArray(g.seller_blocked_ips) ? g.seller_blocked_ips : [];
+    out.dateOfBirth = dateOnly(g.seller_date_of_birth);
+    out.passwordSet = !!g.seller_password_hash;          // login uses a salted hash; the readable copy is encrypted and only opened via the audited reveal action
+    out.passwordStored = !!g.seller_password_enc;
+    out.passwordAdminAccess = !!g.password_admin_access;
+    out.passwordReveals = jsonOf(g.seller_password_reveals, []).slice(-10);
+    out.passwordChangedAt = g.seller_password_changed_at || g.seller_registered_at || null;
+    out.failedLogins = Number(g.seller_failed_logins || 0);
+    out.lockedUntil = g.seller_locked_until || null;
+    out.ips = jsonOf(g.seller_ip_log, []).map((r) => ({ ...r, blocked: jsonOf(g.seller_blocked_ips, []).includes(r.ip) }));
+    out.blockedIps = jsonOf(g.seller_blocked_ips, []);
+    out.business.profile = business;
     out.kyc.idNumber = g.kyc_id_number || null;
+    out.kyc.idExpiry = dateOnly(g.kyc_id_expiry);
     out.kyc.idName = g.kyc_id_name || null;
     out.kyc.idDob = dateOnly(g.kyc_id_dob);
-    out.kyc.idExpiry = dateOnly(g.kyc_id_expiry);
-    out.kyc.idCountry = g.kyc_id_country || null;
-    out.business.data = g.business_data ? { ...g.business_data, registrationDocUrl: signFileUrl(g.business_data.registrationDocUrl), taxDocUrl: signFileUrl(g.business_data.taxDocUrl), addressDocUrl: signFileUrl(g.business_data.addressDocUrl) } : null;
-    out.cryptoOverrideBy = g.crypto_override_by ? 'Desk Officer' : null;
-  } else {
-    // The seller sees their own ID number only in masked form.
-    out.kyc.idNumber = g.kyc_id_number ? String(g.kyc_id_number).replace(/.(?=.{3})/g, '\u2022') : null;
+    out.kyc.autoResult = jsonOf(g.kyc_auto_result, null);
+    out.cryptoDepositRequiredUsd = g.crypto_deposit_required_usd === null || g.crypto_deposit_required_usd === undefined ? null : Number(g.crypto_deposit_required_usd);
   }
   return out;
 }
@@ -179,57 +158,50 @@ function publicDeposit(d) {
   };
 }
 
-function publicWithdrawal(w, forAdmin) {
-  const status = normWdStatus(w.status);
+function publicWithdrawal(w, { forAdmin = false } = {}) {
   const out = {
     id: w.id, ref: refFor('withdrawal', w.id), groupId: w.group_id, method: w.method, asset: w.asset, network: w.network,
     destination: w.destination, beneficiaryName: w.beneficiary_name, bankName: w.bank_name,
     bankAccount: w.bank_account, bankSwift: w.bank_swift, bankCountry: w.bank_country,
     amount: Number(w.amount), amountCurrency: w.amount_currency, amountLedger: Number(w.amount_ledger),
-    status, statusLabel: WD_LABEL[status], statusReason: w.status_reason,
-    statusHistory: safeHistory(w.status_history).map((h) => ({ ...h, status: normWdStatus(h.status), statusLabel: WD_LABEL[normWdStatus(h.status)] })),
-    payoutReference: w.payout_reference || null, sellerAccountId: w.seller_account_id || null,
+    status: w.status, statusReason: w.status_reason, statusHistory: safeHistory(w.status_history),
     createdAt: w.created_at, updatedAt: w.updated_at,
-    receiptUrl: status === 'completed' ? receiptUrl('withdrawal', w.id) : null
+    sellerAccountId: w.seller_account_id || null,
+    emailConfirmed: !!w.email_confirmed_at,
+    receiptUrl: w.status === 'completed' ? receiptUrl('withdrawal', w.id) : null
   };
   if (forAdmin) out.requestIp = w.request_ip || null;
   return out;
 }
 
-// Incoming funds recorded by the Desk. Sellers get everything about the payment
-// itself plus the escrow review in its SAFE form (no timers, ever); only admins
-// additionally get the internal note, the proof file, the payer's contact
-// details, who recorded it and the full review console state.
-function publicIncoming(i, forAdmin, nowMs) {
-  const accountId = i.target_account_id || null;
+// Incoming funds recorded by the Desk. Sellers get everything about the
+// payment itself; only admins additionally get the internal note, the proof
+// file and who recorded it.
+function publicIncoming(i, forAdmin, accountId) {
+  const { publicTrack } = require('./trackingDefs');
   const out = {
     id: i.id, ref: refFor('incoming', i.id), groupId: i.group_id,
-    payerName: i.payer_name, payerCountry: i.payer_country || null, payerType: i.payer_type || null, purpose: i.purpose,
+    payerName: i.payer_name, payerCountry: i.payer_country || null, purpose: i.purpose,
     method: i.method, asset: i.asset || null, network: i.network || null, externalRef: i.external_ref || null,
-    invoiceRef: i.invoice_ref || null, targetAccountId: accountId,
+    bankName: i.bank_name || null, senderAccount: i.sender_account || null, feeAmount: Number(i.fee_amount || 0),
     amount: Number(i.amount), amountCurrency: i.amount_currency, amountLedger: Number(i.amount_ledger),
     fxRate: Number(i.fx_rate || 1), receivedAt: i.received_at,
-    status: i.status, statusLabel: INCOMING_LABEL[i.status] || i.status, statusReason: i.status_reason || null,
-    statusHistory: safeHistory(i.status_history),
-    sharedNote: i.note_shared && i.internal_note ? i.internal_note : null,
+    status: i.status, statusReason: i.status_reason || null, statusHistory: safeHistory(i.status_history),
     createdAt: i.created_at, updatedAt: i.updated_at,
-    receiptUrl: i.status === 'credited' ? receiptUrl('incoming', i.id) : null,
-    review: forAdmin ? ER.adminView(i, accountId, nowMs) : ER.sellerView(i, accountId, nowMs)
+    track: publicTrack(i, { accountId, forAdmin: !!forAdmin }),
+    receiptUrl: ['credited', 'held_in_vault'].includes(i.status) ? receiptUrl('incoming', i.id) : null
   };
   if (forAdmin) {
     out.payerEmail = i.payer_email || null;
-    out.payerPhone = i.payer_phone || null;
-    out.payerBank = i.payer_bank || null;
-    out.walletAddress = i.wallet_address || null;
     out.internalNote = i.internal_note || null;
-    out.noteShared = !!i.note_shared;
-    out.proofUrl = signFileUrl(i.proof_url);
+    out.noteSharedWithBuyer = !!i.note_shared_with_buyer;
+    out.proofUrl = i.proof_url || null;
   }
   return out;
 }
 
 module.exports = {
-  CURRENCIES, CRYPTO_ASSETS, FX_TO_USD, round2, fxRate, convertCurrency, fmtMoney, CCY_SYMBOL, WD_STATUSES, WD_LABEL, INCOMING_LABEL, normWdStatus, plainName,
-  refFor, signReceipt, verifyReceiptSig, receiptUrl, safeHistory, signFileUrl, verifyFileSig,
+  CURRENCIES, CRYPTO_ASSETS, FX_TO_USD, round2, fxRate, convertCurrency,
+  refFor, signReceipt, verifyReceiptSig, receiptUrl, safeHistory,
   publicSellerAccount, publicDeposit, publicWithdrawal, publicIncoming
 };

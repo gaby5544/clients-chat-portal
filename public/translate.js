@@ -235,7 +235,7 @@
   function sameLang(detected, target) { return detected && String(detected).split('-')[0].toLowerCase() === String(target).split('-')[0].toLowerCase(); }
   function autoTranslate(data) {
     if (!autoMsgs || !data) return;
-    var mine = typeof myToken === 'function' && data.senderToken === myToken();
+    var mine = typeof myUid === 'function' && data.senderId === myUid();
     if (mine) return;
     var plain = String(data.text || '').replace(/<[^>]*>/g, '').trim();
     if (plain.length < 2 || !hasLetters(plain)) return;

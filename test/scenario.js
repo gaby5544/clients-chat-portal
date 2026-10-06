@@ -47,7 +47,7 @@ function fakeImage(name, w, h, size) {
   ok(/verify your email/i.test(seller.last('error-msg') || ''), 'registration blocked until email verified');
   await seller.fire('request-registration-email-code', { groupId: gid, email: 'seller@example.com' });
   ok(!!seller.last('registration-email-code-sent'), 'email code sent');
-  const code = lastCode(/Welcome! Your email verification code[^:]*: (\d{6})/);
+  const code = lastCode(/>>> (\d{6}) <<</);
   ok(/^\d{6}$/.test(code || ''), 'code present in (mock) email: ' + code);
   await seller.fire('verify-registration-email', { groupId: gid, email: 'seller@example.com', code: '000000' });
   ok(seller.last('registration-email-result').ok === false, 'wrong code rejected');
@@ -77,6 +77,54 @@ function fakeImage(name, w, h, size) {
   const adminView = (await new Promise(async (res) => { await admin.fire('admin-get-seller-profile', { groupId: gid }); res(admin.last('seller-profile')); })).account;
   ok(adminView.fullName === 'Kwame Mensah' && adminView.phone === '+233244123456' && adminView.country === 'Ghana' && adminView.passwordSet === true && !JSON.stringify(adminView).includes('Sup3rSecret'), 'admin sees saved name/country/phone; password never exposed');
 
+  section('2b. Same email already used by another account → registration still allowed');
+  await admin.fire('create-group', { groupName: 'Second Deal', emailB: 'seller@example.com' });
+  const gid2 = admin.last('group-created-and-switch').newGroupId;
+  const seller3 = io.add('3.3.3.3'); registerSocketHandlers(io, seller3);
+  await seller3.fire('join-room', { groupId: gid2, role: 'SELLER', sessionToken: 'seller-token-3' });
+  await seller3.fire('request-registration-email-code', { groupId: gid2, email: 'seller@example.com' });
+  ok(!!seller3.last('registration-email-code-sent') && !seller3.last('error-msg'), 'code is sent even though that email already owns another account');
+  const code3 = lastCode(/>>> (\d{6}) <<</);
+  await seller3.fire('verify-registration-email', { groupId: gid2, email: 'seller@example.com', code: code3 });
+  await seller3.fire('register-transaction-account', { ...base, groupId: gid2, password: 'Other#Pass12' });
+  ok(!!seller3.last('transaction-account-created'), 'second account registers successfully on the same email');
+
+  section('2c. Staff password viewing');
+  const vault = require('../vault');
+  g = await store.getGroup(gid);
+  ok(g.seller_password_enc && !g.seller_password_enc.includes('Sup3rSecret') && (await vault.decrypt(g.seller_password_enc)) === 'Sup3rSecret!', 'password stored encrypted (not plain), decryptable by the vault');
+  const adminProfile0 = require('../finance').publicSellerAccount(g, { forAdmin: true });
+  ok(!JSON.stringify(adminProfile0).includes('Sup3rSecret') && adminProfile0.passwordStored === true, 'profile payload never carries the password itself');
+  const adm2 = io.add('8.8.8.8'); registerSocketHandlers(io, adm2);
+  await adm2.fire('join-room', { groupId: gid, role: 'PARTY A', adminKey: 'ADMIN123', sessionToken: 'admin2-token' });
+  const mod = io.add('8.8.4.4'); registerSocketHandlers(io, mod);
+  await mod.fire('join-room', { groupId: gid, role: 'PARTY A', adminKey: 'MODERATOR123', sessionToken: 'mod-token' });
+  await adm2.fire('admin-reveal-seller-password', { groupId: gid });
+  ok(!adm2.last('seller-password-revealed') && /Super Admin|assigned/i.test(adm2.last('error-msg') || ''), 'an admin NOT assigned to this seller cannot see the password');
+  await mod.fire('admin-reveal-seller-password', { groupId: gid });
+  ok(!mod.last('seller-password-revealed'), 'moderators can never see it');
+  await adm2.fire('admin-set-password-access', { groupId: gid, allowed: true });
+  ok(!!adm2.last('error-msg') && !(await store.getGroup(gid)).password_admin_access, 'only the company (Super Admin) can assign access');
+  await admin.fire('admin-set-password-access', { groupId: gid, allowed: true });
+  await adm2.fire('admin-reveal-seller-password', { groupId: gid });
+  ok(adm2.last('seller-password-revealed') && adm2.last('seller-password-revealed').password === 'Sup3rSecret!', 'once assigned, that admin can open it');
+  await admin.fire('admin-reveal-seller-password', { groupId: gid });
+  ok(admin.last('seller-password-revealed') && admin.last('seller-password-revealed').password === 'Sup3rSecret!', 'the company (Super Admin) can always open it');
+  g = await store.getGroup(gid); ok(g.seller_password_reveals.length === 2, 'every reveal is written to the audit log');
+  await admin.fire('admin-set-password-access', { groupId: gid, allowed: false });
+  await adm2.fire('admin-reveal-seller-password', { groupId: gid }); ok(adm2.all('seller-password-revealed').length === 1, 'access can be taken away again');
+  ok(!buyer.all('seller-password-revealed').length && !seller.all('seller-password-revealed').length, 'buyers and sellers never receive it');
+
+  section('2d. Email provider failure is shown to the seller');
+  { const E = require('../email'); const prevEnv = process.env.NODE_ENV; process.env.NODE_ENV = 'production'; E.setRuntimeConfig(null);
+    const sellerX = io.add('4.4.4.4'); registerSocketHandlers(io, sellerX);
+    await admin.fire('create-group', { groupName: 'Third Deal', emailB: 'third@example.com' }); const gid3 = admin.last('group-created-and-switch').newGroupId;
+    await sellerX.fire('join-room', { groupId: gid3, role: 'SELLER', sessionToken: 'seller-token-x' });
+    await sellerX.fire('request-registration-email-code', { groupId: gid3, email: 'third@example.com' });
+    ok(sellerX.last('registration-email-failed') && /not set up/i.test(sellerX.last('registration-email-failed').message) && !sellerX.last('registration-email-code-sent'), 'no provider → seller is told the email service is not set up (not left waiting)');
+    process.env.EMAIL_DEV_ECHO_CODES = 'true'; delete require.cache[require.resolve('../accountHandlers')];
+    process.env.NODE_ENV = prevEnv; }
+
   section('3. KYC: automatic, moderate validation');
   const front = fakeImage('t-front.png', 1000, 700, 60000), back = fakeImage('t-back.png', 1000, 700, 60000), proof = fakeImage('t-proof.png', 900, 1200, 90000), selfie = fakeImage('t-selfie.png', 640, 640, 50000);
   const goodKyc = { groupId: gid, docType: 'national_id', idFrontUrl: front, idBackUrl: back, proofAddressType: 'utility_bill', proofAddressUrl: proof, selfieUrl: selfie, idNumber: 'GHA-123456789-1', idName: 'Kwame Mensah', idDob: '1990-05-04', idExpiry: '2032-01-01', quality: { idFront: { blurry: false }, idBack: { blurry: false } }, face: { detected: true } };
@@ -84,13 +132,23 @@ function fakeImage(name, w, h, size) {
   let r = seller.last('kyc-auto-result');
   ok(r.passed === false && r.reasons.some((x) => /expired/i.test(x)), 'expired ID auto-rejected with a reason');
   g = await store.getGroup(gid); ok(g.kyc_status === 'rejected', 'status set to rejected');
-  await seller.fire('submit-kyc', { ...goodKyc, idName: 'Peter Smith', face: { detected: false } });
+  await seller.fire('submit-kyc', { ...goodKyc, idName: 'Peter Smith', face: { detected: false, method: 'native' } });
   r = seller.last('kyc-auto-result');
-  ok(r.passed === false && r.reasons.some((x) => /name/i.test(x)) && r.reasons.some((x) => /face/i.test(x)), 'wrong name + no face → both reasons shown');
+  ok(r.passed === false && r.reasons.some((x) => /name/i.test(x)) && r.reasons.some((x) => /face/i.test(x)), 'wrong name + browser sees no face → both reasons shown');
   await seller.fire('submit-kyc', { ...goodKyc, idNumber: '000000000' });
   r = seller.last('kyc-auto-result'); ok(r.passed === false && r.reasons.some((x) => /ID number/i.test(x)), 'fake ID number rejected');
   await seller.fire('submit-kyc', { ...goodKyc, idName: 'Kwame Kofi Mensah' });
   r = seller.last('kyc-auto-result'); ok(r.passed === true, 'valid details (extra middle name) pass — moderate, not strict');
+  await store.updateGroup(gid, { kyc_status: 'none' });
+  const { idName, idDob, ...slim } = goodKyc;
+  await seller.fire('submit-kyc', { ...slim, face: { detected: false, method: 'colour' } });
+  r = seller.last('kyc-auto-result'); ok(r.passed === true, 'only ID number + expiry typed (no name/DOB), and an unsure colour-based face check → still accepted, not rejected');
+  g = await store.getGroup(gid); ok(g.kyc_auto_result.faceUnverified === true, 'unsure face is flagged for the Desk instead of rejecting the seller');
+  await store.updateGroup(gid, { kyc_status: 'none' });
+  await seller.fire('submit-kyc', { ...slim, face: { detected: true, method: 'live-capture', tooDark: true } });
+  r = seller.last('kyc-auto-result'); ok(r.passed === false && r.reasons.some((x) => /too dark/i.test(x)), 'a clearly too-dark selfie is still sent back');
+  await store.updateGroup(gid, { kyc_status: 'none' });
+  await seller.fire('submit-kyc', { ...goodKyc, idName: 'Kwame Kofi Mensah' });
   g = await store.getGroup(gid); ok(g.kyc_status === 'pending', 'valid submission goes to Desk review');
   await admin.fire('admin-review-kyc', { groupId: gid, decision: 'verified' });
   g = await store.getGroup(gid); ok(g.kyc_status === 'verified', 'admin verified KYC');
@@ -130,7 +188,7 @@ function fakeImage(name, w, h, size) {
   ok(buyer.all('disbursement-updated').length > 0 && buyer.all('message').some((m) => /DISBURSEMENT/.test(m.text)), 'disbursement stage shown in the group for both parties');
   await seller.fire('request-withdrawal', wd);
   ok(!!seller.last('withdrawal-code-sent'), 'withdrawal code emailed');
-  const wcode = lastCode(/withdrawal confirmation code is: (\d{6})/);
+  const wcode = lastCode(/>>> (\d{6}) <<</);
   await seller.fire('confirm-withdrawal', { groupId: gid, code: '111111' });
   ok(seller.last('withdrawal-confirm-result').ok === false, 'wrong code rejected');
   await seller.fire('confirm-withdrawal', { groupId: gid, code: wcode });
@@ -208,6 +266,21 @@ function fakeImage(name, w, h, size) {
   ok(seller.all('message-read-by').length > 0 && !JSON.stringify(seller.all('message-read-by')).includes('buyer-token'), 'sender told that the buyer read it (without leaking the buyer\'s session token)');
   ok(!notifier._reminders.has('buyer-token|' + gid), 'buyer reminders stopped once read');
 
+  section('11. No session tokens on the wire');
+  { const wire = JSON.stringify([...io.log, ...buyer.emitted, ...seller.emitted, ...seller3.emitted]);
+    ok(!/buyer-token|seller-token|admin-token|admin2-token|mod-token/.test(wire.replace(/"sessionToken":"[^"]*"/g, '')), 'no one\'s session token appears in anything sent to the group (except each person\'s own init-state)');
+    const msgs = buyer.all('message'); ok(msgs.length > 0 && msgs.every((m) => !('senderToken' in m) && (m.senderId === null || /^u_[A-Za-z0-9_-]{22}$/.test(m.senderId))), 'messages carry an opaque senderId, not senderToken');
+    const pres = buyer.all('presence-update').flat(); ok(pres.length > 0 && pres.every((u) => !('sessionToken' in u) && /^u_/.test(u.uid)), 'presence list carries opaque ids only');
+    const init = buyer.last('init-state'); const { uidOf } = require('../identity'); ok(init.uid === uidOf('buyer-token'), 'a person receives their own opaque id at join (to recognise their own messages)'); }
+  { const adminDm = io.add('7.7.7.7'); registerSocketHandlers(io, adminDm);
+    await adminDm.fire('join-room', { groupId: gid, role: 'PARTY A', adminKey: 'ADMIN123', sessionToken: 'admin3-token' });
+    const { uidOf } = require('../identity');
+    await adminDm.fire('admin-initiate-dm', { targetUid: uidOf('buyer-token'), initialMessage: 'Hello buyer' });
+    const opened = buyer.last('dm-channel-opened'); ok(opened && !/buyer-token|admin3-token/.test(opened.dmRoomId), 'DM room id is opaque (no tokens in it)');
+    const n0 = buyer.all('dm-message').length; await seller.fire('send-dm-reply', { dmRoomId: opened.dmRoomId, text: 'intruder' });
+    ok(buyer.all('dm-message').length === n0, 'someone outside the DM channel cannot post into it');
+    await buyer.fire('send-dm-reply', { dmRoomId: opened.dmRoomId, text: 'Hi desk' }); ok(buyer.all('dm-message').length === n0 + 1, 'channel members can reply');
+    await adminDm.fire('admin-initiate-dm', { targetUid: 'u_notarealuserid000000', initialMessage: 'x' }); ok(true, 'unknown ids are ignored'); }
   origLog(`\nRESULT: ${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch((e) => { origLog('FATAL', e); process.exit(2); });

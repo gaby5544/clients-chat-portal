@@ -1,7 +1,8 @@
 // Seller Terms of Service & Transaction Policy — shown at registration and
 // accepted with a mandatory checkbox. Bump TERMS_VERSION whenever the wording
 // changes; the version a seller accepted is stored against their account.
-const TERMS_VERSION = '2026-10-v1';
+const TERMS_VERSION = '2026-10-v3';
+const SUPPORT_EMAIL = process.env.SUPPORT_EMAIL || 'support@usvistra.com';
 const COMPLAINTS_EMAIL = process.env.COMPLAINTS_EMAIL || 'complaints@usvistra.com';
 
 const TERMS_SECTIONS = [
@@ -28,12 +29,14 @@ const TERMS_SECTIONS = [
   { title: '7. Prohibited activity', body: [
     'You must not use the account for fraud, money laundering, sanctions evasion, impersonation, or to circumvent the Desk\'s controls; share your login with anyone else; or attempt to disrupt or gain unauthorised access to the service.' ] },
   { title: '8. Security, monitoring and IP addresses', body: [
-    'For your protection the Desk records the IP address used when you register, sign in and request withdrawals, and may block an IP address that appears suspicious. Messages and activity within the transaction group may be retained and reviewed for security, dispute-resolution and compliance purposes.' ] },
+    'For your protection the Desk records the IP address used when you register, sign in and request withdrawals, and may block an IP address that appears suspicious. Messages and activity within the transaction group may be retained and reviewed for security, dispute-resolution and compliance purposes.',
+    'For account recovery and security administration, the Desk keeps your account password in encrypted form. It can be opened only by authorised Desk staff (the company and the administrator assigned to your account), and every time it is opened the event is logged. Never reuse this password on other websites.' ] },
   { title: '9. Fees and currency conversion', body: [
     'Any applicable fees will be shown before you confirm an action. Where a payment is received in a currency different from your account currency it is converted at the rate in force when it is recorded.' ] },
   { title: '10. Suspension, disablement and complaints', body: [
     'The Desk may suspend or disable an account where required for security, compliance or investigation, or where these Terms are breached. You will be notified on screen and by email when your account is disabled or re-enabled.',
-    'If you believe your account was disabled in error, or you wish to raise a complaint, contact ' + COMPLAINTS_EMAIL + '. Please include your Account ID.' ] },
+    'For help with your account, a verification code or a transaction, contact Support at ' + SUPPORT_EMAIL + '.',
+    'If you believe your account was disabled in error, or you wish to raise a formal complaint, write to the Complaints desk at ' + COMPLAINTS_EMAIL + ' and include your Account ID. Complaints are logged, acknowledged and reviewed by a senior officer.' ] },
   { title: '11. Privacy and data protection', body: [
     'Personal data (including identity documents, contact details and IP addresses) is processed only to operate your account, verify your identity, prevent fraud and meet legal obligations, and is retained for as long as the law requires.' ] },
   { title: '12. Limitation of liability', body: [
@@ -45,4 +48,4 @@ const TERMS_SECTIONS = [
 const TERMS_CHECKBOX_LABEL =
   'I have read and agree to the Terms of Service and Transaction Policy, and I confirm that the information I have provided is true and complete.';
 
-module.exports = { TERMS_VERSION, TERMS_SECTIONS, TERMS_CHECKBOX_LABEL, COMPLAINTS_EMAIL };
+module.exports = { SUPPORT_EMAIL, TERMS_VERSION, TERMS_SECTIONS, TERMS_CHECKBOX_LABEL, COMPLAINTS_EMAIL };

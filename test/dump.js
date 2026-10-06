@@ -21,7 +21,7 @@ function img(name, w, h, size) { const b = crypto.randomBytes(size); Buffer.from
   await seller.fire('join-room', { groupId: gid, role: 'SELLER', sessionToken: 'seller-token', lang: 'fr' });
   cut('s1_join');
   await seller.fire('request-registration-email-code', { groupId: gid, email: 'seller@example.com' }); cut('s2_codesent');
-  const c = code(/Welcome! Your email verification code[^:]*: (\d{6})/); out.regCode = c;
+  const c = code(/>>> (\d{6}) <<</); out.regCode = c;
   await seller.fire('verify-registration-email', { groupId: gid, email: 'seller@example.com', code: c }); cut('s3_verified');
   await seller.fire('register-transaction-account', { groupId: gid, fullName: 'Kwame Mensah', password: 'Sup3rSecret!', currency: 'USD', dateOfBirth: '1990-05-04', country: 'Ghana', phoneDial: '233', phoneNumber: '0244123456', language: 'fr', acceptTerms: true, accountType: 'standard', email: 'seller@example.com' });
   cut('s4_registered');
@@ -42,7 +42,7 @@ function img(name, w, h, size) { const b = crypto.randomBytes(size); Buffer.from
   await seller.fire('request-withdrawal', { groupId: gid, method: 'bank', amount: 100, beneficiaryName: 'K Mensah', bankName: 'GCB', bankAccount: '1234567890', bankCountry: 'Ghana' }); cut('s7_blocked');
   await admin.fire('admin-set-disbursement', { groupId: gid, enabled: true });
   await seller.fire('request-withdrawal', { groupId: gid, method: 'bank', amount: 100, beneficiaryName: 'K Mensah', bankName: 'GCB', bankAccount: '1234567890', bankCountry: 'Ghana' }); cut('s8_codesent');
-  const wc = code(/withdrawal confirmation code is: (\d{6})/); out.wdCode = wc;
+  const wc = code(/>>> (\d{6}) <<</); out.wdCode = wc;
   await seller.fire('confirm-withdrawal', { groupId: gid, code: wc }); cut('s9_withdrawn');
   const w = (await store.getWithdrawalsForGroup(gid))[0];
   await admin.fire('admin-advance-withdrawal', { withdrawalId: w.id, toStatus: 'processing' }); cut('s10_processing');

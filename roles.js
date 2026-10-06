@@ -14,10 +14,6 @@ const SUPER_ADMIN_PASSKEY = process.env.SUPER_ADMIN_PASSKEY || 'SUPERADMIN123';
 const ADMIN_PASSKEY = process.env.ADMIN_PASSKEY || 'ADMIN123';
 const MODERATOR_PASSKEY = process.env.MODERATOR_PASSKEY || 'MODERATOR123';
 
-if (!process.env.SUPER_ADMIN_PASSKEY || !process.env.ADMIN_PASSKEY || !process.env.MODERATOR_PASSKEY) {
-  console.warn('[security] One or more admin passkeys are using the built-in defaults. Set SUPER_ADMIN_PASSKEY, ADMIN_PASSKEY and MODERATOR_PASSKEY before going live.');
-}
-
 const LEVEL = { MODERATOR: 1, ADMIN: 2, SUPER_ADMIN: 3 };
 
 /**

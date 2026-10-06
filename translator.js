@@ -35,7 +35,15 @@ function chunkText(text, max) {
   return out;
 }
 
+let libreLangs = null;           // Set of language codes your LibreTranslate server supports
+async function loadLibreLangs() {
+  if (libreLangs || !process.env.LIBRETRANSLATE_URL) return libreLangs;
+  try { const r = await timedFetch(process.env.LIBRETRANSLATE_URL.replace(/\/$/, '') + '/languages'); const d = await r.json(); libreLangs = new Set(d.map((l) => l.code)); } catch (e) { libreLangs = null; }
+  return libreLangs;
+}
 async function viaLibre(text, target, source) {
+  const langs = await loadLibreLangs(); const base = target.split('-')[0] === 'zh' ? 'zh' : target.split('-')[0];
+  if (langs && !langs.has(base)) throw new Error('language not supported by your LibreTranslate');
   const res = await timedFetch(process.env.LIBRETRANSLATE_URL.replace(/\/$/, '') + '/translate', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ q: text, source: source || 'auto', target: target.split('-')[0] === 'zh' ? 'zh' : target.split('-')[0], format: 'text', api_key: process.env.LIBRETRANSLATE_KEY || undefined })
@@ -76,12 +84,62 @@ async function viaMyMemory(text, target, source) {
   return { text: out.join(' '), detected: null };
 }
 
+// ---------------------------------------------------------------------------
+// Privacy controls
+//   LIBRETRANSLATE_URL set  -> text goes ONLY to your own server (private). Third-party
+//                              services are used only if TRANSLATE_ALLOW_THIRD_PARTY=true.
+//   no LibreTranslate       -> third-party services (Google/MyMemory) are used, but
+//                              sensitive details are masked first (TRANSLATE_REDACT, default on).
+//   TRANSLATE_PROVIDER=off  -> translation is disabled entirely; nothing leaves the server.
+// ---------------------------------------------------------------------------
+const redactOn = () => String(process.env.TRANSLATE_REDACT || 'true').toLowerCase() !== 'false';
+const allowThirdParty = () => String(process.env.TRANSLATE_ALLOW_THIRD_PARTY || '').toLowerCase() === 'true';
+
+// Things that must never reach an outside translator: emails, links, phone numbers, long digit
+// strings (account / IBAN / card / ID numbers), crypto wallet addresses and transaction hashes.
+const SENSITIVE = [
+  /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g,                  // email
+  /\bhttps?:\/\/[^\s]+|\bwww\.[^\s]+/gi,                               // links
+  /\b[A-Z]{2}\d{2}(?:[ ]?[A-Z0-9]{4}){2,7}(?:[ ]?[A-Z0-9]{1,4})?\b/g, // IBAN
+  /\b(?:0x)?[A-Fa-f0-9]{32,}\b|\b(?:bc1|[13])[A-HJ-NP-Za-km-z1-9]{25,60}\b|\bT[A-Za-z1-9]{33}\b/g, // hashes / BTC / TRON
+  /\b(?=[A-Za-z0-9]*\d)[A-Za-z0-9]{26,}\b/g,                              // any long mixed token: wallet addresses, hashes, reference IDs
+  /\+?\d[\d\s().-]{7,}\d/g                                             // phone numbers & long digit runs
+];
+function redact(text) {
+  const map = []; let out = String(text);
+  for (const re of SENSITIVE) {
+    out = out.replace(re, (m) => { map.push(m); return `\u27E6${map.length}\u27E7`; });
+  }
+  return { text: out, map };
+}
+function restore(text, map) {
+  if (!map.length) return { text, ok: true };
+  let ok = true;
+  const out = String(text).replace(/\u27E6\s*(\d+)\s*\u27E7/g, (_, n) => (map[n - 1] !== undefined ? map[n - 1] : (ok = false, '')));
+  // Every placeholder must come back exactly once; otherwise the translator mangled it and we show the original instead.
+  for (let i = 1; i <= map.length; i++) { const c = (String(text).match(new RegExp(`\\u27E6\\s*${i}\\s*\\u27E7`, 'g')) || []).length; if (c !== 1) ok = false; }
+  return { text: out, ok };
+}
+
 function providers() {
   const forced = (process.env.TRANSLATE_PROVIDER || '').toLowerCase();
+  if (forced === 'off' || forced === 'none') return [];
   const all = [];
-  if (process.env.LIBRETRANSLATE_URL) all.push(['libre', viaLibre]);
-  all.push(['google', viaGoogle], ['mymemory', viaMyMemory]);
-  return forced ? all.filter(([n]) => n === forced) : all;
+  if (process.env.LIBRETRANSLATE_URL) all.push(['libre', viaLibre, false]);
+  if (!process.env.LIBRETRANSLATE_URL || allowThirdParty()) all.push(['google', viaGoogle, true], ['mymemory', viaMyMemory, true]);
+  return forced ? all.filter(([n]) => n === forced || (forced === 'libre' && n === 'libre')) : all;
+}
+
+function translationStatus() {
+  const list = providers();
+  const outside = list.some(([, , external]) => external);
+  return {
+    enabled: list.length > 0,
+    providers: list.map(([n]) => n),
+    private: list.length > 0 && !outside,
+    redaction: outside && redactOn(),
+    note: !list.length ? 'Translation is switched off.' : !outside ? 'All translation stays on your own server.' : (redactOn() ? 'Text is sent to an outside translation service with emails, links, phone and account numbers masked.' : 'Text is sent to an outside translation service without masking.')
+  };
 }
 
 /** Translate one string. Never throws — on failure returns the original text with ok:false. */
@@ -92,10 +150,15 @@ async function translateText(text, target, source = 'auto') {
   const key = target + '\u0001' + clean;
   const hit = cacheGet(key);
   if (hit) return { ...hit, ok: true, cached: true };
-  for (const [name, fn] of providers()) {
+  for (const [name, fn, external] of providers()) {
     try {
-      const r = await fn(clean, target, source);
-      const val = { text: r.text, detected: r.detected || null };
+      let payload = clean; let map = [];
+      if (external && redactOn()) ({ text: payload, map } = redact(clean));
+      if (external && redactOn() && !payload.replace(/\u27E6\d+\u27E7/g, '').trim()) continue;   // nothing but sensitive data — don't send
+      const r = await fn(payload, target, source);
+      let out = r.text;
+      if (map.length) { const back = restore(out, map); if (!back.ok) throw new Error('placeholder lost'); out = back.text; }
+      const val = { text: out, detected: r.detected || null };
       cacheSet(key, val);
       return { ...val, ok: true, provider: name };
     } catch (err) { /* try the next provider */ }
@@ -149,4 +212,4 @@ async function translateMany(texts, target, source = 'auto', concurrency = 3) {
   return results;
 }
 
-module.exports = { translateText, translateMany, _cache: cache };
+module.exports = { translateText, translateMany, translationStatus, redact, restore, _cache: cache };

@@ -179,16 +179,16 @@ function validateKyc(input, account, now = new Date()) {
   add('id_number', 'ID number format', !!pat && pat.re.test(number) && !looksFakeNumber(number),
     !number ? 'The ID number is missing.' : (pat && !pat.re.test(number)) ? `The ID number looks invalid. ${pat.hint}` : 'The ID number entered does not look genuine. Please copy it exactly as printed on your document.');
 
-  // --- Name must match the registered name ---
-  const nameOk = !!input.idName && namesRoughlyMatch(input.idName, account.fullName);
-  add('id_name', 'Name matches your account', nameOk,
-    `The name on your ID ("${String(input.idName || '').slice(0, 60)}") does not match the name on your account ("${account.fullName}"). Please use the same legal name.`);
-
-  // --- Date of birth ---
-  const dobId = parseDate(input.idDob); const dobAcct = parseDate(account.dateOfBirth);
-  const dobOk = !!dobId && !!dobAcct && dobId.toISOString().slice(0, 10) === dobAcct.toISOString().slice(0, 10);
-  add('id_dob', 'Date of birth matches', dobOk,
-    !dobId ? 'Please enter the date of birth exactly as shown on your ID.' : 'The date of birth on your ID does not match the date of birth on your account.');
+  // --- Name / date of birth: checked only when the seller typed them (they are no longer required) ---
+  if (input.idName) {
+    add('id_name', 'Name matches your account', namesRoughlyMatch(input.idName, account.fullName),
+      `The name on your ID ("${String(input.idName).slice(0, 60)}") does not match the name on your account ("${account.fullName}"). Please use the same legal name.`);
+  }
+  if (input.idDob) {
+    const dobId = parseDate(input.idDob); const dobAcct = parseDate(account.dateOfBirth);
+    add('id_dob', 'Date of birth matches', !!dobId && !!dobAcct && dobId.toISOString().slice(0, 10) === dobAcct.toISOString().slice(0, 10),
+      !dobId ? 'The date of birth entered is not valid.' : 'The date of birth on your ID does not match the date of birth on your account.');
+  }
 
   // --- Expiry ---
   const exp = parseDate(input.idExpiry);
@@ -226,12 +226,16 @@ function validateKyc(input, account, now = new Date()) {
     if (k === 'idBack' && docType === 'passport') continue;
     if (q[k] && q[k].blurry === true) add('blur_' + k, `${label} is sharp`, false, `The ${label} looks blurry. Hold the camera steady, use good light and keep the whole document in frame.`);
   }
+  // Face: a lenient check. We only reject when the browser's own face detector looked and found NO face,
+  // or the photo is clearly too dark. If the fallback (colour-based) check was unsure, the submission still
+  // goes through and is flagged for the Desk to eyeball — nobody is locked out by a machine guess.
   const face = input.face || {};
-  const faceOk = face.detected === true;
-  add('face', 'Face clearly visible', faceOk, 'We could not clearly see your face in the selfie. Look straight at the camera in good light, remove sunglasses or a mask, and keep your whole face inside the oval.');
+  const nativeNo = face.method === 'native' && face.detected === false;
+  add('face', 'Face clearly visible', !nativeNo, 'We could not clearly see your face in the selfie. Look straight at the camera in good light, remove sunglasses or a mask, and keep your whole face inside the oval.');
   if (face.tooDark === true) add('face_light', 'Selfie is well lit', false, 'Your selfie is too dark. Please retake it somewhere brighter.');
+  const faceUnverified = face.detected !== true && !nativeNo && face.tooDark !== true;
 
-  return { passed: reasons.length === 0, reasons, checks, checkedAt: now.toISOString() };
+  return { passed: reasons.length === 0, reasons, checks, faceUnverified, checkedAt: now.toISOString() };
 }
 
 module.exports = {

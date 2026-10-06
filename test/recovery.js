@@ -26,7 +26,7 @@ const lastCode = (re) => { for (let i = logs.length - 1; i >= 0; i--) { const m 
   ok(r.body && r.body.success, 'login works with the current password');
   r = await call('post', '/api/auth/forgot-password/request', { email: 'seller@example.com' });
   ok(r.code === 200, 'forgot-password request accepted');
-  const code = lastCode(/password reset code[^:]*: (\d{6})/);
+  const code = lastCode(/>>> (\d{6}) <<</);
   ok(/^\d{6}$/.test(code || ''), 'a 6-digit reset code was emailed: ' + code);
   r = await call('post', '/api/auth/forgot-password/request', { email: 'nobody@example.com' });
   ok(r.code === 200 && !/not found|no account/i.test(JSON.stringify(r.body)), 'unknown email gets the same answer (no account enumeration)');
@@ -51,7 +51,7 @@ const lastCode = (re) => { for (let i = logs.length - 1; i >= 0; i--) { const m 
   // lockout of guesses
   await call('post', '/api/auth/forgot-password/request', { email: 'seller@example.com' });
   for (let i = 0; i < 5; i++) await call('post', '/api/auth/forgot-password/verify', { email: 'seller@example.com', code: '999999', newPassword: 'NewPassw0rd!2' });
-  r = await call('post', '/api/auth/forgot-password/verify', { email: 'seller@example.com', code: lastCode(/password reset code[^:]*: (\d{6})/), newPassword: 'NewPassw0rd!2' });
+  r = await call('post', '/api/auth/forgot-password/verify', { email: 'seller@example.com', code: lastCode(/>>> (\d{6}) <<</), newPassword: 'NewPassw0rd!2' });
   ok(r.code === 429, 'after 5 wrong guesses the account is locked out of guessing');
   // disabled + blocked ip at login
   await store.updateGroup('g1', { seller_disabled: true, seller_disabled_reason: 'Review' });
@@ -60,5 +60,31 @@ const lastCode = (re) => { for (let i = logs.length - 1; i >= 0; i--) { const m 
   await store.updateGroup('g1', { seller_blocked_ips: ['5.5.5.5'] });
   r = await call('post', '/api/auth/login', { email: 'seller@example.com', password: 'NewPassw0rd!' });
   ok(r.code === 403 && r.body.code === 'ip_blocked', 'blocked IP refused at login');
+  // ---- several accounts on one email ----
+  origLog('\nSeveral accounts on one email');
+  await store.updateGroup('g1', { seller_disabled: false, seller_blocked_ips: [], seller_failed_logins: 0, seller_locked_until: null });
+  await store.createGroupIfMissing('g2', 'Deal Two');
+  await store.updateGroup('g2', { seller_registered: true, email_b: 'seller@example.com', seller_password_hash: hashPassword('NewPassw0rd!'), seller_full_name: 'Test', seller_currency: 'USD', seller_account_id: '22222222222' });
+  r = await call('post', '/api/auth/login', { email: 'seller@example.com', password: 'NewPassw0rd!' });
+  ok(r.body && r.body.multiple === true && r.body.accounts.length === 2 && r.body.sessionToken, 'two accounts with the same password → seller chooses which to open');
+  await store.updateGroup('g2', { seller_password_hash: hashPassword('Different#99') });
+  r = await call('post', '/api/auth/login', { email: 'seller@example.com', password: 'NewPassw0rd!' });
+  ok(r.body && r.body.success && !r.body.multiple && r.body.groupId === 'g1', 'only the account whose password matches is opened');
+  await call('post', '/api/auth/forgot-password/request', { email: 'seller@example.com' });
+  const c2 = lastCode(/>>> (\d{6}) <<</);
+  r = await call('post', '/api/auth/forgot-password/verify', { email: 'seller@example.com', code: c2 }); const tk = r.body.resetToken;
+  r = await call('post', '/api/auth/forgot-password/reset', { email: 'seller@example.com', resetToken: tk, newPassword: 'Shared#Pass77' });
+  ok(r.code === 200 && r.body.accountsUpdated === 2, 'one reset code updates every account on that email');
+  const vault = require('../vault');
+  const g1 = await store.getGroup('g1'); ok((await vault.decrypt(g1.seller_password_enc)) === 'Shared#Pass77', 'encrypted copy is kept in sync after a reset');
+  ok(!String(g1.seller_password_enc).includes('Shared#Pass77'), 'stored value is not plain text');
+  // ---- email provider down ----
+  origLog('\nEmail failures are reported, not hidden');
+  process.env.NODE_ENV = 'production';
+  const E = require('../email'); E.setRuntimeConfig(null);
+  r = await call('post', '/api/auth/forgot-password/request', { email: 'seller@example.com' });
+  ok(r.code === 503 && /not set up/i.test(r.body.error), 'no provider in production → clear error (503), not a silent "sent"');
+  r = await call('post', '/api/auth/forgot-password/request', { email: 'nobody@example.com' });
+  ok(r.code === 200, 'unknown email still gets the neutral answer');
   origLog(`\nRESULT: ${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);
 })().catch((e) => { origLog('FATAL', e); process.exit(2); });

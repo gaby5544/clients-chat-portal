@@ -34,7 +34,7 @@ function getPublicKey() {
 async function sendPushToUser(sessionToken, { title, body, url, tag, requireInteraction }) {
   const subs = await store.getPushSubscriptionsForUser(sessionToken);
   if (!subs.length) return;
-  const payload = JSON.stringify({ title, body, url: url || '/', tag: tag || undefined, requireInteraction: !!requireInteraction });
+  const payload = JSON.stringify({ title, body, url: url || '/', tag: tag || 'qsd-message', requireInteraction: !!requireInteraction });
   await Promise.all(subs.map(async (sub) => {
     try {
       await webpush.sendNotification(

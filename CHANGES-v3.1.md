@@ -1,7 +1,30 @@
-# v3.1 — Change report (item by item)
+# v3.1.1 — Change report (item by item)
+
+> **Read first — your live `email.js` is newer than the one I was given.** The version you pasted from the server (HTML wrapper, `translateOne` from `./translate`, `compose`) does not exist in the zip I received. This package replaces `email.js` with a new system that keeps the same helper names (`isEmailConfigured`, `sendRaw`, `compose`, `wrapHtml`, `codeBlock`) and adds `mailer.js` + `emailTemplate.js`. It does **not** touch your server-side `translate.js` (mine is `translator.js`). If other files of yours call something else from the old `email.js`, paste them and I will merge.
 
 Every item from your fix list is listed below with what was done and where.
 **✅ done · ⚠️ done with a note you should read**
+
+
+## v3.1.1 — your latest requests
+
+| # | Request | Status | What was done |
+|---|---|---|---|
+| 1 | Company + assigned admin can see a seller's password | ⚠️ | Stored **encrypted** (AES-256-GCM, `vault.js`), opened with a **Reveal** button that auto-hides after 30 s and is **logged** (time + role). Allowed for the company (Super Admin) always, and for the **assigned admin** only when the company switches that on for that seller (admins share one passkey, so "assigned" is per seller, not per person). Moderators, buyers and sellers never receive it. The Terms now tell sellers the Desk keeps an encrypted copy. Set `PASSWORD_VAULT_KEY` in your host's environment. Sellers who registered before this update show "send a reset to capture it". |
+| 2 | Emails not sending codes | ✅ | Causes found: no provider in production meant codes were only printed in the log, the default From was a fake domain, and failures were swallowed. Now: **Zoho** (all regions auto-detected, SSL/STARTTLS, From matched to the login mailbox), HTTPS providers (Resend/Brevo/SendGrid), clear plain-English errors, one automatic retry, and the seller is told when delivery fails instead of waiting. Admin window **Email delivery** has Verify connection, Send test and Check deliverability. |
+| 2 | "Email already exists" | ✅ | Removed. One email can own several accounts; sign-in checks the password against each and lets the seller choose; one reset code updates all. |
+| 2 | Never in spam | ⚠️ | Done in code: matching From, Message-ID on your domain, `Auto-Submitted`, plain-text + HTML, no tracking links, calm wording. The rest is DNS (SPF/DKIM/DMARC) which only you can add — **Check deliverability** reads your live DNS and prints the exact records. No one can promise 100 % inbox placement. See `EMAIL-SETUP.md`. |
+| 2 | Vistra HTML for every email | ✅ | Your template rebuilt as bullet-proof tables: VISTRA monogram, tagline, gold rules, signature and footer exactly as supplied. **Quantum Secure Transaction Desk** appears in (1) a service bar under the letterhead, (2) the signature, (3) the footer line. 15 messages written for sellers and buyers (codes, welcome, account notices, KYC, funds, withdrawals, business, conversation). |
+| 2 | Support vs Complaints | ✅ | Two separate cards with their own wording and addresses: **support@usvistra.com** (help) and **complaints@usvistra.com** (formal complaints/reviews). Decision emails (disabled, declined, rejected, reversed) add a Complaints-desk callout. Replies go to Support. I did not invent response-time promises — set `SUPPORT_RESPONSE_TIME` if you want one shown. |
+| 3 | KYC cost / easier | ✅ | **No cost — nothing external is used.** Simplified: only the ID number and expiry date are typed (name/DOB come from registration); the face check no longer rejects on a machine guess, it flags the Desk instead. |
+| 4 | Seller sees only the incoming-fund stages | ✅ | Yes. The seller sees stage names, the blinking active stage and its checks — no timers, speed, mode or controls (unless you tick "show time left"). Everything else is admin-only. Verified by test. |
+| 5 | Turn into a downloadable app | ✅ | Yes — it is now an installable web app (manifest, icon, service worker): Android/desktop show an **Install** button in the header; iPhone: Share → Add to Home Screen. App-store versions need a wrapper plus developer accounts. |
+| – | Session tokens in chat | ✅ | Replaced everywhere with opaque IDs (messages, presence, directory, tasks, DM rooms). Also fixed: anyone could post into a private DM channel. |
+| – | Translation privacy | ✅ | `LIBRETRANSLATE_URL` set → text goes **only** to your server, no outside fallback. Otherwise emails, links, phone/account numbers, wallets and long IDs are **masked before** any outside call and restored after. `TRANSLATE_PROVIDER=off` disables translation. Status shown in the Email delivery window. |
+
+New environment variables: `PASSWORD_VAULT_KEY`, `UID_SECRET`, `ZOHO_REGION`, `EMAIL_FROM_NAME`, `SUPPORT_EMAIL`, `SUPPORT_RESPONSE_TIME`, `APP_URL`, `EMAIL_ALLOW_MOCK`, `EMAIL_DEV_ECHO_CODES` (testing only), `DKIM_SELECTOR`, `TRANSLATE_REDACT`, `TRANSLATE_ALLOW_THIRD_PARTY`.
+
+---
 
 ## Section 1
 
@@ -75,6 +98,6 @@ Behind a proxy the server now trusts one proxy hop so IP logging and rate limits
 ## How this was verified
 `npm run test:offline` (server logic, with stubs for packages that cannot be installed offline) → 73 + 16 checks; `test/ui_test.py` runs the real front-end in headless Chromium against real server events → 94 checks; receipt PDFs and every changed Postgres statement were exercised against stubs. **Not run here:** a live Postgres, SMTP, Socket.IO transport and real push — please run `npm install && npm start` and click through once on your host.
 
-## Things I noticed but did not change
-- Chat messages carry each sender's session token to everyone in the group. It is better to replace it with an opaque ID.
-- Machine translation uses third-party services (Google/MyMemory) unless you host LibreTranslate; message text leaves your server. Set `TRANSLATE_PROVIDER=libre` for full control.
+## Things I noticed (now fixed — see v3.1.1 above)
+- Session tokens in chat → replaced by opaque IDs.
+- Translation privacy → private mode with LibreTranslate, masking otherwise, and an off switch.

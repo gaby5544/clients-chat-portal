@@ -1000,7 +1000,8 @@ renderWithdrawalsQueue = function () {
 
 // ---- Seller profile (everything saved at registration + IP controls) ----
 function openSellerProfile(groupId) { el('spBody').innerHTML = '<p class="ledger-empty">Loading…</p>'; openModal('sellerProfileModal'); socket.emit('admin-get-seller-profile', { groupId }); }
-socket.on('seller-profile', ({ groupId, account: a }) => {
+socket.on('seller-profile', ({ groupId, account: a, viewer }) => {
+  viewer = viewer || {};
   if (el('sellerProfileModal').classList.contains('hidden')) return;
   const row = (k, v) => `<div><span>${k}</span><b>${v === null || v === undefined || v === '' ? '—' : v}</b></div>`;
   const auto = a.kyc.autoResult;
@@ -1014,7 +1015,10 @@ socket.on('seller-profile', ({ groupId, account: a }) => {
       ${row('Country', a.country ? `<span class="flag-inline">${flagHtml(a.countryIso, a.country)} ${escapeHtml(a.country)}</span>` : '')}${row('Account currency', escapeHtml(a.currency || ''))}
       ${row('Language', escapeHtml((QL.findLanguage(a.language) || {}).name || a.language))}${row('Registered', fmtDateTime(a.registeredAt))}
       ${row('Terms accepted', a.termsAcceptedAt ? `${fmtDateTime(a.termsAcceptedAt)} (v${escapeHtml(a.termsVersion || '')})` : '')}
-      ${row('Password', a.passwordSet ? '●●●●●●●● set (hashed — cannot be viewed)' : 'Not set')}${row('Password last changed', fmtDateTime(a.passwordChangedAt))}
+      <div style="grid-column:1/-1"><span>Password</span><b id="spPwBox">${!a.passwordSet ? 'Not set' : !a.passwordStored ? '●●●●●●●● <em style="font-weight:400;color:var(--text-faint)">set before password viewing existed — send a reset to capture it</em>' : viewer.canViewPassword ? `<span id="spPwText" translate="no">●●●●●●●●</span> <button class="admin-btn" id="spPwBtn" onclick="revealSellerPassword('${a.groupId}')"><i class="fa-solid fa-eye"></i> Reveal</button>` : '●●●●●●●● <em style="font-weight:400;color:var(--text-faint)">restricted — only the company or the assigned admin can view</em>'}</b>
+        ${viewer.isSuperAdmin ? `<label class="terms-check" style="margin-top:6px"><input type="checkbox" ${a.passwordAdminAccess ? 'checked' : ''} onchange="socket.emit('admin-set-password-access',{groupId:'${a.groupId}',allowed:this.checked})"> <span>The assigned admin may also view this seller's password</span></label>` : ''}
+        ${(a.passwordReveals || []).length ? `<div class="reg-note">Viewed ${a.passwordReveals.length} time${a.passwordReveals.length > 1 ? 's' : ''} — last: ${fmtDateTime(a.passwordReveals[a.passwordReveals.length - 1].at)} (${escapeHtml(String(a.passwordReveals[a.passwordReveals.length - 1].role).replace('_', ' ').toLowerCase())})</div>` : ''}</div>
+      ${row('Password last changed', fmtDateTime(a.passwordChangedAt))}
       ${row('Failed sign-ins', a.failedLogins)}${row('Locked until', a.lockedUntil ? fmtDateTime(a.lockedUntil) : '')}
       ${row('Balances', `${fmtMoney(a.balances.available, a.currency)} available · ${fmtMoney(a.balances.held, a.currency)} vault · ${fmtMoney(a.balances.pending || 0, a.currency)} pending`)}
     </div>
@@ -1214,3 +1218,155 @@ renderDirectory = function () {
     if (u && u.countryIso) name.insertAdjacentHTML('beforeend', ` <span class="flag-inline" title="${escapeHtml(u.country || '')}">${flagHtml(u.countryIso, u.country)}</span>`);
   });
 };
+
+// ---- Password reveal (company / assigned admin only; the server logs every view) ----
+let pwHideT = null;
+function revealSellerPassword(groupId) { socket.emit('admin-reveal-seller-password', { groupId }); }
+socket.on('seller-password-revealed', (r) => {
+  const t = el('spPwText'), b = el('spPwBtn'); if (!t) return;
+  if (!r.available) { t.textContent = 'Not available'; return; }
+  t.textContent = r.password; if (b) b.style.display = 'none';
+  clearTimeout(pwHideT);
+  pwHideT = setTimeout(() => { const x = el('spPwText'); if (x) x.textContent = '●●●●●●●●'; const y = el('spPwBtn'); if (y) y.style.display = ''; }, (r.hideAfterSec || 30) * 1000);
+  toast('Password shown for ' + (r.hideAfterSec || 30) + ' seconds. This view has been logged.');
+});
+
+// ====================================================================
+// 13. Email delivery settings (admin) + problems made visible
+// ====================================================================
+function openEmailSettings() { socket.emit('admin-get-email-settings'); openModal('emailSettingsModal'); el('emBody').innerHTML = '<p class="ledger-empty">Loading…</p>'; }
+let emState = null;
+socket.on('email-settings', (s) => { emState = s; renderEmailSettings(); });
+async function renderEmailSettings() {
+  const s = emState; if (!s || el('emailSettingsModal').classList.contains('hidden')) return; const st = s.status, sv = s.saved || {}; const edit = s.canEdit;
+  let tr = null; try { tr = (await (await fetch('/api/health')).json()).translation; } catch (e) { /* optional */ }
+  const prov = sv.provider || 'resend';
+  el('emBody').innerHTML = `
+    <div class="gate-banner" style="margin-bottom:12px;${st.configured ? 'background:rgba(34,211,165,.08);border-color:rgba(34,211,165,.3)' : ''}"><i class="fa-solid ${st.configured ? 'fa-circle-check' : 'fa-triangle-exclamation'}" style="color:${st.configured ? 'var(--accent-emerald)' : 'var(--accent-amber)'}"></i>
+      <div><b>${st.configured ? 'Email is set up' : 'Email is NOT set up — sellers cannot receive verification codes'}</b><span>${st.configured ? `Sending through <b>${escapeHtml(st.provider)}</b> (${escapeHtml(st.source)}) from ${escapeHtml(st.from || 'default sender')}.` : 'Choose a provider below, save, then send yourself a test email.'}</span></div></div>
+    ${edit ? `
+    <label class="branding-field">Provider
+      <select id="emProvider" class="message-input" onchange="emProviderChange()">
+        <option value="resend" ${prov === 'resend' ? 'selected' : ''}>Resend (recommended, free tier, works on any host)</option>
+        <option value="brevo" ${prov === 'brevo' ? 'selected' : ''}>Brevo (free tier)</option>
+        <option value="sendgrid" ${prov === 'sendgrid' ? 'selected' : ''}>SendGrid</option>
+        <option value="smtp" ${prov === 'smtp' ? 'selected' : ''}>SMTP / Gmail (may be blocked by some hosts)</option>
+      </select></label>
+    <div id="emKeyBox" class="${prov === 'smtp' ? 'hidden' : ''}"><label class="branding-field">API key<input type="password" id="emApiKey" class="message-input" autocomplete="off" placeholder="${sv.hasKey && prov === sv.provider ? '•••••••• saved — leave blank to keep' : 'Paste your API key'}"></label></div>
+    <div id="emSmtpBox" class="${prov === 'smtp' ? '' : 'hidden'}">
+      <div class="two-col"><label class="branding-field">SMTP host<input type="text" id="emHost" class="message-input" value="${escapeHtml((sv.smtp && sv.smtp.host) || '')}" placeholder="smtp.gmail.com"></label><label class="branding-field">Port<input type="number" id="emPort" class="message-input" value="${escapeHtml(String((sv.smtp && sv.smtp.port) || 587))}"></label></div>
+      <div class="two-col"><label class="branding-field">Username<input type="text" id="emUser" class="message-input" value="${escapeHtml((sv.smtp && sv.smtp.user) || '')}" autocomplete="off"></label><label class="branding-field">Password / app password<input type="password" id="emPass" class="message-input" autocomplete="off" placeholder="${sv.smtp && sv.smtp.hasPass ? '•••••••• saved — leave blank to keep' : ''}"></label></div>
+    </div>
+    <label class="branding-field">From address<input type="text" id="emFrom" class="message-input" value="${escapeHtml(sv.from || '')}" placeholder='Transaction Desk <no-reply@yourdomain.com>'></label>
+    <p class="reg-note">With Resend, until you verify your own domain you can only send to the email you signed up with — use <b>onboarding@resend.dev</b> as the From address for a first test.</p>
+    <div class="reg-actions" style="justify-content:flex-start"><button class="send-btn" onclick="saveEmailSettings()"><i class="fa-solid fa-floppy-disk"></i> Save</button></div>` : '<p class="reg-note">Only the company (Super Admin) can change these settings.</p>'}
+    <div class="sp-sec">Check your setup</div>
+    <div class="lab-actions"><button class="admin-btn" onclick="emVerify()"><i class="fa-solid fa-plug-circle-check"></i> Verify connection</button><button class="admin-btn" onclick="emDeliverability()"><i class="fa-solid fa-shield-halved"></i> Check deliverability (SPF · DKIM · DMARC)</button></div>
+    <div id="emDiag" style="margin-top:10px"></div>
+    <div class="sp-sec">Send a test email</div>
+    <div class="reg-email-row"><input type="email" id="emTestTo" class="message-input" placeholder="you@example.com"><button class="admin-btn" onclick="sendTestEmail()"><i class="fa-solid fa-paper-plane"></i> Send test</button></div>
+    <div class="reg-note" id="emTestResult" style="min-height:18px"></div>
+    ${tr ? `<div class="sp-sec">Translation privacy</div><p class="reg-note" style="margin:0"><i class="fa-solid ${tr.private ? 'fa-lock' : 'fa-globe'}"></i> ${escapeHtml(tr.note)}${tr.enabled && !tr.private ? ' To keep all chat text on your own server, set <b>LIBRETRANSLATE_URL</b> (see DEPLOY notes).' : ''}</p>` : ''}`;
+}
+function emProviderChange() { const p = el('emProvider').value; el('emKeyBox').classList.toggle('hidden', p === 'smtp'); el('emSmtpBox').classList.toggle('hidden', p !== 'smtp'); }
+function saveEmailSettings() {
+  const provider = el('emProvider').value;
+  socket.emit('admin-save-email-settings', { provider, from: el('emFrom').value.trim(), apiKey: provider === 'smtp' ? '' : el('emApiKey').value.trim(), smtp: provider === 'smtp' ? { host: el('emHost').value.trim(), port: el('emPort').value, user: el('emUser').value.trim(), pass: el('emPass').value } : null });
+}
+function sendTestEmail() { const to = el('emTestTo').value.trim(); if (!isValidEmailClient(to)) return toast('Enter an email address to send the test to.', true); el('emTestResult').textContent = 'Sending…'; el('emTestResult').style.color = ''; socket.emit('admin-test-email', { to }); }
+socket.on('email-test-result', (r) => { const n = el('emTestResult'); if (!n) return; n.textContent = r.ok ? `✓ Sent via ${r.provider}. Check the inbox (and spam folder).` : `✗ ${r.error}`; n.style.color = r.ok ? 'var(--accent-emerald)' : 'var(--accent-rose)'; });
+// Warn admins up front if sellers could not receive codes.
+socket.on('init-state', (d) => { if (d.isAdminConfirmed && hasMinRoleClient(d.adminRole, 'ADMIN')) socket.emit('admin-get-email-settings'); });
+let emailWarned = false;
+socket.on('email-settings', (s) => { if (!emailWarned && s.status && !s.status.configured && el('emailSettingsModal').classList.contains('hidden')) { emailWarned = true; toast('Email is not set up — sellers cannot receive verification codes. Open Accounts → Compliance settings → Email delivery.', true); } });
+
+// Registration email problems: tell the seller instead of leaving them waiting.
+socket.on('registration-email-failed', ({ message }) => {
+  reg.sentTo = null; clearInterval(reg.cooldownT);
+  const b = el('txRegSendCodeBtn'); b.disabled = false; b.innerHTML = '<i class="fa-solid fa-paper-plane"></i> Send verification code';
+  el('txRegCodeHint').textContent = message; el('txRegCodeHint').style.color = 'var(--accent-rose)'; toast(message, true);
+});
+socket.on('registration-email-code-sent', ({ devCode }) => { if (devCode) { el('txRegCodeHint').textContent += `  [TEST MODE — your code is ${devCode}]`; } });
+
+// ====================================================================
+// 14. Sign-in with several accounts on one email
+// ====================================================================
+const _doLoginBase = doLogin;
+doLogin = async function () {
+  const email = el('loginEmail').value.trim(), password = el('loginPassword').value;
+  if (!isValidEmailClient(email) || !password) return loginMsg('Enter your email and password.');
+  const r = await postJson('/api/auth/login', { email, password });
+  if (!r.ok) return loginMsg(r.data.error || 'Sign in failed.');
+  sessionStorage.setItem('q_session_token', r.data.sessionToken);
+  if (r.data.multiple) {
+    el('loginPickList').innerHTML = r.data.accounts.map(a => `<button class="next-card" onclick="location.href='/?groupId=${encodeURIComponent(a.groupId)}&role=SELLER'"><span class="next-ico cyan"><i class="fa-solid fa-briefcase"></i></span><span class="next-text"><b>${escapeHtml(a.groupName)}</b><small translate="no">Account ID ${escapeHtml(a.accountId || '—')}${a.disabled ? ' · disabled' : ''}</small></span><i class="fa-solid fa-chevron-right"></i></button>`).join('');
+    loginStep('Pick'); el('loginTitle').textContent = 'Choose your account'; return;
+  }
+  if (r.data.language) localStorage.setItem('q_lang', r.data.language);
+  location.href = `/?groupId=${encodeURIComponent(r.data.groupId)}&role=SELLER`;
+};
+const _loginStepBase = loginStep;
+loginStep = function (which) { ['Signin', 'Forgot', 'Code', 'New', 'Pick'].forEach(s => { const n = el('loginStep' + s); if (n) n.classList.toggle('hidden', s !== which); }); el('loginTitle').textContent = which === 'Signin' ? 'Seller sign in' : which === 'Pick' ? 'Choose your account' : 'Reset your password'; el('loginMsg').textContent = ''; };
+
+// ====================================================================
+// 15. Simpler KYC: only the ID number and expiry date are typed
+// ====================================================================
+renderTxKycWizard = function () {
+  _renderKycWizBase();
+  const last = txKycStep === (window._txWizTotalSteps || 6) - 1;
+  let blk = el('kycIdDetails');
+  if (!last) { if (blk) blk.style.display = 'none'; return; }
+  if (!blk) {
+    blk = document.createElement('div'); blk.id = 'kycIdDetails'; blk.className = 'create-group-form'; blk.style.marginBottom = '12px';
+    blk.innerHTML = `<p class="reg-note" style="margin:0 0 6px;">Last step — two details from your ID. We use your name and date of birth from registration, so there is nothing else to type.</p>
+      <div class="two-col"><label class="branding-field">ID / document number<input type="text" id="kycIdNumber" class="message-input" autocomplete="off"></label><label class="branding-field">Expiry date<input type="date" id="kycIdExpiry" class="message-input"></label></div>`;
+    el('txWizSummary').parentNode.insertBefore(blk, el('txWizSummary'));
+  }
+  blk.style.display = 'flex'; blk.style.flexDirection = 'column';
+};
+txKycWizardNext = function () {
+  const totalSteps = window._txWizTotalSteps || 6;
+  if (txKycStep === totalSteps - 1) {
+    const steps = txKycStepsForDocType();
+    if (steps.filter(k => !txKycUploads[k]).length) return toast('Please upload every document before submitting.', true);
+    const idNumber = el('kycIdNumber').value.trim(), idExpiry = el('kycIdExpiry').value;
+    if (!idNumber) return toast('Please enter the ID number.', true);
+    if (!idExpiry) return toast('Please enter the ID expiry date.', true);
+    socket.emit('submit-kyc', {
+      groupId: activeGroupId, docType: el('txKycDocType').value, idFrontUrl: txKycUploads.idFront, idBackUrl: txKycUploads.idBack,
+      proofAddressType: el('txKycProofAddressType').value, proofAddressUrl: txKycUploads.proofAddress, selfieUrl: txKycUploads.selfie,
+      idNumber, idExpiry, quality: kycQuality, face: kycFace
+    });
+    closeModal('txKycWizardModal'); toast('Checking your documents…');
+    return;
+  }
+  const key = currentWizStepKey();
+  if (key && !txKycUploads[key]) return toast('Please upload this document before continuing.', true);
+  txKycStep++; renderTxKycWizard();
+};
+
+// ====================================================================
+// 16. Install as an app (Android/desktop prompt, iPhone instructions)
+// ====================================================================
+let deferredInstall = null;
+if ('serviceWorker' in navigator) window.addEventListener('load', () => { navigator.serviceWorker.register('/sw.js').catch(() => {}); });
+const standalone = () => window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferredInstall = e; if (!standalone()) el('installBtn').classList.remove('hidden'); });
+window.addEventListener('appinstalled', () => { deferredInstall = null; el('installBtn').classList.add('hidden'); toast('App installed.'); });
+const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent) && !window.MSStream;
+if (isIos && !standalone()) document.addEventListener('DOMContentLoaded', () => el('installBtn').classList.remove('hidden'));
+async function installApp() {
+  if (deferredInstall) { deferredInstall.prompt(); await deferredInstall.userChoice; deferredInstall = null; el('installBtn').classList.add('hidden'); return; }
+  if (isIos) return showConfirmModal({ title: 'Install on iPhone / iPad', message: 'Tap the Share button in Safari, then “Add to Home Screen”. The app will open full-screen like any other app.' }, () => {});
+  toast('Use your browser menu → “Install app” or “Add to Home screen”.');
+}
+
+function emVerify() { el('emDiag').innerHTML = '<p class="reg-note">Connecting…</p>'; socket.emit('admin-verify-email'); }
+function emDeliverability() { el('emDiag').innerHTML = '<p class="reg-note">Checking your DNS records…</p>'; socket.emit('admin-check-deliverability'); }
+socket.on('email-verify-result', (r) => { const n = el('emDiag'); if (!n) return; n.innerHTML = `<div class="gate-banner" style="margin:0;${r.ok ? 'background:rgba(34,211,165,.08);border-color:rgba(34,211,165,.3)' : ''}"><i class="fa-solid ${r.ok ? 'fa-circle-check' : 'fa-circle-xmark'}" style="color:${r.ok ? 'var(--accent-emerald)' : 'var(--accent-rose)'}"></i><div><b>${r.ok ? 'Connection works' : 'Connection failed'}</b><span>${escapeHtml(r.ok ? r.detail : r.error)}</span></div></div>`; });
+socket.on('email-deliverability-result', (r) => {
+  const n = el('emDiag'); if (!n) return;
+  const ic = { pass: ['fa-circle-check', 'var(--accent-emerald)'], warn: ['fa-triangle-exclamation', 'var(--accent-amber)'], fail: ['fa-circle-xmark', 'var(--accent-rose)'] };
+  n.innerHTML = `<p class="reg-note" style="margin:0 0 6px;"><b>${r.domain ? escapeHtml(r.domain) : 'No domain'}</b> — ${r.ok ? 'authentication looks good. This gives your emails the best chance of reaching the inbox.' : 'fix the items marked ✗ so receivers trust your emails.'}</p>` +
+    r.checks.map(c => `<div class="ip-row" style="align-items:flex-start"><i class="fa-solid ${ic[c.status][0]}" style="color:${ic[c.status][1]};margin-top:3px"></i><div style="flex:1;min-width:0"><b>${escapeHtml(c.name)}</b><div class="reg-note" style="margin:2px 0 0;word-break:break-word">${escapeHtml(c.detail)}</div>${c.fix ? `<div class="reg-note" style="margin:4px 0 0;color:var(--accent-amber);word-break:break-word"><b>Fix:</b> ${escapeHtml(c.fix)}</div>` : ''}</div></div>`).join('');
+});

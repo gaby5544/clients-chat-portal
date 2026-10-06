@@ -16,7 +16,12 @@ const QC = require('./public/countries');
 const QL = require('./public/languages');
 const E = require('./email');
 const { pushSellerState, pushAdminLedger, emitSnapshotTo, alertSellerOffline } = require('./fundsHandlers');
-const { liveSockets } = require('./notifier');
+const vault = require('./vault');
+const EMAIL_DEV_ECHO = String(process.env.EMAIL_DEV_ECHO_CODES || '').toLowerCase() === 'true';
+function emailFailMessage(r) {
+  if (r && r.error === 'not_configured') return 'Our email service is not set up yet, so we cannot send your code. Please contact the Desk Officer.';
+  return 'We could not send the email right now. Please check the address and try again in a minute — if it keeps failing, contact the Desk Officer.';
+}
 
 const limiter = new RateLimiter({ windowMs: 60000, max: Number(process.env.ACCOUNT_RATE_MAX) || 30 });
 const codeLimiter = new RateLimiter({ windowMs: 60000, max: 4 });
@@ -81,6 +86,16 @@ async function verifiedCryptoDepositsUsd(group) {
   return F.convertCurrency(sum, ccyOf(group), 'USD');
 }
 
+/** Load the dashboard-saved email settings (decrypting secrets) into the mailer. */
+async function applyEmailSettings(cfg) {
+  if (!cfg) return E.setRuntimeConfig(null);
+  const out = { provider: cfg.provider, from: cfg.from };
+  if (cfg.apiKeyEnc) out.apiKey = await vault.decrypt(cfg.apiKeyEnc);
+  if (cfg.smtp) out.smtp = { host: cfg.smtp.host, port: cfg.smtp.port, service: cfg.smtp.service, user: cfg.smtp.user, pass: await vault.decrypt(cfg.smtp.passEnc) };
+  E.setRuntimeConfig(out);
+}
+async function loadEmailSettings() { try { await applyEmailSettings(await store.getSetting('email_config', null)); } catch (e) { console.error('[email] could not load saved settings:', e.message); } }
+
 function registerAccountHandlers(io, socket, ctx) {
   const { meta, metaHasMinRole, requireSellerOwnGroup, broadcastGroupsList, postDeskMessage } = ctx;
 
@@ -143,8 +158,6 @@ function registerAccountHandlers(io, socket, ctx) {
       if (group.seller_registered) return socket.emit('error-msg', 'This Transaction Account has already been created.');
       if (!isValidEmail(email)) return socket.emit('error-msg', 'Please enter a valid email address.');
       const target = email.trim().toLowerCase();
-      const taken = (await store.findGroupsBySellerEmail(target)).find((g) => g.id !== group.id);
-      if (taken) return socket.emit('error-msg', 'An account already exists for that email address. Please sign in instead, or use a different email.');
       if (group.reg_email_code_expires) {
         const issuedAt = new Date(group.reg_email_code_expires).getTime() - CODE_TTL_MS;
         if (Date.now() - issuedAt < CODE_COOLDOWN_MS && group.reg_email_target === target) {
@@ -157,7 +170,14 @@ function registerAccountHandlers(io, socket, ctx) {
         reg_email_code_attempts: 0, reg_email_verified: false
       });
       const u = await store.getUser(m.sessionToken);
-      await E.notifyRegistrationCode(target, { code, groupName: group.name, lang: (u && u.language) || 'en' });
+      const sent = await E.notifyRegistrationCode(target, { code, groupName: group.name, lang: (u && u.language) || 'en' });
+      if (!sent.ok) {
+        // Only echo the code on screen for test setups that explicitly opted in AND have no real provider.
+        if (EMAIL_DEV_ECHO && sent.error === 'not_configured') return socket.emit('registration-email-code-sent', { email: target, masked: maskEmail(target), expiresInSec: CODE_TTL_MS / 1000, cooldownSec: CODE_COOLDOWN_MS / 1000, devCode: code });
+        await store.updateGroup(group.id, { reg_email_code_hash: null, reg_email_code_expires: null });
+        socket.emit('registration-email-failed', { message: emailFailMessage(sent) });
+        return;
+      }
       socket.emit('registration-email-code-sent', { email: target, masked: maskEmail(target), expiresInSec: CODE_TTL_MS / 1000, cooldownSec: CODE_COOLDOWN_MS / 1000 });
     } catch (err) { console.error('[request-registration-email-code]', err); socket.emit('error-msg', 'We could not send the code. Please try again.'); }
   });
@@ -205,8 +225,6 @@ function registerAccountHandlers(io, socket, ctx) {
       if (!isValidEmail(p.email)) return socket.emit('error-msg', 'Please enter a valid email address.');
       const email = p.email.trim().toLowerCase();
       if (!group.reg_email_verified || group.reg_email_target !== email) return socket.emit('error-msg', 'Please verify your email address with the code we send you before creating your account.');
-      const taken = (await store.findGroupsBySellerEmail(email)).find((g) => g.id !== group.id);
-      if (taken) return socket.emit('error-msg', 'An account already exists for that email address.');
 
       const country = QC.findCountry(p.country);
       if (!country) return socket.emit('error-msg', 'Please select your country from the list.');
@@ -223,7 +241,7 @@ function registerAccountHandlers(io, socket, ctx) {
       const accountId = await generateAccountId();
       const now = new Date().toISOString();
       await store.updateGroup(group.id, {
-        seller_registered: true, seller_full_name: escapeHtml(cleanName), seller_password_hash: hashPassword(p.password),
+        seller_registered: true, seller_full_name: escapeHtml(cleanName), seller_password_hash: hashPassword(p.password), seller_password_enc: await vault.encrypt(p.password),
         seller_currency: p.currency, seller_date_of_birth: p.dateOfBirth, seller_country: country.name, seller_country_iso: country.iso,
         seller_phone: phone, seller_account_id: accountId, seller_account_type: 'standard', seller_language: language,
         seller_terms_accepted_at: now, seller_terms_version: TERMS_VERSION,
@@ -271,8 +289,8 @@ function registerAccountHandlers(io, socket, ctx) {
       const docFields = {
         kyc_doc_type: docType, kyc_id_front_url: idFrontUrl, kyc_id_back_url: input.idBackUrl, kyc_proof_address_url: proofAddressUrl,
         kyc_proof_address_type: proofAddressType, kyc_selfie_url: selfieUrl, kyc_submitted_at: new Date().toISOString(),
-        kyc_id_number: input.idNumber.toUpperCase(), kyc_id_name: input.idName, kyc_id_expiry: input.idExpiry || null, kyc_id_dob: input.idDob || null,
-        kyc_auto_result: { passed: result.passed, reasons: result.reasons, checks: result.checks, checkedAt: result.checkedAt }
+        kyc_id_number: input.idNumber.toUpperCase(), kyc_id_name: input.idName || null, kyc_id_expiry: input.idExpiry || null, kyc_id_dob: input.idDob || null,
+        kyc_auto_result: { passed: result.passed, reasons: result.reasons, checks: result.checks, faceUnverified: !!result.faceUnverified, checkedAt: result.checkedAt }
       };
       if (!result.passed) {
         await store.updateGroup(group.id, { ...docFields, kyc_status: 'rejected', kyc_rejection_reason: result.reasons.join(' ') });
@@ -417,10 +435,11 @@ function registerAccountHandlers(io, socket, ctx) {
     } catch (err) { console.error('[admin-set-ip-block]', err); }
   });
 
+  const viewerPerms = (g) => ({ canViewPassword: canViewPassword(g), isSuperAdmin: metaHasMinRole('SUPER_ADMIN') });
   socket.on('admin-get-seller-profile', async ({ groupId }) => {
     if (!metaHasMinRole('ADMIN')) return;
     const g = await store.getGroup(String(groupId || ''));
-    if (g) socket.emit('seller-profile', { groupId: g.id, account: adminAccount(g) });
+    if (g) socket.emit('seller-profile', { groupId: g.id, account: adminAccount(g), viewer: viewerPerms(g) });
   });
 
   // The password is stored only as a salted hash and can never be read back — by anyone.
@@ -436,6 +455,84 @@ function registerAccountHandlers(io, socket, ctx) {
       await E.notifyPasswordResetCode(g.email_b, { code, groupName: g.name, lang: lang(g) });
       socket.emit('toast-info', { message: `A password reset code was emailed to ${maskEmail(g.email_b)}.` });
     } catch (err) { console.error('[admin-send-password-reset]', err); socket.emit('error-msg', 'Could not send the reset code.'); }
+  });
+
+  // ---- Staff password viewing -------------------------------------------------
+  // Allowed for: the company (SUPER_ADMIN) always; the assigned admin team (ADMIN tier) only
+  // when the company has switched "assigned admin may view" on for THAT seller. Moderators never.
+  // The password is stored encrypted (vault.js); every reveal is written to an audit list.
+  const canViewPassword = (g) => metaHasMinRole('SUPER_ADMIN') || (metaHasMinRole('ADMIN') && !!g.password_admin_access);
+  socket.on('admin-reveal-seller-password', async ({ groupId }) => {
+    try {
+      if (!metaHasMinRole('ADMIN')) return;
+      if (!limiter.allow(meta().sessionToken)) return tooFast();
+      const g = await store.getGroup(String(groupId || ''));
+      if (!g || !g.seller_registered) return;
+      if (!canViewPassword(g)) return socket.emit('error-msg', 'Only the company (Super Admin) or the admin assigned to this seller can view the password.');
+      const plain = await vault.decrypt(g.seller_password_enc);
+      if (!plain) return socket.emit('seller-password-revealed', { groupId: g.id, available: false });
+      const log = jsonOf(g.seller_password_reveals, []).slice(-49);
+      log.push({ at: new Date().toISOString(), role: meta().adminRole || (metaHasMinRole('SUPER_ADMIN') ? 'SUPER_ADMIN' : 'ADMIN') });
+      await store.updateGroup(g.id, { seller_password_reveals: log });
+      socket.emit('seller-password-revealed', { groupId: g.id, available: true, password: plain, hideAfterSec: 30 });
+      socket.emit('seller-profile', { groupId: g.id, account: adminAccount(await store.getGroup(g.id)), viewer: viewerPerms(await store.getGroup(g.id)) });
+    } catch (err) { console.error('[admin-reveal-seller-password]', err); socket.emit('error-msg', 'Could not open the password.'); }
+  });
+  socket.on('admin-set-password-access', async ({ groupId, allowed }) => {
+    if (!metaHasMinRole('SUPER_ADMIN')) return socket.emit('error-msg', 'Only the company (Super Admin) can assign password access.');
+    const g = await store.getGroup(String(groupId || '')); if (!g) return;
+    await store.updateGroup(g.id, { password_admin_access: !!allowed });
+    const fresh = await store.getGroup(g.id);
+    socket.emit('seller-profile', { groupId: g.id, account: adminAccount(fresh), viewer: viewerPerms(fresh) });
+    socket.emit('toast-info', { message: allowed ? 'The assigned admin can now view this seller\'s password.' : 'Password access removed from the assigned admin.' });
+  });
+
+  // ---- Email delivery settings (Super Admin) ----------------------------------
+  socket.on('admin-get-email-settings', async () => {
+    if (!metaHasMinRole('ADMIN')) return;
+    const saved = await store.getSetting('email_config', null);
+    socket.emit('email-settings', { status: E.emailStatus(), saved: saved ? { provider: saved.provider, from: saved.from || '', hasKey: !!saved.apiKeyEnc, smtp: saved.smtp ? { host: saved.smtp.host || '', port: saved.smtp.port || '', user: saved.smtp.user || '', service: saved.smtp.service || '', hasPass: !!saved.smtp.passEnc } : null } : null, canEdit: metaHasMinRole('SUPER_ADMIN') });
+  });
+  socket.on('admin-save-email-settings', async (p) => {
+    try {
+      if (!metaHasMinRole('SUPER_ADMIN')) return socket.emit('error-msg', 'Only the company (Super Admin) can change email settings.');
+      p = p || {}; const prev = await store.getSetting('email_config', null);
+      if (!['resend', 'brevo', 'sendgrid', 'smtp'].includes(p.provider)) return socket.emit('error-msg', 'Choose an email provider.');
+      const from = sanitizeText(p.from, 200);
+      const cfg = { provider: p.provider, from };
+      if (p.provider === 'smtp') {
+        const s = p.smtp || {};
+        const passEnc = s.pass ? await vault.encrypt(String(s.pass)) : (prev && prev.smtp && prev.smtp.passEnc) || null;
+        if (!(s.service || s.host) || !s.user || !passEnc) return socket.emit('error-msg', 'SMTP needs a host (or service), a username and a password.');
+        cfg.smtp = { host: sanitizeText(s.host, 200), port: Number(s.port) || 587, service: sanitizeText(s.service, 50), user: sanitizeText(s.user, 200), passEnc };
+      } else {
+        const apiKeyEnc = p.apiKey ? await vault.encrypt(String(p.apiKey).trim()) : (prev && prev.provider === p.provider && prev.apiKeyEnc) || null;
+        if (!apiKeyEnc) return socket.emit('error-msg', 'Paste the provider API key.');
+        cfg.apiKeyEnc = apiKeyEnc;
+      }
+      await store.setSetting('email_config', cfg);
+      await applyEmailSettings(cfg);
+      socket.emit('toast-info', { message: 'Email settings saved. Send a test email to confirm.' });
+      socket.emit('email-settings', { status: E.emailStatus(), saved: { provider: cfg.provider, from, hasKey: !!cfg.apiKeyEnc, smtp: cfg.smtp ? { host: cfg.smtp.host, port: cfg.smtp.port, user: cfg.smtp.user, service: cfg.smtp.service, hasPass: true } : null }, canEdit: true });
+    } catch (err) { console.error('[admin-save-email-settings]', err); socket.emit('error-msg', 'Could not save the email settings.'); }
+  });
+  socket.on('admin-test-email', async ({ to }) => {
+    if (!metaHasMinRole('ADMIN')) return;
+    if (!limiter.allow(meta().sessionToken)) return tooFast();
+    if (!isValidEmail(to)) return socket.emit('email-test-result', { ok: false, error: 'Enter a valid email address to send the test to.' });
+    const r = await E.sendTemplated(String(to).trim(), { subject: 'Vistra | Test email', preheader: 'Your email delivery is working.', eyebrow: 'System Check', title: 'Your email delivery is working', badge: { text: 'Delivered', tone: 'success' }, paragraphs: ['This is a test message from the Quantum Secure Transaction Desk. If you are reading it, verification codes and notifications will reach your sellers and buyers.', 'If this message arrived in your spam folder, mark it as “Not spam” and run the deliverability check in your dashboard to see which DNS records are missing.'] });
+    socket.emit('email-test-result', { ok: r.ok, provider: r.provider, error: r.ok ? null : (r.error === 'not_configured' ? 'No email provider is configured yet.' : r.error) });
+  });
+
+  socket.on('admin-verify-email', async () => {
+    if (!metaHasMinRole('ADMIN')) return;
+    if (!limiter.allow(meta().sessionToken)) return tooFast();
+    socket.emit('email-verify-result', await E.verifyConnection());
+  });
+  socket.on('admin-check-deliverability', async () => {
+    if (!metaHasMinRole('ADMIN')) return;
+    if (!limiter.allow(meta().sessionToken)) return tooFast();
+    socket.emit('email-deliverability-result', await E.checkDeliverability());
   });
 
   socket.on('admin-set-disbursement', async ({ groupId, enabled }) => {
@@ -551,10 +648,11 @@ function registerAccountHandlers(io, socket, ctx) {
   async function sendWithdrawalCode(group, draft) {
     const code = generateSixDigitCode();
     pendingWithdrawals.set(meta().sessionToken, { groupId: group.id, draft, codeHash: hashCode(code), expires: Date.now() + CODE_TTL_MS, attempts: 0, issuedAt: Date.now() });
-    await E.notifyWithdrawalCode(group.email_b, {
+    const sent = await E.notifyWithdrawalCode(group.email_b, {
       code, amountText: money(draft.amount, draft.amountCurrency), accountId: group.seller_account_id,
       destination: draft.method === 'crypto' ? `${draft.asset} wallet ${draft.destination.slice(0, 6)}…${draft.destination.slice(-4)}` : `${draft.bankName}`, lang: lang(group)
     });
+    if (!sent.ok) { pendingWithdrawals.delete(meta().sessionToken); return socket.emit('error-msg', emailFailMessage(sent)); }
     socket.emit('withdrawal-code-sent', { masked: maskEmail(group.email_b), expiresInSec: CODE_TTL_MS / 1000, cooldownSec: CODE_COOLDOWN_MS / 1000 });
   }
 
@@ -640,4 +738,4 @@ function registerAccountHandlers(io, socket, ctx) {
   });
 }
 
-module.exports = { registerAccountHandlers, recordSellerIp, isIpBlocked, ipOfSocket, jsonOf, generateAccountId, cryptoPolicy, verifiedCryptoDepositsUsd, pendingWithdrawals };
+module.exports = { loadEmailSettings, applyEmailSettings, registerAccountHandlers, recordSellerIp, isIpBlocked, ipOfSocket, jsonOf, generateAccountId, cryptoPolicy, verifiedCryptoDepositsUsd, pendingWithdrawals };

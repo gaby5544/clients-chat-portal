@@ -30,13 +30,7 @@ For a step-by-step walkthrough on a strong free, always-on option, see
    | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | Optional | For push notifications to survive restarts. Generate once with `npx web-push generate-vapid-keys`. |
    | `CORS_ORIGIN` | Optional | Set to your deployed URL once you know it; `*` is fine while testing. |
    | `EMAIL_SERVICE` / `EMAIL_USER` / `EMAIL_PASS` **or** `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` | Optional | For offline-message and transaction email alerts. Leave unset and the app just logs emails to the console instead. |
-   | `RESEND_API_KEY` **or** `BREVO_API_KEY` **or** `SENDGRID_API_KEY` | Recommended | HTTPS email providers (work even where SMTP ports are blocked). Required for sellers to receive verification and withdrawal codes unless you use SMTP above. |
-   | `EMAIL_FROM` | Required with an email API | `Name <address@your-verified-domain>`. The provider rejects unverified senders; **Admin ▸ Accounts ▸ System status ▸ Send test email** shows the exact error. |
-   | `SUPPORT_EMAIL` / `COMPLAINTS_EMAIL` | Recommended | The two desks shown in every email footer. Use addresses on your sending domain. |
-   | `BRAND_NAME` / `BRAND_MONOGRAM` / `BRAND_TAGLINE` / `COMPANY_ADDRESS` / `APP_URL` | Optional | Email look and the "Open your account" button. |
-   | `TRUST_PROXY_HOPS` | Recommended | Number of proxies in front of the app (default 1). Controls IP detection. Verify in System status. |
-   | `TRUST_CLOUDFLARE` | Optional | `1` if behind Cloudflare. |
-   | `RECEIPT_SECRET` | Recommended | Long random string; signs receipt and private-file links so they survive restarts. |
+   | `EMAIL_FROM` | Optional | Display "from" name/address. |
 
    Full reference with comments: `.env.example`.
 
