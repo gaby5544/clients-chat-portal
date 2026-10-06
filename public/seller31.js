@@ -209,12 +209,12 @@ function rgSendCode() {
   socket.emit('send-register-code', { groupId: activeGroupId, email });
   rgStartResendCountdown(30);
 }
-socket.on('register-code-sent', ({ email, masked, expiresInSec, delivered }) => {
+socket.on('register-code-sent', ({ email, masked, expiresInSec, delivered, mock }) => {
   rgCodeSentTo = email;
   el('rgCodeBox').classList.remove('hidden');
   el('rgCode').value = '';
   el('rgCodeMsg').textContent = delivered === false
-    ? `We could not send an email to ${masked}. Please check the address and try again in a moment.`
+    ? (mock ? `Email delivery is not set up on this server yet, so the code could not be sent. Please contact ${supportEmail()}.` : `We could not send an email to ${masked}. Please check the address and try again in a moment.`)
     : `We sent a 6-digit code to ${masked}. It expires in ${Math.round((expiresInSec || 600) / 60)} minutes — check your spam folder if you cannot see it.`;
   setTimeout(() => el('rgCode').focus(), 50);
 });
@@ -718,11 +718,11 @@ function wdStartResendCountdown(sec = 30) {
   };
   tick(); wdResendTimer = setInterval(tick, 1000);
 }
-socket.on('withdrawal-code-sent', ({ masked, expiresInSec, delivered, summary }) => {
+socket.on('withdrawal-code-sent', ({ masked, expiresInSec, delivered, mock, summary }) => {
   wdBusy(false);
   wdPendingSummary = summary;
   el('wdCodeMsg').textContent = delivered === false
-    ? `We could not email ${masked} just now. Tap “Resend code” in a moment.`
+    ? (mock ? `Email delivery is not set up on this server yet, so the code could not be sent. Please contact ${supportEmail()}.` : `We could not email ${masked} just now. Tap “Resend code” in a moment.`)
     : `We emailed a 6-digit confirmation code to ${masked}. It expires in ${Math.round((expiresInSec || 600) / 60)} minutes. Enter it to authorise this withdrawal.`;
   el('wdCodeFacts').innerHTML = summary ? `<div><span>Amount</span><b>${escapeHtml(summary.amountText)}</b></div><div><span>To</span><b class="notranslate" translate="no">${escapeHtml(summary.destination)}</b></div>` : '';
   el('wdCodeErr').textContent = '';
@@ -1155,4 +1155,91 @@ socket.on('ip-blocked', (d) => {
   el('ipBlockMail').href = `mailto:${contact}?subject=${encodeURIComponent('Network access blocked')}`;
   el('ipBlockMailText').textContent = contact;
   el('ipBlockOverlay').classList.remove('hidden');
+});
+
+
+// ============================================================================
+// Sign in / forgot password — a registered Transaction Account opens with email + password
+// ============================================================================
+let slResetEmail = '', slResetToken = null;
+const SL_TITLES = { login: 'Sign in to your Transaction Account', forgot1: 'Reset your password', forgot2: 'Enter your code', forgot3: 'Choose a new password' };
+function slShow(view) {
+  ['login', 'forgot1', 'forgot2', 'forgot3'].forEach((v) => el('slView' + v.charAt(0).toUpperCase() + v.slice(1)).classList.toggle('hidden', v !== view));
+  el('slTitle').textContent = SL_TITLES[view];
+  ['slError', 'slError1', 'slError2', 'slError3'].forEach(hideCallout);
+  setTimeout(() => { const f = { login: 'slEmail', forgot1: 'slFEmail', forgot2: 'slCode', forgot3: 'slNewPw' }[view]; if (el(f)) el(f).focus(); }, 60);
+}
+async function slPost(path, body) {
+  try {
+    const r = await fetch('/api/auth' + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    let data = {};
+    try { data = await r.json(); } catch (e) { /* non-JSON error page */ }
+    return { ok: r.ok, status: r.status, data };
+  } catch (e) {
+    return { ok: false, status: 0, data: { error: 'Network error — please check your connection and try again.' } };
+  }
+}
+function slOpen() {
+  closeModal('txRegModal'); closeModal('obChoiceModal');
+  const t = el('txAccountView'); if (t) t.classList.add('hidden');
+  slShow('login');
+  el('sellerLoginModal').classList.remove('hidden');
+}
+async function slLogin() {
+  const email = el('slEmail').value.trim(), password = el('slPw').value;
+  if (!email || !password) return showCallout('slError', 'Enter your email address and password.');
+  hideCallout('slError');
+  setBusy(el('slLoginBtn'), true, '<i class="fa-solid fa-spinner fa-spin"></i> Signing in…');
+  const r = await slPost('/login', { email, password });
+  setBusy(el('slLoginBtn'), false);
+  if (!r.ok || !r.data.success) return showCallout('slError', r.data.error || 'Sign-in failed. Please try again.');
+  try { localStorage.setItem('q_seller_token:' + r.data.groupId, r.data.sessionToken); } catch (e) { /* storage blocked */ }
+  sessionStorage.setItem('q_session_token', r.data.sessionToken);
+  window.location.href = window.location.pathname + '?groupId=' + encodeURIComponent(r.data.groupId) + '&role=SELLER';
+}
+async function slForgotRequest(resend) {
+  const email = resend ? slResetEmail : el('slFEmail').value.trim();
+  if (!email) return showCallout('slError1', 'Enter the email address on your account.');
+  slResetEmail = email;
+  setBusy(el('slF1Btn'), true, '<i class="fa-solid fa-spinner fa-spin"></i>');
+  await slPost('/forgot-password/request', { email }); // always "success" — never reveals whether the address has an account
+  setBusy(el('slF1Btn'), false);
+  slShow('forgot2');
+  el('slF2Msg').textContent = `If an account exists for ${email}, a 6-digit code is on its way. It expires in 10 minutes — check your spam folder too.`;
+  if (resend) toast('A new code was requested.');
+}
+async function slForgotVerify() {
+  const code = el('slCode').value.trim();
+  if (!/^\d{6}$/.test(code)) return showCallout('slError2', 'Enter the 6-digit code from the email.');
+  setBusy(el('slF2Btn'), true, '<i class="fa-solid fa-spinner fa-spin"></i>');
+  const r = await slPost('/forgot-password/verify', { email: slResetEmail, code });
+  setBusy(el('slF2Btn'), false);
+  if (!r.ok || !r.data.resetToken) return showCallout('slError2', r.data.error || 'That code is not valid or has expired.');
+  slResetToken = r.data.resetToken;
+  slShow('forgot3');
+}
+async function slForgotReset() {
+  const a = el('slNewPw').value, b = el('slNewPw2').value;
+  if (a.length < 8 || !/[A-Za-z]/.test(a) || !/\d/.test(a)) return showCallout('slError3', 'Password must be at least 8 characters and include a letter and a number.');
+  if (a !== b) return showCallout('slError3', 'The passwords do not match.');
+  setBusy(el('slF3Btn'), true, '<i class="fa-solid fa-spinner fa-spin"></i>');
+  const r = await slPost('/forgot-password/reset', { email: slResetEmail, resetToken: slResetToken, newPassword: a });
+  setBusy(el('slF3Btn'), false);
+  if (!r.ok) return showCallout('slError3', r.data.error || 'Could not save the new password. Please start again.');
+  el('slNewPw').value = ''; el('slNewPw2').value = ''; slResetToken = null;
+  slShow('login');
+  el('slEmail').value = slResetEmail; el('slPw').value = '';
+  showCallout('slError', 'Your password was updated. Sign in with the new password.', 'ok');
+}
+socket.on('seller-login-required', () => slOpen());
+function sellerSignOut() { socket.emit('seller-sign-out', { groupId: activeGroupId }); }
+socket.on('seller-signed-out', ({ groupId }) => {
+  try { localStorage.removeItem('q_seller_token:' + groupId); } catch (e) { /* ignore */ }
+  sessionStorage.setItem('q_session_token', 'token-' + Math.random().toString(36).slice(2, 15));
+  window.location.reload();
+});
+// Remember this browser as trusted once the account is open (so a return visit needs no password until sign-out).
+socket.on('seller-account-state', (acct) => {
+  if (!acct || !acct.registered || !isSeller() || acct.groupId !== activeGroupId) return;
+  try { localStorage.setItem('q_seller_token:' + acct.groupId, sessionToken); } catch (e) { /* ignore */ }
 });

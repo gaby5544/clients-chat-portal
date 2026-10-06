@@ -110,11 +110,11 @@ class PgStore {
   }
 
   async updateGroup(groupId, fields) {
-    const JSON_COLS = new Set(['seller_ip_log', 'seller_blocked_ips', 'business_data']);
+    const JSON_COLS = new Set(['seller_ip_log', 'seller_blocked_ips', 'business_data', 'seller_auth_tokens']);
     const V31 = ['seller_phone', 'seller_account_id', 'seller_language', 'seller_account_type', 'seller_registered_at',
       'seller_terms_accepted_at', 'seller_terms_version', 'seller_onboarding_choice', 'seller_disabled', 'seller_disabled_at',
       'seller_disabled_reason', 'disbursement_enabled', 'disbursement_updated_at', 'seller_registration_ip', 'seller_last_ip',
-      'seller_ip_log', 'seller_blocked_ips', 'kyc_id_number', 'kyc_id_name', 'kyc_id_dob', 'kyc_id_expiry', 'kyc_id_country',
+      'seller_ip_log', 'seller_blocked_ips', 'seller_auth_tokens', 'kyc_id_number', 'kyc_id_name', 'kyc_id_dob', 'kyc_id_expiry', 'kyc_id_country',
       'kyc_attempts', 'business_status', 'business_data', 'business_submitted_at', 'business_reviewed_at',
       'business_rejection_reason', 'crypto_deposit_verified', 'crypto_override_by'];
     const map = {

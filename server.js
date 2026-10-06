@@ -22,7 +22,7 @@ const io = new Server(server, {
 
 // Behind a reverse proxy (Render, Northflank, Nginx...) the real client IP is in X-Forwarded-For —
 // needed for IP detection / blocking. Set TRUST_PROXY=0 to turn this off when not behind a proxy.
-if (process.env.TRUST_PROXY !== '0') app.set('trust proxy', 1);
+if (require('./security').trustHops() > 0) app.set('trust proxy', require('./security').trustHops());
 
 // Basic hardening
 app.disable('x-powered-by');
@@ -57,6 +57,7 @@ const PORT = process.env.PORT || 3000;
 initStore()
   .then(async () => {
     try { const n = await ensureAllAccountIds(store); if (n) console.log(`[accounts] assigned Account IDs to ${n} existing seller(s)`); } catch (e) { console.error('[accounts]', e.message); }
+    require('./fx').start(store);             // live USD/GBP/EUR rates (cached, refreshed every 6 h)
     startEscrowTicker(io);                    // escrow reviews keep running with no browser open
     startReminderTicker(io, io._notifier);    // 60-minute unread reminders
     server.listen(PORT, () => {

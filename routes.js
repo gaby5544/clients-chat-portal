@@ -14,6 +14,7 @@ const F = require('./finance');
 const { resolveAdminRole, hasMinRole } = require('./roles');
 const { getPublicKey } = require('./webpush');
 const { notifyPasswordResetCode } = E;
+const { trustSellerToken, revokeAllSellerTokens } = require('./accounts');
 const { v4: uuidv4 } = require('uuid');
 
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
@@ -33,7 +34,8 @@ const storage = multer.diskStorage({
   filename: (req, file, cb) => {
     const safeExt = path.extname(file.originalname).slice(0, 10).replace(/[^a-zA-Z0-9.]/g, '');
     const randomName = crypto.randomBytes(16).toString('hex');
-    cb(null, `${randomName}${safeExt}`);
+    // ?private=1 (KYC, business documents, proof of payment) → p_ prefix → only reachable through a signed link.
+    cb(null, `${req.query && req.query.private === '1' ? 'p_' : ''}${randomName}${safeExt}`);
   }
 });
 
@@ -70,7 +72,18 @@ function requireAdmin(req, res, next) {
 function buildRouter() {
   const router = express.Router();
 
-  router.use('/uploads', express.static(UPLOAD_DIR, { maxAge: '7d' }));
+  // Chat attachments keep their unguessable public URLs. Private files (p_…) need a valid signature + expiry.
+  router.use('/uploads', (req, res, next) => {
+    let name = '';
+    try { name = path.posix.normalize(decodeURIComponent((req.path || '').replace(/^\/+/, ''))); } catch (e) { return res.status(400).send('Bad request'); }
+    if (name.split('/').includes('..')) return res.status(403).send('Not allowed');
+    if (path.posix.basename(name).startsWith('p_')) {
+      if (!F.verifyFileSig(name, req.query.exp, req.query.sig)) return res.status(403).send('This link has expired or is not valid. Reload the page to get a fresh one.');
+      res.set({ 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' });
+      return express.static(UPLOAD_DIR, { maxAge: 0, etag: false, lastModified: false })(req, res, next);
+    }
+    return express.static(UPLOAD_DIR, { maxAge: '7d' })(req, res, next);
+  });
 
   // ---- File upload (drag-and-drop / attachment) ----
   router.post('/api/upload', uploadLimiter, (req, res) => {
@@ -242,13 +255,15 @@ function buildRouter() {
     }
     // Admin-blocked IPs are refused at sign-in (after the password check, so this never reveals which accounts exist).
     if (isIpBlocked(group, ip)) {
-      return res.status(403).json({ error: 'Sign-in from this network has been blocked for this account. Please contact complaints@usvistra.com.', code: 'ip_blocked', contact: E.SUPPORT_EMAIL });
+      return res.status(403).json({ error: 'Sign-in from this network has been blocked for this account. Please contact ' + E.COMPLAINTS_EMAIL + '.', code: 'ip_blocked', contact: E.COMPLAINTS_EMAIL });
     }
     await store.updateGroup(group.id, { seller_failed_logins: 0, seller_locked_until: null });
+    const token = uuidv4();
+    await trustSellerToken(store, group, token); // this browser is now allowed into the account
     await recordIp(group, ip, 'login');
     res.json({
-      success: true, groupId: group.id, sessionToken: uuidv4(), groupName: group.name,
-      disabled: !!group.seller_disabled, contact: E.SUPPORT_EMAIL, language: group.seller_language || 'en'
+      success: true, groupId: group.id, sessionToken: token, groupName: group.name,
+      disabled: !!group.seller_disabled, contact: E.COMPLAINTS_EMAIL, language: group.seller_language || 'en'
     });
   });
 
@@ -293,6 +308,7 @@ function buildRouter() {
     const consumed = await store.consumePasswordResetByToken(group.id, resetToken);
     if (!consumed) return res.status(400).json({ error: 'Invalid or expired reset link.' });
     await store.updateGroup(group.id, { seller_password_hash: hashPassword(newPassword), seller_failed_logins: 0, seller_locked_until: null });
+    await revokeAllSellerTokens(store, await store.getGroup(group.id)); // a reset signs every device out
     res.json({ success: true });
   });
 

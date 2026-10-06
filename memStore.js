@@ -51,7 +51,7 @@ function makeDefaultGroup(id, name) {
     seller_registered_at: null, seller_terms_accepted_at: null, seller_terms_version: null, seller_onboarding_choice: null,
     seller_disabled: false, seller_disabled_at: null, seller_disabled_reason: null,
     disbursement_enabled: false, disbursement_updated_at: null,
-    seller_registration_ip: null, seller_last_ip: null, seller_ip_log: [], seller_blocked_ips: [],
+    seller_registration_ip: null, seller_last_ip: null, seller_ip_log: [], seller_blocked_ips: [], seller_auth_tokens: [],
     kyc_id_number: null, kyc_id_name: null, kyc_id_dob: null, kyc_id_expiry: null, kyc_id_country: null, kyc_attempts: 0,
     business_status: 'none', business_data: null, business_submitted_at: null, business_reviewed_at: null, business_rejection_reason: null,
     crypto_deposit_verified: false, crypto_override_by: null

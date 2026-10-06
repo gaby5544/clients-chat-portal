@@ -362,3 +362,10 @@
 .adm-wd-ctl { margin-top: 10px; }
 .adm-wd-ctl select, .adm-wd-ctl input { flex: 1 1 140px; }
 #fundsDeskModal .ledger-stats-row { grid-template-columns: repeat(2, 1fr); }
+
+/* ---------- Admin: system status cards ---------- */
+.sys-card { border: 1px solid var(--border-soft); border-radius: 14px; padding: 12px; margin-bottom: 10px; background: rgba(255,255,255,.025); }
+.sys-title { font-weight: 800; font-size: .8rem; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.sys-row { display: flex; justify-content: space-between; gap: 12px; font-size: .72rem; padding: 3px 0; border-bottom: 1px dashed var(--border-soft); }
+.sys-row span { color: var(--text-faint); } .sys-row b { text-align: end; word-break: break-all; font-weight: 600; }
+.sys-row b.ok { color: var(--accent-emerald); } .sys-row b.bad { color: var(--accent-rose); } .sys-row b.warn { color: var(--accent-amber, #f59e0b); }

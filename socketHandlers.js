@@ -1,5 +1,6 @@
 const { store } = require('./db');
 const { escapeHtml, sanitizeText, RateLimiter, getSocketIp } = require('./security');
+const { isSellerToken } = require('./accounts');
 const { notifyOfflineMessage, notifyTransactionSubmitted, notifyDepositStatus } = require('./email');
 const { publicMessage, nowTime, postSystemMessage } = require('./chatShape');
 const { publicPendingEmail } = require('./notify');
@@ -158,6 +159,11 @@ function registerSocketHandlers(io, socket) {
       if (!isAdmin && safeRole === 'PARTY B' && group.seller_registered && isIpBlocked(group, ip)) {
         return socket.emit('ip-blocked', { groupId, contact: 'complaints@usvistra.com' });
       }
+      // A registered Transaction Account is opened by signing in (email + password), not by the invite link.
+      // Only browsers that have signed in (or created the account) are trusted.
+      if (!isAdmin && safeRole === 'PARTY B' && group.seller_registered && !isSellerToken(group, sessionToken)) {
+        return socket.emit('seller-login-required', { groupId, groupName: group.name, reason: 'signin' });
+      }
 
       // A reconnect within the grace window (brief network blip / tab
       // backgrounding) just clears the pending "went offline" timer below —
@@ -266,7 +272,7 @@ function registerSocketHandlers(io, socket) {
       const group = await store.getGroup(groupId);
       if (!user || !group) return;
 
-      if (!m.isAdmin && group.seller_session_token === m.sessionToken && group.seller_disabled) {
+      if (!m.isAdmin && isSellerToken(group, m.sessionToken) && group.seller_disabled) {
         return socket.emit('seller-disabled', { groupId, reason: group.seller_disabled_reason || null, contact: 'complaints@usvistra.com' });
       }
       const cleanText = sanitizeText(text, 4000);
@@ -583,7 +589,7 @@ function registerSocketHandlers(io, socket) {
     if (!group) return;
     let party = null;
     if (group.buyer_session_token === m.sessionToken) party = 'A';
-    else if (group.seller_session_token === m.sessionToken) party = 'B';
+    else if (isSellerToken(group, m.sessionToken)) party = 'B';
     if (!party) return;
     if (party === 'B' && group.seller_registered) return socket.emit('error-msg', 'Your email is tied to your account and can never be changed.');
     const clean = email.trim();
@@ -606,15 +612,7 @@ function registerSocketHandlers(io, socket) {
     const m = meta();
     if (!m || m.isAdmin) return null;
     const group = await store.getGroup(groupId);
-    if (!group || group.seller_session_token !== m.sessionToken) return null;
-    return group;
-  }
-
-  async function requireSellerOwnGroup(groupId) {
-    const m = meta();
-    if (!m || m.isAdmin) return null;
-    const group = await store.getGroup(groupId);
-    if (!group || group.seller_session_token !== m.sessionToken) return null;
+    if (!group || !isSellerToken(group, m.sessionToken)) return null;
     if (group.seller_disabled) { socket.emit('seller-disabled', { groupId: group.id, reason: group.seller_disabled_reason || null, contact: 'complaints@usvistra.com' }); return null; }
     if (isIpBlocked(group, getSocketIp(socket))) { socket.emit('ip-blocked', { groupId: group.id, contact: 'complaints@usvistra.com' }); return null; }
     return group;
@@ -668,6 +666,7 @@ function registerSocketHandlers(io, socket) {
       body: decision === 'verified' ? `${F.fmtMoney(amt, updatedGroup.seller_currency)} is now available.`.trim() : (resolved.rejection_reason || 'Not specified')
     });
     io.to('finance-admins').emit('deposit-resolved', publicDeposit(resolved));
+    io.to(`seller:${dep.group_id}`).emit('deposit-updated', publicDeposit(resolved));
     if (updatedGroup.email_b) await notifyDepositStatus(updatedGroup.email_b, { groupName: updatedGroup.name, amount: `${amt} ${updatedGroup.seller_currency || ''}`.trim(), status: decision, reason: resolved.rejection_reason, lang: updatedGroup.seller_language });
     await broadcastGroupsList();
   });
@@ -679,7 +678,7 @@ function registerSocketHandlers(io, socket) {
   socket.on('admin-get-withdrawals-queue', async () => {
     if (!metaHasMinRole('ADMIN')) return;
     const pending = await store.getPendingWithdrawals();
-    socket.emit('withdrawals-queue-list', pending.map(publicWithdrawal));
+    socket.emit('withdrawals-queue-list', pending.map((w) => F.publicWithdrawal(w, true)));
   });
 
   // Admin inspecting one specific group's full Transaction Account (used

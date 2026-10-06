@@ -199,7 +199,7 @@ function showPopup({ icon = 'fa-circle-info', tone = 'info', title = '', body = 
     <div class="pop-icon ${tone}"><i class="fa-solid ${icon}"></i></div>
     <div class="pop-title">${escapeHtml(title)}</div>
     <div class="pop-body">${escapeHtml(body).replace(/\n/g, '<br>')}</div>
-    ${facts ? `<div class="pop-facts">${facts.map(([k, v]) => `<div><span>${escapeHtml(k)}</span><b>${escapeHtml(v)}</b></div>`).join('')}</div>` : ''}
+    ${facts ? `<div class="pop-facts">${facts.map(([k, v]) => `<div><span>${escapeHtml(k)}</span><b class="notranslate" translate="no">${escapeHtml(v)}</b></div>`).join('')}</div>` : ''}
     <div class="pop-actions">${actions.map((a, i) => `<button type="button" class="${a.primary ? 'send-btn' : a.danger ? 'admin-btn admin-btn-danger' : 'ghost-btn'}" data-pa="${i}">${a.icon ? `<i class="fa-solid ${a.icon}"></i> ` : ''}${escapeHtml(a.label)}</button>`).join('')}</div>`;
   el('popupClose').style.display = dismissible ? '' : 'none';
   el('popupModal').classList.remove('hidden');

@@ -22,4 +22,33 @@ async function ensureAllAccountIds(store) {
   for (const g of groups) if (g.seller_registered && !g.seller_account_id) { await ensureAccountId(store, g); n++; }
   return n;
 }
-module.exports = { generateAccountId, ensureAccountId, ensureAllAccountIds };
+
+// ---- Trusted seller sessions ---------------------------------------------------------------
+// A registered seller's account is protected by sign-in (email + password), not by the invite link.
+// Every browser/device that has signed in (or created the account) is remembered here as a SHA-256
+// hash of its session token. join-room and every money action check this list.
+const MAX_TRUSTED = 12;
+const hashToken = (t) => crypto.createHash('sha256').update(String(t || '')).digest('hex');
+function trustedList(g) { return Array.isArray(g && g.seller_auth_tokens) ? g.seller_auth_tokens : []; }
+function isSellerToken(g, token) {
+  if (!g || !token) return false;
+  const list = trustedList(g);
+  if (list.includes(hashToken(token))) return true;
+  // accounts created before sign-in existed: the token that holds the seat is trusted once
+  return list.length === 0 && g.seller_session_token === token;
+}
+async function trustSellerToken(store, g, token) {
+  const h = hashToken(token);
+  const list = trustedList(g).filter((x) => x !== h && x !== '__revoked__');
+  list.push(h);
+  return (await store.updateGroup(g.id, { seller_auth_tokens: list.slice(-MAX_TRUSTED) })) || g;
+}
+async function revokeSellerToken(store, g, token) {
+  const h = hashToken(token);
+  const next = trustedList(g).filter((x) => x !== h); if (!next.length) next.push('__revoked__');
+  return (await store.updateGroup(g.id, { seller_auth_tokens: next, seller_session_token: g.seller_session_token === token ? null : g.seller_session_token })) || g;
+}
+async function revokeAllSellerTokens(store, g) {
+  return (await store.updateGroup(g.id, { seller_auth_tokens: ['__revoked__'], seller_session_token: null })) || g;
+}
+module.exports = { generateAccountId, ensureAccountId, ensureAllAccountIds, hashToken, isSellerToken, trustSellerToken, revokeSellerToken, revokeAllSellerTokens };

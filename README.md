@@ -14,20 +14,47 @@ with emailed codes, daily limit + business upgrade, IP blocking, 46-language
 UI and chat translation, and a full admin control surface (Sellers tab, Funds
 Desk, Record Incoming Funds, Policy).
 
-**Needed in production:** SMTP (`.env.example`) for codes and notices, a
-translation key (DeepL/Google/LibreTranslate) for good translation quality,
-and `DATABASE_URL` (schema migrates itself on boot).
+**Needed in production:** a working mailbox (Zoho: `EMAIL_SERVICE=zoho`, `EMAIL_USER`, `EMAIL_PASS`, `EMAIL_FROM` = same address, `ZOHO_REGION`) or an email provider key (`RESEND_API_KEY`, `BREVO_API_KEY`, `SENDGRID_API_KEY` or SMTP,
+plus a verified `EMAIL_FROM`), `DATABASE_URL` (schema migrates itself on boot), a long random `RECEIPT_SECRET`, and
+`TRUST_PROXY_HOPS` matching your hosting. A translation key (DeepL/Google/LibreTranslate) gives the best quality.
+After deploying, open **Admin ▸ Accounts ▸ System status**: it shows email, translation, exchange-rate and IP
+detection health, and has a **Send test email** button.
+
+**Emails:** every message (codes, KYC, escrow stages, deposits, withdrawals, account notices, message alerts) uses one
+premium template with a monogram badge, status chip, facts table and two footer desks: **Support** (`SUPPORT_EMAIL`) and
+**Complaints & Escalations** (`COMPLAINTS_EMAIL`). Set `BRAND_NAME`, `BRAND_MONOGRAM`, `BRAND_TAGLINE`, `COMPANY_ADDRESS`
+and `APP_URL` to personalise it. Use addresses on your own domain.
+
+**Keeping email out of spam:** no code can force an inbox; what decides it is your domain's DNS. Publish **SPF**
+(`v=spf1 include:zoho.com ~all`, use your region's domain), **DKIM** (Zoho Mail Admin ▸ Domains ▸ Email Configuration
+▸ DKIM) and **DMARC** (`_dmarc` TXT, start with `p=none`, move to `quarantine` later), send from the same address you log
+in with, then press **Check spam protection** in System status until every line is green. A brand-new domain also
+needs a few days of normal sending to build reputation.
+
+**How seller accounts are protected**
+- A registered seller's account is opened by **signing in** (email + password). The invite link alone no longer
+  gives access. Each signed-in browser is remembered (a hashed token), so the seller does not retype the password
+  every time. The seller can sign out; the admin can sign the seller out of every device.
+- Passwords are stored as salted hashes and **cannot be viewed by anyone**, including the admin and the company. This is
+  deliberate: a screen that shows passwords would expose every seller's credentials (and every other site where they
+  reuse the same password). Instead the admin has **Set temporary password** (shown once, replaces the old one, signs
+  every device out), **Email password-reset code**, and **Sign out all devices**.
+- Everything else about the seller is visible to the admin: name, email, phone, country, date of birth, language,
+  Account ID, terms version and time, registration/last IP, IP log, KYC and business documents, balances.
+- KYC images, business documents and proofs of payment are stored under unguessable `p_…` names and open only through
+  signed links that expire after 6 hours (chat attachments stay public under unguessable names).
+
+**IP detection:** taken from `X-Forwarded-For` counted from the right by `TRUST_PROXY_HOPS` (a visitor cannot forge
+that part), or from `cf-connecting-ip` when `TRUST_CLOUDFLARE=1`. Blocks match the exact IPv4 address, or the whole
+IPv6 /64. They are enforced at join, registration, sign-in, withdrawal, and cut live sessions at once.
 
 **Known limits (be aware):**
-- KYC checks are rule-based (format, name/DOB match, expiry, quality). There is
-  no OCR or face-matching service; the live face step uses the browser's face
-  detector when available. Approve/reject by a human remains the control.
-- Uploaded files (including KYC images) are served from `/uploads` under
-  unguessable names, not behind a login. Put the folder behind object storage
-  with signed URLs before handling real identity documents.
-- Passwords are hashed and cannot be viewed; the admin button emails a reset code.
-- FX rates in `finance.js` are fixed placeholders. Use a live feed in production.
-- The admin screens are English-only; seller-facing screens and notices translate.
+- KYC checks are rule-based (format, name/DOB match, expiry, quality). There is no OCR or face-matching service
+  (paid); the live face step uses the browser's face detector when available. A human approves or rejects.
+- Free translation fallbacks (MyMemory, Lingva) have small quotas; set a DeepL/Google/LibreTranslate key for volume.
+- Exchange rates (USD/GBP/EUR) come from a free public feed; if both sources are down the last saved rates are used.
+- Not run in the build sandbox: a live Postgres, real email providers, a real translation provider, a real camera,
+  and a real reverse proxy. Check them on your deployed host with the System status panel.
 
 ## v3.0 additions
 - **Announcements** — Admin+ can post to any combination of groups; each one
@@ -132,7 +159,7 @@ DEPLOY_RENDER.md        Step-by-step Render deployment guide
   against a live database in this sandbox (no external DB reachable here) —
   test it against your real Postgres instance before relying on it in
   production.
-- v3.1: ~86 backend assertions (registration, codes, escrow engine, funds,
+- v3.1.1: ~170 backend assertions (registration, codes, escrow engine, funds,
   withdrawals, limits, IP, notifications, translation) pass against stubbed
   mail/DB; a headless-browser smoke test loads the seller and admin screens
   with a mocked socket and reports no script errors. Not run here: a live

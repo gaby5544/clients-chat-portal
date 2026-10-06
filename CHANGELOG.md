@@ -1,3 +1,23 @@
+# v3.1.1 — fixes after review
+
+| # | Issue raised | Fix | Where |
+|---|---|---|---|
+| 1 | Emails only sent when SMTP was set | Added HTTPS providers (Resend, Brevo, SendGrid) besides SMTP. Failures are recorded with the provider's reason, shown in **Admin ▸ Accounts ▸ System status** with a **Send test email** button. The seller sees "we could not send the email" instead of a silent success | `email.js`, `sellerHandlers.js`, `admin31.js`, `seller31.js` |
+| 1b | Zoho mailbox must work and not land in spam | **Zoho-aware SMTP**: `EMAIL_SERVICE=zoho` picks smtp.zoho.<region> (`ZOHO_REGION`) and falls back to smtppro.zoho.<region>; start-up login check; readable errors (app-password / region hints); if Zoho refuses the From address mail is re-sent from the login mailbox. Better inbox placement: light standards-friendly HTML, plain-text part, Message-ID on your domain, Reply-To, `Auto-Submitted` header, `List-Unsubscribe` on reminder emails, no dummy default sender. **Check spam protection** button tests SPF, DKIM, DMARC, MX and From-vs-login for your domain and prints the exact DNS records to add | `email.js`, `sellerHandlers.js`, `admin31.js` |
+| 1c | Elite, professional emails; separate Support and Complaints voices | New dark-and-gold layout (`emailTemplate.js`): monogram badge (first letter of `BRAND_NAME`, or `BRAND_MONOGRAM`), spaced brand line + tagline, colour-coded status chip, key-facts table, large code panel, call-to-action button, security call-out, signature, and two footer blocks: **Support** (help; Reply-To) and **Complaints & Escalations** (formal disputes), each with its own address and wording. Complaints is added to security-sensitive and negative notices (disabled, rejected, declined, reversed, withdrawal authorisation). Copy of all 27 notices rewritten; translated into the reader's language with right-to-left support; plain-text twin; no remote images; renders at phone width | `emailTemplate.js`, `email.js` |
+| 2 | Translation quality / admin English-only | Chain: DeepL → Google → LibreTranslate → MyMemory → Lingva (keyless). Admin screens are now translated too (names, amounts, IDs and codes are protected). Status + live test in System status. **Fixed a bug where the chain crashed on a missing function** | `translate.js`, `xlate.js`, `admin31.js` |
+| 3 | No OCR / face-match | Left as is by request (paid service) | – |
+| 4 | KYC files not behind a login | Private uploads (`p_…`) open only with an HMAC-signed link that expires in 6 hours; signed when sent to the seller or admin. Path-traversal and encoded-name bypasses tested | `routes.js`, `finance.js` |
+| 5 | Passwords not visible | **Deliberately not built** (it would expose every seller's credentials). Instead: *Set temporary password* (shown once, kills the old one, signs out all devices), *Email reset code*, *Sign out all devices*. All other seller information is visible to the admin | `sellerHandlers.js`, `admin31.js` |
+| 6 | FX placeholders | Live USD/GBP/EUR rates (frankfurter.dev → open.er-api.com), refreshed every 6 h, saved to the DB, plausibility-checked, with manual refresh. Each payment keeps the rate it was converted at | `fx.js` |
+| 7 | IP detection "perfect" | **Fixed spoofing**: the old code trusted the first X-Forwarded-For entry (any visitor could fake it). Now counted from the right by `TRUST_PROXY_HOPS`, plus Cloudflare mode, IPv4-mapped and IPv6 /64 matching. Enforced at join, register, **sign-in**, withdrawal and live. **IP detection** diagnostic in System status shows what the server sees | `security.js`, `sellerHandlers.js`, `routes.js`, `server.js` |
+| 8 | (found while fixing) Invite link alone opened a registered account | Added seller **sign-in** (email + password), per-device trusted sessions, sign-out, admin "sign out all devices", forgot-password flow in the modal | `accounts.js`, `socketHandlers.js`, `routes.js`, `seller31.js`, `index.html` |
+| 9 | (found by static scan) | `admin-get-withdrawals-queue` called an undefined function; deposit decisions did not update the seller's list live | `socketHandlers.js` |
+
+Tests: 70 + 16 + 85 backend assertions and the escrow engine test pass; headless-browser smoke tests of the seller, admin, sign-in and language screens report no script errors.
+
+---
+
 # Changelog — v3.1.0 (Seller Transaction Accounts, escrow tracking, withdrawals)
 
 Every item from the brief, one by one. File names show where the work lives.

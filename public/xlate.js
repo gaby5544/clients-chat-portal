@@ -111,7 +111,7 @@ const Xlate = (() => {
   const attempts = new Map();
   let flushTimer = null, saveTimer = null, busy = 0, blocked = false;
 
-  const SKIP = '[translate="no"],.notranslate,script,style,textarea,.admin-only,#adminDrawer,#adminDrawerMinimized,#fundsDeskModal,#recordFundsModal,#groupsPanel,#directoryPanel,#dmModal,#contextMenu,#historyModal,.msg-wrapper .message:not(.msg-system):not(.msg-announcement),#presenceCluster,#currentGroupName,#pinnedList,.translated-text,.brand-title,[contenteditable="true"],#toastContainer .toast.notranslate';
+  const SKIP = '[translate="no"],.notranslate,script,style,textarea,#groupsPanel,#directoryPanel,#dmModal,#contextMenu,#historyModal,.msg-wrapper .message:not(.msg-system):not(.msg-announcement),#presenceCluster,#currentGroupName,#pinnedList,.translated-text,.brand-title,[contenteditable="true"],#toastContainer .toast.notranslate';
 
   function loadCache(l) {
     try {

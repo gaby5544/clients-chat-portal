@@ -17,7 +17,10 @@ const CD = require('./public/countries');
 const LANG = require('./public/languages');
 const LEGAL = require('./public/legal');
 const E = require('./email');
-const { generateAccountId } = require('./accounts');
+const FX = require('./fx');
+const TR = require('./translate');
+const A = require('./accounts');
+const { generateAccountId } = A;
 const { postSystemMessage } = require('./chatShape');
 const FH = require('./fundsHandlers');
 
@@ -34,7 +37,7 @@ const UPLOAD_URL_RE = /^\/uploads\/[A-Za-z0-9._-]+$/;
 const CODE_TTL_MS = 10 * 60 * 1000;
 const CODE_RESEND_MS = 30 * 1000;
 const CODE_MAX_ATTEMPTS = 5;
-const SUPPORT = E.SUPPORT_EMAIL;
+const SUPPORT = E.COMPLAINTS_EMAIL; // shown to disabled / blocked sellers: the complaints desk
 
 const sameHash = (a, b) => {
   const x = Buffer.from(String(a)); const y = Buffer.from(String(b));
@@ -51,7 +54,7 @@ async function recordIp(group, ip, action) {
   if (action === 'register') fields.seller_registration_ip = ip;
   return (await store.updateGroup(group.id, fields)) || group;
 }
-const isIpBlocked = (group, ip) => !!ip && Array.isArray(group.seller_blocked_ips) && group.seller_blocked_ips.includes(ip);
+const isIpBlocked = (group, ip) => !!ip && Array.isArray(group.seller_blocked_ips) && group.seller_blocked_ips.some((b) => S.sameNetwork(b, ip));
 
 function registerSellerHandlers(io, socket, ctx) {
   const { meta, metaHasMinRole, broadcastGroupsList } = ctx;
@@ -62,7 +65,7 @@ function registerSellerHandlers(io, socket, ctx) {
     const m = meta();
     if (!m || m.isAdmin) return null;
     const group = await store.getGroup(String(groupId || ''));
-    if (!group || group.seller_session_token !== m.sessionToken) return null;
+    if (!group || !A.isSellerToken(group, m.sessionToken)) return null;
     if (!allowDisabled && group.seller_disabled) {
       if (!silent) socket.emit('seller-disabled', { groupId: group.id, reason: group.seller_disabled_reason || null, contact: SUPPORT });
       return null;
@@ -93,7 +96,7 @@ function registerSellerHandlers(io, socket, ctx) {
     await store.upsertUser({ sessionToken: m.sessionToken, prefLang: l.c });
     if (!m.isAdmin) {
       const group = await store.getGroup(String(groupId || m.groupId || ''));
-      if (group && group.seller_session_token === m.sessionToken && group.seller_registered) {
+      if (group && A.isSellerToken(group, m.sessionToken) && group.seller_registered) {
         await store.updateGroup(group.id, { seller_language: l.c });
         await sellerState(group);
       }
@@ -115,7 +118,7 @@ function registerSellerHandlers(io, socket, ctx) {
     const m = meta();
     if (!m || m.isAdmin) return;
     const group = await store.getGroup(String(groupId || ''));
-    if (!group || group.seller_session_token !== m.sessionToken) return socket.emit('error-msg', 'You are not the Seller of this group.');
+    if (!group || !A.isSellerToken(group, m.sessionToken)) return socket.emit('error-msg', 'You are not the Seller of this group.');
     if (group.seller_registered) return socket.emit('error-msg', 'This Transaction Account has already been created.');
     if (!codeSendLimiter.allow(m.sessionToken)) return socket.emit('error-msg', 'Too many code requests — please wait a few minutes and try again.');
     const addr = typeof email === 'string' ? email.trim().toLowerCase() : '';
@@ -137,7 +140,7 @@ function registerSellerHandlers(io, socket, ctx) {
     const m = meta();
     if (!m || m.isAdmin) return;
     const group = await store.getGroup(String(groupId || ''));
-    if (!group || group.seller_session_token !== m.sessionToken) return;
+    if (!group || !A.isSellerToken(group, m.sessionToken)) return;
     const addr = typeof email === 'string' ? email.trim().toLowerCase() : '';
     const rec = await store.getLatestEmailCode(group.id, 'register');
     const fail = (message) => socket.emit('register-code-error', { message, verify: true });
@@ -159,7 +162,7 @@ function registerSellerHandlers(io, socket, ctx) {
     const fail = (message, field) => socket.emit('register-error', { message, field: field || null });
     if (!accountLimiter.allow(m.sessionToken)) return fail('Too many attempts — please wait a moment and try again.');
     const group = await store.getGroup(String(p.groupId || ''));
-    if (!group || group.seller_session_token !== m.sessionToken) return fail('You are not the Seller of this group.');
+    if (!group || !A.isSellerToken(group, m.sessionToken)) return fail('You are not the Seller of this group.');
     if (group.seller_registered) return fail('This Transaction Account has already been created.');
     const ip = ipOf();
     if (isIpBlocked(group, ip)) { socket.emit('ip-blocked', { groupId: group.id, contact: SUPPORT }); return; }
@@ -213,7 +216,7 @@ function registerSellerHandlers(io, socket, ctx) {
       seller_terms_version: LEGAL.version,
       currency_locked_at: nowIso
     });
-    let updated = await store.getGroup(group.id);
+    let updated = await A.trustSellerToken(store, await store.getGroup(group.id), m.sessionToken);
     updated = await recordIp(updated, ip, 'register');
     await store.upsertUser({ sessionToken: m.sessionToken, email, phone, countryCode: country.c, prefLang: lang, lastIp: ip });
 
@@ -588,9 +591,9 @@ function registerSellerHandlers(io, socket, ctx) {
     await store.updateGroup(group.id, { seller_blocked_ips: next });
     if (add) { // anyone currently connected from that IP as this seller is cut off now
       for (const [sockId, v] of (io._activeSockets || new Map())) {
-        if (v.groupId === group.id && v.sessionToken === group.seller_session_token) {
+        if (v.groupId === group.id && !v.isAdmin && A.isSellerToken(group, v.sessionToken)) {
           const s = io.sockets.sockets.get(sockId);
-          if (s && S.getSocketIp(s) === clean) { s.emit('ip-blocked', { groupId: group.id, contact: SUPPORT }); }
+          if (s && S.sameNetwork(S.getSocketIp(s), clean)) { s.emit('ip-blocked', { groupId: group.id, contact: SUPPORT }); }
         }
       }
     }
@@ -617,6 +620,94 @@ function registerSellerHandlers(io, socket, ctx) {
     await store.createPasswordReset({ groupId: group.id, codeHash: S.hashCode(code), expiresAt: new Date(Date.now() + CODE_TTL_MS).toISOString() });
     await E.notifyPasswordResetCode(group.email_b, { code, groupName: group.name, lang: langOfGroup(group) });
     socket.emit('admin-notice', { message: `Password reset code emailed to ${S.maskEmail(group.email_b)}.` });
+  });
+
+  // Seller signs this device out: its token stops being trusted, the page returns to the sign-in screen.
+  socket.on('seller-sign-out', async ({ groupId } = {}) => {
+    const m = meta();
+    if (!m || m.isAdmin) return;
+    const group = await store.getGroup(String(groupId || m.groupId || ''));
+    if (!group || !A.isSellerToken(group, m.sessionToken)) return;
+    await A.revokeSellerToken(store, group, m.sessionToken);
+    socket.emit('seller-signed-out', { groupId: group.id });
+  });
+
+  // Admin: sign the seller out of every device (they must sign in again with their password).
+  socket.on('admin-revoke-seller-sessions', async ({ groupId }) => {
+    if (!adminGuard()) return;
+    const group = await store.getGroup(String(groupId || ''));
+    if (!group || !group.seller_registered) return socket.emit('error-msg', 'That seller account does not exist yet.');
+    await A.revokeAllSellerTokens(store, group);
+    for (const [sockId, v] of (io._activeSockets || new Map())) {
+      if (v.groupId === group.id && !v.isAdmin && v.role === 'PARTY B') {
+        const s2 = io.sockets.sockets.get(sockId);
+        if (s2) s2.emit('seller-signed-out', { groupId: group.id });
+      }
+    }
+    socket.emit('admin-notice', { message: 'The seller has been signed out of every device.' });
+    await FH.pushAdminLedger(io, group.id);
+  });
+
+  // Admin: set a temporary password (shown ONCE to the admin so it can be passed on). The old password stops
+  // working and every device is signed out. Passwords are never stored in a readable form, so they can't be viewed.
+  socket.on('admin-set-temp-password', async ({ groupId }) => {
+    if (!adminGuard()) return;
+    const group = await store.getGroup(String(groupId || ''));
+    if (!group || !group.seller_registered) return socket.emit('error-msg', 'That seller account does not exist yet.');
+    const pw = S.generateTempPassword();
+    await store.updateGroup(group.id, { seller_password_hash: S.hashPassword(pw), seller_failed_logins: 0, seller_locked_until: null });
+    await A.revokeAllSellerTokens(store, await store.getGroup(group.id));
+    for (const [sockId, v] of (io._activeSockets || new Map())) {
+      if (v.groupId === group.id && !v.isAdmin && v.role === 'PARTY B') { const s2 = io.sockets.sockets.get(sockId); if (s2) s2.emit('seller-signed-out', { groupId: group.id }); }
+    }
+    socket.emit('temp-password', { groupId: group.id, email: group.email_b, password: pw });
+    await FH.pushAdminLedger(io, group.id);
+  });
+
+  // Exchange rates used for conversions (live feed, cached). Admin can force a refresh.
+  socket.on('admin-get-fx', () => { if (metaHasMinRole('ADMIN')) socket.emit('fx-info', FX.snapshot()); });
+  socket.on('admin-refresh-fx', async () => {
+    if (!adminGuard()) return;
+    const ok = await FX.refresh(store);
+    socket.emit('fx-info', FX.snapshot());
+    socket.emit(ok ? 'admin-notice' : 'error-msg', ok ? { message: 'Exchange rates refreshed.' } : 'Could not reach the exchange-rate sources — the last known rates are still in use.');
+  });
+
+  // Translation diagnostics: which provider is active and a live round-trip test.
+  socket.on('admin-get-translation-status', () => { if (metaHasMinRole('ADMIN')) socket.emit('translation-status', TR.getStats()); });
+  socket.on('admin-test-translation', async () => {
+    if (!adminGuard()) return;
+    const r = await TR.translateOne(`Your payment has been received. Test ${Date.now() % 100000}`, 'es', 'en');
+    socket.emit('translation-status', { ...TR.getStats(), test: { ok: r.ok, text: r.text, provider: r.provider || null } });
+  });
+
+  // Email diagnostics for the operator: provider in use, counters, last error, and a real test message.
+  socket.on('admin-get-email-status', () => { if (metaHasMinRole('ADMIN')) socket.emit('email-status', E.getStatus()); });
+  socket.on('admin-send-test-email', async ({ to } = {}) => {
+    if (!adminGuard()) return;
+    const addr = typeof to === 'string' ? to.trim() : '';
+    if (!S.isValidEmail(addr)) return socket.emit('error-msg', 'Enter a valid email address to send the test to.');
+    const r = await E.sendTest(addr);
+    socket.emit('test-email-result', { to: addr, ...r });
+    socket.emit('email-status', E.getStatus());
+  });
+
+  // SPF / DKIM / DMARC / MX check for the sending domain — the things that decide inbox vs spam.
+  socket.on('admin-check-deliverability', async () => {
+    if (!metaHasMinRole('ADMIN')) return;
+    try { socket.emit('deliverability-info', await E.checkDeliverability()); }
+    catch (e) { socket.emit('error-msg', 'Could not run the check: ' + (e.message || e)); }
+  });
+
+  // Diagnostics: what the server believes YOUR address is, and how. Lets the operator confirm IP detection on their host.
+  socket.on('admin-get-ip-info', () => {
+    if (!metaHasMinRole('ADMIN')) return;
+    const hd = socket.handshake.headers || {};
+    const ip = ipOf();
+    socket.emit('ip-info', {
+      detected: ip, private: S.isPrivateIp(ip), network: S.ipNetwork(ip), socketAddress: S.cleanIp(socket.handshake.address),
+      xForwardedFor: hd['x-forwarded-for'] || null, cfConnectingIp: hd['cf-connecting-ip'] || null, hops: S.trustHops(), cloudflare: process.env.TRUST_CLOUDFLARE === '1'
+    });
   });
 
   // Policy: daily limit, crypto-deposit tiers, KYC auto-approve.

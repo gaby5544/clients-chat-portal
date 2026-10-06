@@ -71,6 +71,17 @@ async function myMemory(text, source, target) {
   return out;
 }
 
+// Keyless extra fallback (public Lingva instance). Best-effort only — the chain moves on if it is down.
+async function lingva(text, source, target) {
+  const r = await withTimeout(`https://lingva.ml/api/v1/${encodeURIComponent(source || 'auto')}/${encodeURIComponent(target)}/${encodeURIComponent(text)}`, {}, 6000);
+  if (!r.ok) throw new Error('lingva ' + r.status);
+  const j = await r.json();
+  if (!j || typeof j.translation !== 'string' || !j.translation) throw new Error('lingva empty');
+  return j.translation;
+}
+
+const stats = { ok: 0, failed: 0, lastProvider: null, lastError: null };
+
 function provider() {
   if (process.env.DEEPL_API_KEY) return 'deepl';
   if (process.env.GOOGLE_TRANSLATE_API_KEY) return 'google';
@@ -87,19 +98,21 @@ async function translateOne(text, target, source) {
   if (clean.length > MAX_LEN) return { text: clean, ok: false };
   const k = key(clean, s, t);
   if (CACHE.has(k)) return { text: CACHE.get(k), ok: true, cached: true };
-  const order = { deepl, google, libre, mymemory };
+  const order = { deepl, google, libre, mymemory: myMemory, lingva };
   const p = provider();
-  const chain = [p].concat(p === 'mymemory' ? [] : ['mymemory']);
+  const chain = p === 'mymemory' ? ['mymemory', 'lingva'] : [p, 'mymemory', 'lingva'];
   for (const name of chain) {
     try {
       const out = await order[name](clean, s, t);
       if (out && typeof out === 'string') {
         const decoded = out.replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&');
         remember(k, decoded);
+        stats.ok++; stats.lastProvider = name;
         return { text: decoded, ok: true, provider: name };
       }
-    } catch (e) { /* try the next provider */ }
+    } catch (e) { stats.lastError = `${name}: ${e.message}`; /* try the next provider */ }
   }
+  stats.failed++;
   return { text: clean, ok: false };
 }
 
@@ -127,4 +140,5 @@ async function translateStoredText(storedText, target, source) {
   return { ...r, text: escapeHtml(r.text) };
 }
 
-module.exports = { translateOne, translateMany, translateStoredText, provider, norm, unescapeHtml };
+const getStats = () => ({ ...stats, provider: provider(), keyed: provider() !== 'mymemory', cached: CACHE.size });
+module.exports = { getStats, translateOne, translateMany, translateStoredText, provider, norm, unescapeHtml };

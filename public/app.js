@@ -2,7 +2,15 @@
 const socket = io();
 
 // ---------------- STATE ----------------
-let sessionToken = sessionStorage.getItem('q_session_token') || ('token-' + Math.random().toString(36).slice(2, 15));
+// A signed-in seller's browser remembers its trusted token per group (see "Sign in" in seller31.js); everyone else
+// gets a per-tab token. Storage can be blocked, so every access is guarded.
+function _lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+let sessionToken = (function () {
+  const q = new URLSearchParams(window.location.search);
+  const gid = q.get('groupId');
+  const isSellerLink = ['SELLER', 'PARTY B'].includes(q.get('role'));
+  return (isSellerLink && gid && _lsGet('q_seller_token:' + gid)) || sessionStorage.getItem('q_session_token') || ('token-' + Math.random().toString(36).slice(2, 15));
+})();
 sessionStorage.setItem('q_session_token', sessionToken);
 
 const urlParams = new URLSearchParams(window.location.search);
@@ -942,7 +950,7 @@ async function uploadRawFile(rawFile) {
   const fd = new FormData();
   fd.append('file', file);
   try {
-    const res = await fetch('/api/upload', { method: 'POST', body: fd });
+    const res = await fetch('/api/upload?private=1', { method: 'POST', body: fd }); // KYC / proof files are served only through signed links
     let data;
     try { data = await res.json(); }
     catch { return { ok: false, error: `Server returned an unexpected response (HTTP ${res.status}). Your hosting platform may be blocking large uploads.` }; }

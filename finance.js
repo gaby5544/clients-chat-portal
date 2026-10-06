@@ -64,6 +64,22 @@ function verifyReceiptSig(kind, id, sig) {
   const given = Buffer.from(sig);
   return expected.length === given.length && crypto.timingSafeEqual(expected, given);
 }
+// ---- Private files (KYC documents, business documents, proof of payment) ----
+// Stored as /uploads/p_<random>.<ext>. They are NEVER served from a bare URL: every link that leaves the server
+// (only to the owning seller or to an admin) carries an HMAC signature and an expiry.
+const PRIVATE_RE = /^\/uploads\/p_[A-Za-z0-9._-]+$/;
+const signPrivateFile = (name, exp) => crypto.createHmac('sha256', RECEIPT_SECRET).update(`file:${name}:${exp}`).digest('hex').slice(0, 40);
+function signFileUrl(url, ttlSec = 6 * 3600) {
+  if (typeof url !== 'string' || !PRIVATE_RE.test(url)) return url || null;
+  const exp = Math.floor(Date.now() / 1000) + ttlSec;
+  return `${url}?exp=${exp}&sig=${signPrivateFile(url.slice('/uploads/'.length), exp)}`;
+}
+function verifyFileSig(name, exp, sig) {
+  const e = Number(exp);
+  if (!Number.isFinite(e) || e < Date.now() / 1000 || typeof sig !== 'string' || sig.length !== 40) return false;
+  const a = Buffer.from(signPrivateFile(name, e)); const b = Buffer.from(sig);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
 function receiptUrl(kind, id) {
   return `/api/receipts/${kind}/${encodeURIComponent(id)}?sig=${signReceipt(kind, id)}`;
 }
@@ -118,11 +134,11 @@ function publicSellerAccount(g, forAdmin) {
     kyc: {
       status: g.kyc_status,
       docType: g.kyc_doc_type || null,
-      idFrontUrl: g.kyc_id_front_url || null,
-      idBackUrl: g.kyc_id_back_url || null,
-      proofAddressUrl: g.kyc_proof_address_url || null,
+      idFrontUrl: signFileUrl(g.kyc_id_front_url),
+      idBackUrl: signFileUrl(g.kyc_id_back_url),
+      proofAddressUrl: signFileUrl(g.kyc_proof_address_url),
       proofAddressType: g.kyc_proof_address_type || null,
-      selfieUrl: g.kyc_selfie_url || null,
+      selfieUrl: signFileUrl(g.kyc_selfie_url),
       submittedAt: g.kyc_submitted_at || null,
       reviewedAt: g.kyc_reviewed_at || null,
       rejectionReason: g.kyc_rejection_reason || null,
@@ -146,7 +162,7 @@ function publicSellerAccount(g, forAdmin) {
     out.kyc.idDob = dateOnly(g.kyc_id_dob);
     out.kyc.idExpiry = dateOnly(g.kyc_id_expiry);
     out.kyc.idCountry = g.kyc_id_country || null;
-    out.business.data = g.business_data || null;
+    out.business.data = g.business_data ? { ...g.business_data, registrationDocUrl: signFileUrl(g.business_data.registrationDocUrl), taxDocUrl: signFileUrl(g.business_data.taxDocUrl), addressDocUrl: signFileUrl(g.business_data.addressDocUrl) } : null;
     out.cryptoOverrideBy = g.crypto_override_by ? 'Desk Officer' : null;
   } else {
     // The seller sees their own ID number only in masked form.
@@ -207,13 +223,13 @@ function publicIncoming(i, forAdmin, nowMs) {
     out.walletAddress = i.wallet_address || null;
     out.internalNote = i.internal_note || null;
     out.noteShared = !!i.note_shared;
-    out.proofUrl = i.proof_url || null;
+    out.proofUrl = signFileUrl(i.proof_url);
   }
   return out;
 }
 
 module.exports = {
   CURRENCIES, CRYPTO_ASSETS, FX_TO_USD, round2, fxRate, convertCurrency, fmtMoney, CCY_SYMBOL, WD_STATUSES, WD_LABEL, INCOMING_LABEL, normWdStatus, plainName,
-  refFor, signReceipt, verifyReceiptSig, receiptUrl, safeHistory,
+  refFor, signReceipt, verifyReceiptSig, receiptUrl, safeHistory, signFileUrl, verifyFileSig,
   publicSellerAccount, publicDeposit, publicWithdrawal, publicIncoming
 };

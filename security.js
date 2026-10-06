@@ -26,6 +26,16 @@ function isStrongEnoughPassword(password) {
 const PASSWORD_RULE_TEXT = 'Password must be at least 8 characters and include a letter and a number.';
 
 /** A random 6-digit numeric code for password-reset emails, hashed the same way. */
+// 14 characters, no look-alikes, always satisfies isStrongEnoughPassword (upper, lower, digit, symbol).
+function generateTempPassword() {
+  const pick = (set) => set[crypto.randomInt(0, set.length)];
+  const U = 'ABCDEFGHJKLMNPQRSTUVWXYZ', L = 'abcdefghijkmnpqrstuvwxyz', D = '23456789', X = '#$%&*+?!';
+  const chars = [pick(U), pick(L), pick(D), pick(X)];
+  const all = U + L + D + X;
+  while (chars.length < 14) chars.push(pick(all));
+  for (let i = chars.length - 1; i > 0; i--) { const j = crypto.randomInt(0, i + 1); [chars[i], chars[j]] = [chars[j], chars[i]]; }
+  return chars.join('');
+}
 function generateSixDigitCode() {
   return String(crypto.randomInt(0, 1000000)).padStart(6, '0');
 }
@@ -139,19 +149,71 @@ function maskEmail(email) {
 function cleanIp(ip) {
   if (!ip) return '';
   let s = String(ip).trim();
-  if (s.startsWith('::ffff:')) s = s.slice(7);
+  if (s.startsWith('[')) s = s.replace(/^\[([^\]]+)\].*$/, '$1');          // [::1]:1234
+  else if (/^\d{1,3}(\.\d{1,3}){3}:\d+$/.test(s)) s = s.replace(/:\d+$/, ''); // 1.2.3.4:5678
+  if (s.toLowerCase().startsWith('::ffff:') && s.includes('.')) s = s.slice(7);   // IPv4-mapped IPv6
   if (s === '::1') s = '127.0.0.1';
-  return s.slice(0, 64);
+  return s.slice(0, 64).toLowerCase();
+}
+
+// How many reverse proxies sit in front of this app (each appends the address it received the request from).
+// Only that many entries from the RIGHT of X-Forwarded-For are trusted — anything a client types on the left is ignored,
+// so a blocked seller cannot dodge a block by sending a fake X-Forwarded-For header.
+// TRUST_PROXY=0 → no proxy (use the socket address); TRUST_PROXY_HOPS=2 → e.g. Cloudflare + the host's load balancer.
+function trustHops() {
+  if (process.env.TRUST_PROXY === '0') return 0;
+  const n = Number(process.env.TRUST_PROXY_HOPS);
+  return Number.isInteger(n) && n >= 0 ? n : 1;
 }
 function ipFromHeaders(headers, fallback) {
-  const xff = headers && (headers['x-forwarded-for'] || headers['X-Forwarded-For']);
-  if (xff) return cleanIp(String(xff).split(',')[0]);
-  const real = headers && (headers['x-real-ip'] || headers['cf-connecting-ip']);
-  if (real) return cleanIp(real);
+  const h = headers || {};
+  const get = (k) => h[k] || h[k.toLowerCase()];
+  if (process.env.TRUST_CLOUDFLARE === '1' && get('cf-connecting-ip')) return cleanIp(get('cf-connecting-ip'));
+  const hops = trustHops();
+  const xff = get('x-forwarded-for');
+  if (hops > 0 && xff) {
+    const parts = String(xff).split(',').map((x) => cleanIp(x)).filter(Boolean);
+    if (parts.length) return parts[Math.max(0, parts.length - hops)];
+  }
   return cleanIp(fallback);
 }
 const getReqIp = (req) => ipFromHeaders(req.headers, req.socket && req.socket.remoteAddress);
 const getSocketIp = (socket) => ipFromHeaders(socket.handshake && socket.handshake.headers, socket.handshake && socket.handshake.address);
+
+function expandIPv6(ip) {
+  let s = String(ip).toLowerCase();
+  if (s.includes('.')) { // embedded IPv4 tail
+    const m = /^(.*:)(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(s);
+    if (!m) return null;
+    const hex = (a, b) => ((Number(a) << 8) | Number(b)).toString(16);
+    s = m[1] + hex(m[2], m[3]) + ':' + hex(m[4], m[5]);
+  }
+  const halves = s.split('::');
+  if (halves.length > 2) return null;
+  const left = halves[0] ? halves[0].split(':') : [];
+  const right = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
+  const missing = 8 - left.length - right.length;
+  if (halves.length === 1 ? left.length !== 8 : missing < 0) return null;
+  const groups = halves.length === 2 ? left.concat(Array(missing).fill('0'), right) : left;
+  if (!groups.every((g) => /^[0-9a-f]{1,4}$/.test(g))) return null;
+  return groups.map((g) => g.padStart(4, '0'));
+}
+/** The "network" an address belongs to: the address itself for IPv4, the /64 for IPv6 (one home/office = one /64). */
+function ipNetwork(ip) {
+  const c = cleanIp(ip);
+  if (!c) return '';
+  if (!c.includes(':')) return c;
+  const g = expandIPv6(c);
+  return g ? g.slice(0, 4).join(':') + '::/64' : c;
+}
+const sameNetwork = (a, b) => !!a && !!b && ipNetwork(a) === ipNetwork(b);
+function isPrivateIp(ip) {
+  const c = cleanIp(ip);
+  if (!c) return true;
+  if (c.includes(':')) { const g = expandIPv6(c); return !g || /^(fc|fd|fe[89ab])/.test(g[0]) || g.join('') === '00000000000000000000000000000001' || g.join('') === '0'.repeat(32); }
+  const [a, b] = c.split('.').map(Number);
+  return a === 10 || a === 127 || a === 0 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127);
+}
 function isValidIp(ip) {
   return typeof ip === 'string' && (/^(\d{1,3}\.){3}\d{1,3}$/.test(ip) ? ip.split('.').every((n) => Number(n) <= 255) : /^[0-9a-fA-F:]{3,45}$/.test(ip) && ip.includes(':'));
 }
@@ -174,7 +236,7 @@ function namesMatch(a, b) {
 }
 
 module.exports = {
-  PASSWORD_RULE_TEXT, normalizePhone, maskEmail, cleanIp, ipFromHeaders, getReqIp, getSocketIp, isValidIp, namesMatch, nameTokens,
+  PASSWORD_RULE_TEXT, normalizePhone, maskEmail, cleanIp, ipFromHeaders, trustHops, ipNetwork, sameNetwork, isPrivateIp, expandIPv6, getReqIp, getSocketIp, isValidIp, namesMatch, nameTokens,
   escapeHtml,
   sanitizeText,
   isValidEmail,
@@ -185,5 +247,6 @@ module.exports = {
   verifyPassword,
   isStrongEnoughPassword,
   generateSixDigitCode,
+  generateTempPassword,
   hashCode
 };

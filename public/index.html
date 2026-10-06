@@ -303,6 +303,10 @@
         <div id="policyBox"><p style="font-size:0.78rem; color:var(--text-faint); margin:0;">Loading…</p></div>
       </div>
       <div class="admin-section admin-plus-only">
+        <span class="admin-section-label"><i class="fa-solid fa-heart-pulse"></i> SYSTEM STATUS — EMAIL · TRANSLATION · RATES · IP</span>
+        <div id="sysStatusBox"><p style="font-size:0.78rem; color:var(--text-faint); margin:0;">Loading…</p></div>
+      </div>
+      <div class="admin-section admin-plus-only">
         <span class="admin-section-label"><i class="fa-solid fa-vault"></i> DEPOSITS — HELD IN VAULT</span>
         <p style="font-size:0.76rem; color:var(--text-muted); margin:0 0 8px;">A seller's "I sent funds" notice, not proof — confirm on your bank feed or block explorer before verifying.</p>
         <div id="depositsQueueList"><p style="font-size:0.78rem; color:var(--text-faint); margin:0;">No pending deposits.</p></div>
@@ -429,16 +433,16 @@
 <div class="modal-overlay hidden" id="fundsDeskModal">
   <div class="modal-box wide">
     <div class="modal-header">
-      <span><i class="fa-solid fa-vault"></i> <span id="ledgerModalTitle">Seller Ledger</span></span>
+      <span><i class="fa-solid fa-vault"></i> <span id="ledgerModalTitle" class="notranslate" translate="no">Seller Ledger</span></span>
       <i class="fa-solid fa-xmark" onclick="closeFundsDeskModal()"></i>
     </div>
     <div class="modal-body">
       <div id="fdProfile"></div>
       <div class="ledger-stats-row" style="margin-top:12px;">
-        <div class="ledger-stat emerald"><div class="ledger-stat-label">Available</div><div class="ledger-stat-value" id="ledgerAvailable">—</div></div>
-        <div class="ledger-stat amber"><div class="ledger-stat-label">In vault (review / hold)</div><div class="ledger-stat-value" id="ledgerHeld">—</div></div>
-        <div class="ledger-stat"><div class="ledger-stat-label">Pending withdrawals</div><div class="ledger-stat-value" id="ledgerPendingWd">—</div></div>
-        <div class="ledger-stat"><div class="ledger-stat-label">Total Deposited</div><div class="ledger-stat-value" id="ledgerTotal">—</div></div>
+        <div class="ledger-stat emerald"><div class="ledger-stat-label">Available</div><div class="ledger-stat-value notranslate" translate="no" id="ledgerAvailable">—</div></div>
+        <div class="ledger-stat amber"><div class="ledger-stat-label">In vault (review / hold)</div><div class="ledger-stat-value notranslate" translate="no" id="ledgerHeld">—</div></div>
+        <div class="ledger-stat"><div class="ledger-stat-label">Pending withdrawals</div><div class="ledger-stat-value notranslate" translate="no" id="ledgerPendingWd">—</div></div>
+        <div class="ledger-stat"><div class="ledger-stat-label">Total Deposited</div><div class="ledger-stat-value notranslate" translate="no" id="ledgerTotal">—</div></div>
       </div>
       <button class="send-btn" style="width:100%; justify-content:center; margin-bottom:6px;" onclick="openRecordFundsModal()"><i class="fa-solid fa-circle-plus"></i> Record Incoming Funds</button>
 
@@ -694,7 +698,8 @@
       <button class="tx-nav-item" data-txnav="profile" onclick="setTxAccountNav('profile')"><i class="fa-solid fa-user"></i> Profile</button>
       <button class="tx-nav-item" onclick="openLanguagePicker()"><i class="fa-solid fa-globe"></i> Language <span class="lang-code notranslate" translate="no" style="margin-inline-start:auto; font-size:0.66rem; font-weight:800;">EN</span></button>
     </nav>
-    <button class="tx-nav-item" style="margin-top:auto; color:var(--accent-rose);" onclick="closeTxAccountView()"><i class="fa-solid fa-arrow-right-from-bracket"></i> Back to chat</button>
+    <button class="tx-nav-item" style="margin-top:auto;" onclick="closeTxAccountView()"><i class="fa-solid fa-comments"></i> Back to chat</button>
+    <button class="tx-nav-item" style="color:var(--accent-rose);" onclick="sellerSignOut()"><i class="fa-solid fa-arrow-right-from-bracket"></i> Sign out</button>
   </div>
 
   <div class="tx-main">
@@ -1089,6 +1094,47 @@
     <div class="modal-body">
       <input type="text" id="langSearch" class="message-input lang-search" placeholder="Search languages…" oninput="renderLanguageList(this.value)" autocomplete="off">
       <div class="lang-list" id="langList"></div>
+    </div>
+  </div>
+</div>
+
+<!-- SELLER SIGN-IN / FORGOT PASSWORD (a registered Transaction Account opens only with email + password) -->
+<div class="modal-overlay hidden" id="sellerLoginModal" style="z-index:3200">
+  <div class="modal-box" style="max-width:440px;">
+    <div class="modal-header"><span><i class="fa-solid fa-lock"></i> <span id="slTitle">Sign in to your Transaction Account</span></span></div>
+    <div class="modal-body">
+      <div id="slViewLogin">
+        <p class="fld-hint" style="margin:0 0 12px;">Your account holds your balance and payouts, so it is protected. Sign in with the email and password you created when you registered.</p>
+        <div class="fld"><label class="fld-label" for="slEmail">Email address</label><input type="email" id="slEmail" class="message-input" autocomplete="username" maxlength="254"></div>
+        <div class="fld"><label class="fld-label" for="slPw">Password</label>
+          <div class="pw-wrap"><input type="password" id="slPw" class="message-input" autocomplete="current-password" maxlength="128" onkeydown="if(event.key==='Enter') slLogin()"><button type="button" class="pw-eye" onclick="togglePw('slPw', this)" aria-label="Show password"><i class="fa-regular fa-eye"></i></button></div></div>
+        <div class="callout warn" id="slError"></div>
+        <button class="send-btn" id="slLoginBtn" style="width:100%; justify-content:center; margin-top:12px;" onclick="slLogin()"><i class="fa-solid fa-right-to-bracket"></i> Sign in</button>
+        <div style="text-align:center; margin-top:12px;"><button type="button" class="link-btn" onclick="slShow('forgot1')">Forgot your password?</button></div>
+      </div>
+      <div id="slViewForgot1" class="hidden">
+        <p class="fld-hint" style="margin:0 0 12px;">Enter the email address on your account. We will email you a 6-digit code to set a new password.</p>
+        <div class="fld"><label class="fld-label" for="slFEmail">Email address</label><input type="email" id="slFEmail" class="message-input" autocomplete="username" maxlength="254" onkeydown="if(event.key==='Enter') slForgotRequest()"></div>
+        <div class="callout warn" id="slError1"></div>
+        <button class="send-btn" id="slF1Btn" style="width:100%; justify-content:center; margin-top:12px;" onclick="slForgotRequest()"><i class="fa-solid fa-paper-plane"></i> Email me a code</button>
+        <div style="text-align:center; margin-top:12px;"><button type="button" class="link-btn" onclick="slShow('login')">Back to sign in</button></div>
+      </div>
+      <div id="slViewForgot2" class="hidden">
+        <p class="fld-hint" style="margin:0 0 12px;" id="slF2Msg">If an account exists for that address, a code is on its way. Check your spam folder too.</p>
+        <div class="fld"><label class="fld-label" for="slCode">6-digit code</label><input type="text" id="slCode" class="message-input code-input" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="••••••" oninput="this.value=this.value.replace(/\D/g,'')" onkeydown="if(event.key==='Enter') slForgotVerify()"></div>
+        <div class="callout warn" id="slError2"></div>
+        <button class="send-btn" id="slF2Btn" style="width:100%; justify-content:center; margin-top:12px;" onclick="slForgotVerify()"><i class="fa-solid fa-check"></i> Verify code</button>
+        <div style="text-align:center; margin-top:12px; display:flex; justify-content:center; gap:16px;"><button type="button" class="link-btn" onclick="slForgotRequest(true)">Resend code</button><button type="button" class="link-btn" onclick="slShow('login')">Back to sign in</button></div>
+      </div>
+      <div id="slViewForgot3" class="hidden">
+        <p class="fld-hint" style="margin:0 0 12px;">Choose a new password. At least 8 characters, with a letter and a number. Every device will be signed out.</p>
+        <div class="fld"><label class="fld-label" for="slNewPw">New password</label>
+          <div class="pw-wrap"><input type="password" id="slNewPw" class="message-input" autocomplete="new-password" maxlength="128"><button type="button" class="pw-eye" onclick="togglePw('slNewPw', this)" aria-label="Show password"><i class="fa-regular fa-eye"></i></button></div></div>
+        <div class="fld"><label class="fld-label" for="slNewPw2">Confirm new password</label>
+          <div class="pw-wrap"><input type="password" id="slNewPw2" class="message-input" autocomplete="new-password" maxlength="128" onkeydown="if(event.key==='Enter') slForgotReset()"><button type="button" class="pw-eye" onclick="togglePw('slNewPw2', this)" aria-label="Show password"><i class="fa-regular fa-eye"></i></button></div></div>
+        <div class="callout warn" id="slError3"></div>
+        <button class="send-btn" id="slF3Btn" style="width:100%; justify-content:center; margin-top:12px;" onclick="slForgotReset()"><i class="fa-solid fa-key"></i> Save new password</button>
+      </div>
     </div>
   </div>
 </div>

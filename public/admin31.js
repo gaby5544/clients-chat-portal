@@ -45,7 +45,7 @@ function docThumb(url, label) {
   return `<a class="adm-doc" href="${admEsc(url)}" target="_blank" rel="noopener">${pdf ? '<i class="fa-solid fa-file-pdf"></i>' : `<img src="${admEsc(url)}" alt="${admEsc(label)}" loading="lazy">`}<span>${admEsc(label)}</span></a>`;
 }
 function kvRows(rows) {
-  return `<div class="kv">${rows.filter((r) => r[1] !== null && r[1] !== undefined && r[1] !== '').map(([k, v, raw]) => `<span>${admEsc(k)}</span><b>${raw ? v : admEsc(v)}</b>`).join('')}</div>`;
+  return `<div class="kv">${rows.filter((r) => r[1] !== null && r[1] !== undefined && r[1] !== '').map(([k, v, raw]) => `<span>${admEsc(k)}</span><b class="notranslate" translate="no">${raw ? v : admEsc(v)}</b>`).join('')}</div>`;
 }
 // Re-rendering must never eat what an admin is typing: snapshot inputs, rebuild, restore.
 function keepInputs(root, fn) {
@@ -104,10 +104,10 @@ function renderFundsDesk() {
       <div class="seller-card-head">
         <div class="seller-av">${admEsc(admInitials(name))}</div>
         <div style="flex:1; min-width:0;">
-          <div class="seller-name"><span>${admEsc(name)}</span> ${flag}
+          <div class="seller-name notranslate" translate="no"><span>${admEsc(name)}</span> ${flag}
             ${s.accountId ? `<span class="tx-acctid-pill notranslate" translate="no">${admEsc(s.accountId)}</span>` : ''}
             ${s.disabled ? pill('Disabled', 'bad') : ''}</div>
-          <div class="seller-sub">${s.registered ? admEsc(s.email || 'no email') : 'Account not created yet'} · ${admEsc(s.groupName)}</div>
+          <div class="seller-sub notranslate" translate="no">${s.registered ? admEsc(s.email || 'no email') : 'Account not created yet'} · ${admEsc(s.groupName)}</div>
           <div class="seller-sub" style="margin-top:6px; display:flex; gap:6px; flex-wrap:wrap;">
             ${s.registered ? disbPillHtml(s.disbursementEnabled) : ''}
             ${s.registered ? pill(kycLabel(s.kycStatus), kycTone(s.kycStatus)) : ''}
@@ -144,6 +144,8 @@ function sellerControlsHtml(a, p) {
       <label class="sw"><input type="checkbox" ${a.cryptoDepositVerified ? 'checked' : ''} onchange="adminSetCryptoOverride('${gid}', this.checked)" data-keep="reset"><i></i></label></div>
     <div class="btn-row">
       <button class="admin-btn" style="width:auto;" onclick="adminSendReset('${gid}')"><i class="fa-solid fa-key"></i> Email password-reset code</button>
+      <button class="admin-btn" style="width:auto;" onclick="adminTempPassword('${gid}')"><i class="fa-solid fa-user-lock"></i> Set temporary password</button>
+      <button class="admin-btn" style="width:auto;" onclick="adminRevokeSessions('${gid}')"><i class="fa-solid fa-right-from-bracket"></i> Sign out all devices</button>
       <button class="admin-btn" style="width:auto;" onclick="adminOpenGroup('${gid}')"><i class="fa-solid fa-comments"></i> Open chat group</button>
     </div>
     <div class="adm-sub-label">Login IP addresses</div>
@@ -206,11 +208,11 @@ function renderSellersTab() {
         <div class="seller-card-head" onclick="toggleSellerCard('${admEsc(a.groupId)}')">
           <div class="seller-av">${admEsc(admInitials(a.fullName || a.groupName))}</div>
           <div style="flex:1; min-width:0;">
-            <div class="seller-name"><span>${admEsc(a.fullName || a.groupName)}</span>
+            <div class="seller-name notranslate" translate="no"><span>${admEsc(a.fullName || a.groupName)}</span>
               ${a.countryCode ? flagHtml(a.countryCode) : (a.countryFlag || '')}
               <span class="tx-acctid-pill notranslate" translate="no">${admEsc(a.accountId || '—')}</span>
               ${a.disabled ? pill('Disabled', 'bad') : ''}</div>
-            <div class="seller-sub">${admEsc(a.email || '')} · ${admEsc(a.country || '')}</div>
+            <div class="seller-sub notranslate" translate="no">${admEsc(a.email || '')} · ${admEsc(a.country || '')}</div>
           </div>
           <i class="fa-solid fa-chevron-down" style="color:var(--text-faint); font-size:.7rem;"></i>
         </div>
@@ -269,9 +271,9 @@ function renderFundsDeskModal() {
       <div class="adm-profile">
         <div class="seller-av" style="width:52px;height:52px;font-size:1rem;">${admEsc(admInitials(a.fullName || a.groupName))}</div>
         <div style="flex:1; min-width:0;">
-          <div class="seller-name" style="font-size:1rem;">${admEsc(a.fullName || a.groupName)} ${a.countryCode ? flagHtml(a.countryCode) : ''}
+          <div class="seller-name notranslate" translate="no" style="font-size:1rem;">${admEsc(a.fullName || a.groupName)} ${a.countryCode ? flagHtml(a.countryCode) : ''}
             ${a.disabled ? pill('Disabled', 'bad') : pill('Active', 'ok')} ${disbPillHtml(a.disbursementEnabled)} ${pill(kycLabel(a.kyc.status), kycTone(a.kyc.status))}</div>
-          <div class="seller-sub">Account ID <b class="notranslate" translate="no" style="color:var(--accent-cyan);">${admEsc(a.accountId || '—')}</b> · ${admEsc(a.accountType)} · ${admEsc(ccy || '')}</div>
+          <div class="seller-sub notranslate" translate="no">Account ID <b class="notranslate" translate="no" style="color:var(--accent-cyan);">${admEsc(a.accountId || '—')}</b> · ${admEsc(a.accountType)} · ${admEsc(ccy || '')}</div>
         </div>
       </div>
       ${a.registered ? kvRows([
@@ -303,10 +305,10 @@ function incomingRowHtml(r) {
     <div class="ledger-row-top">
       <div class="ledger-row-direction in"><i class="fa-solid fa-arrow-down"></i></div>
       <div class="ledger-row-main">
-        <div class="ledger-row-title-line"><span class="ledger-row-title">${admEsc(r.payerName)}${r.payerType === 'company' ? ' · company' : ''}</span><span class="ledger-row-amount in">${amt}</span></div>
-        <div class="ledger-row-sub">${admEsc(r.purpose)}</div>
+        <div class="ledger-row-title-line"><span class="ledger-row-title notranslate" translate="no">${admEsc(r.payerName)}${r.payerType === 'company' ? ' · company' : ''}</span><span class="ledger-row-amount in">${amt}</span></div>
+        <div class="ledger-row-sub notranslate" translate="no">${admEsc(r.purpose)}</div>
         <div class="ledger-row-sub">${pill(r.statusLabel, tone)} ${admEsc(METHOD_NAMES[r.method] || r.method)}${r.asset ? ' · ' + admEsc(r.asset) + (r.network ? ' ' + admEsc(r.network) : '') : ''} · received ${admEsc(fmtDateTime(r.receivedAt))}</div>
-        <div class="ledger-row-ref">${admEsc(r.ref)}${r.invoiceRef ? ' · inv ' + admEsc(r.invoiceRef) : ''}${r.externalRef ? ' · ' + admEsc(r.externalRef) : ''} · → <span class="notranslate" translate="no">${admEsc(r.targetAccountId || '—')}</span></div>
+        <div class="ledger-row-ref notranslate" translate="no">${admEsc(r.ref)}${r.invoiceRef ? ' · inv ' + admEsc(r.invoiceRef) : ''}${r.externalRef ? ' · ' + admEsc(r.externalRef) : ''} · → <span class="notranslate" translate="no">${admEsc(r.targetAccountId || '—')}</span></div>
         <details class="adm-details"><summary>Payer details</summary>${kvRows([
           ['Email', r.payerEmail], ['Phone', r.payerPhone], ['Country', r.payerCountry], ['Bank', r.payerBank], ['Wallet', r.walletAddress]
         ])}${r.proofUrl ? `<a class="ledger-row-receipt" href="${admEsc(r.proofUrl)}" target="_blank" rel="noopener"><i class="fa-solid fa-paperclip"></i> View proof of payment</a>` : ''}</details>
@@ -404,9 +406,9 @@ function withdrawalRowHtml(w, inDesk) {
     <div class="ledger-row-top">
       <div class="ledger-row-direction out"><i class="fa-solid fa-arrow-up"></i></div>
       <div class="ledger-row-main">
-        <div class="ledger-row-title-line"><span class="ledger-row-title">${inDesk ? '' : admEsc(admGroupName(w.groupId)) + ' · '}${w.method === 'crypto' ? 'Crypto' : 'Bank'} withdrawal</span><span class="ledger-row-amount out">${money(w.amount, w.amountCurrency)}</span></div>
-        <div class="ledger-row-sub">${pill(w.statusLabel, WD_TONE[w.status])} ${admEsc(wdDestination(w))}</div>
-        <div class="ledger-row-ref">${admEsc(w.ref)} · requested ${admEsc(fmtDateTime(w.createdAt))}${w.requestIp ? ' · IP ' + admEsc(w.requestIp) : ''}${w.payoutReference ? ' · payout ref ' + admEsc(w.payoutReference) : ''}</div>
+        <div class="ledger-row-title-line"><span class="ledger-row-title notranslate" translate="no">${inDesk ? '' : admEsc(admGroupName(w.groupId)) + ' · '}${w.method === 'crypto' ? 'Crypto' : 'Bank'} withdrawal</span><span class="ledger-row-amount out">${money(w.amount, w.amountCurrency)}</span></div>
+        <div class="ledger-row-sub">${pill(w.statusLabel, WD_TONE[w.status])} <span class="notranslate" translate="no">${admEsc(wdDestination(w))}</span></div>
+        <div class="ledger-row-ref notranslate" translate="no">${admEsc(w.ref)} · requested ${admEsc(fmtDateTime(w.createdAt))}${w.requestIp ? ' · IP ' + admEsc(w.requestIp) : ''}${w.payoutReference ? ' · payout ref ' + admEsc(w.payoutReference) : ''}</div>
         ${w.statusReason ? `<div class="ledger-row-note">${admEsc(w.statusReason)}</div>` : ''}
       </div>
     </div>
@@ -474,7 +476,7 @@ function renderKycQueue() {
     const k = a.kyc;
     const nameMatch = a.fullName && k.idName && a.fullName.trim().toLowerCase() === k.idName.trim().toLowerCase();
     return `<div class="seller-card open"><div class="seller-body" style="display:block; border-top:0;">
-      <div class="seller-name" style="margin-top:10px;"><span>${admEsc(a.fullName || a.groupName)}</span> ${a.countryCode ? flagHtml(a.countryCode) : ''} <span class="tx-acctid-pill notranslate" translate="no">${admEsc(a.accountId || '—')}</span> ${pill('Pending review', 'warn')}</div>
+      <div class="seller-name notranslate" translate="no" style="margin-top:10px;"><span>${admEsc(a.fullName || a.groupName)}</span> ${a.countryCode ? flagHtml(a.countryCode) : ''} <span class="tx-acctid-pill notranslate" translate="no">${admEsc(a.accountId || '—')}</span> ${pill('Pending review', 'warn')}</div>
       ${kvRows([
         ['Registered name', a.fullName], ['Name on document', k.idName ? k.idName + (nameMatch ? ' ✓' : ' ⚠ differs') : ''], ['Document', (k.docType || '').replace(/_/g, ' ')],
         ['Document no.', k.idNumber], ['Issuing country', k.idCountry], ['Date of birth', k.idDob ? k.idDob + (a.dateOfBirth && a.dateOfBirth !== k.idDob ? ' ⚠ differs from registration (' + a.dateOfBirth + ')' : ' ✓') : ''],
@@ -507,7 +509,7 @@ function renderBusinessQueue() {
   box.innerHTML = admBiz.map((a) => {
     const b = (a.business && a.business.data) || {};
     return `<div class="seller-card open"><div class="seller-body" style="display:block; border-top:0;">
-      <div class="seller-name" style="margin-top:10px;"><span>${admEsc(b.businessName || a.groupName)}</span> <span class="tx-acctid-pill notranslate" translate="no">${admEsc(a.accountId || '—')}</span> ${pill('Business upgrade', 'warn')}</div>
+      <div class="seller-name notranslate" translate="no" style="margin-top:10px;"><span>${admEsc(b.businessName || a.groupName)}</span> <span class="tx-acctid-pill notranslate" translate="no">${admEsc(a.accountId || '—')}</span> ${pill('Business upgrade', 'warn')}</div>
       ${kvRows([
         ['Applicant', a.fullName], ['Trading name', b.tradingName], ['Registration no.', b.regNumber], ['Tax no.', b.taxNumber], ['Incorporated in', b.incorporationCountry],
         ['Incorporation date', b.incorporationDate], ['Type', b.businessType], ['Industry', b.industry], ['Address', b.address], ['Website', b.website],
@@ -540,8 +542,8 @@ function renderDepositsQueue() {
   if (!admDeposits.length) { box.innerHTML = '<p style="font-size:0.78rem; color:var(--text-faint); margin:0;">No pending deposits.</p>'; return; }
   box.innerHTML = admDeposits.map((d) => `<div class="ledger-row">
     <div class="ledger-row-top"><div class="ledger-row-direction in"><i class="fa-solid fa-coins"></i></div>
-    <div class="ledger-row-main"><div class="ledger-row-title-line"><span class="ledger-row-title">${admEsc(admGroupName(d.groupId))}</span><span class="ledger-row-amount in">${admEsc(Number(d.amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }))} ${admEsc(d.asset || '')}</span></div>
-      <div class="ledger-row-sub">${admEsc(d.asset || '')} ${d.network ? '· ' + admEsc(d.network) : ''} · notified ${admEsc(fmtDateTime(d.notifiedAt))}</div><div class="ledger-row-ref">${admEsc(d.ref)}</div></div></div>
+    <div class="ledger-row-main"><div class="ledger-row-title-line"><span class="ledger-row-title notranslate" translate="no">${admEsc(admGroupName(d.groupId))}</span><span class="ledger-row-amount in">${admEsc(Number(d.amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }))} ${admEsc(d.asset || '')}</span></div>
+      <div class="ledger-row-sub">${admEsc(d.asset || '')} ${d.network ? '· ' + admEsc(d.network) : ''} · notified ${admEsc(fmtDateTime(d.notifiedAt))}</div><div class="ledger-row-ref notranslate" translate="no">${admEsc(d.ref)}</div></div></div>
     <div class="ledger-row-actions">
       <button class="send-btn" style="width:auto;" onclick="adminReviewDeposit('${admEsc(d.id)}','verified')"><i class="fa-solid fa-check"></i> Funds arrived</button>
       <button class="admin-btn admin-btn-danger" style="width:auto;" onclick="adminReviewDeposit('${admEsc(d.id)}','rejected')"><i class="fa-solid fa-xmark"></i> Not received</button></div></div>`).join('');
@@ -552,7 +554,10 @@ function adminReviewDeposit(depositId, decision) {
 }
 
 // ---------------------------------------------------------------- Policy (daily limit, crypto tiers, KYC mode)
-socket.on('policy', (p) => { if (!admOk()) return; admPolicy = p; renderPolicy(); });
+socket.on('policy', (p) => {
+  if (!admOk()) return; admPolicy = p; renderPolicy();
+  ['admin-get-email-status', 'admin-get-translation-status', 'admin-get-fx', 'admin-get-ip-info'].forEach((e) => socket.emit(e));
+});
 function renderPolicy() {
   const box = el('policyBox');
   if (!box || !admPolicy) return;
@@ -725,3 +730,67 @@ socket.on('disbursement-status', ({ groupId, enabled }) => {
     });
   };
 })();
+
+
+// ---------------------------------------------------------------- System status: email, translation, exchange rates, IP detection
+const sysState = { email: null, tr: null, fx: null, ip: null, testResult: null };
+socket.on('email-status', (s) => { if (admOk()) { sysState.email = s; renderSysStatus(); } });
+socket.on('translation-status', (s) => { if (admOk()) { sysState.tr = s; renderSysStatus(); } });
+socket.on('fx-info', (s) => { if (admOk()) { sysState.fx = s; renderSysStatus(); } });
+socket.on('deliverability-info', (s) => { if (admOk()) { sysState.dlv = s; renderSysStatus(); } });
+socket.on('ip-info', (s) => { if (admOk()) { sysState.ip = s; renderSysStatus(); } });
+socket.on('test-email-result', (r) => { if (!admOk()) return; sysState.testResult = r; renderSysStatus(); toast(r.ok ? `Test email sent to ${r.to}.` : 'Test email failed: ' + r.error, !r.ok); });
+function sysRow(label, valueHtml, tone) { return `<div class="sys-row"><span>${admEsc(label)}</span><b class="${tone || ''}">${valueHtml}</b></div>`; }
+function renderSysStatus() {
+  const box = el('sysStatusBox');
+  if (!box) return;
+  const { email: e, tr, fx, ip, dlv } = sysState;
+  const nt = (v) => `<span class="notranslate" translate="no">${admEsc(v)}</span>`;
+  keepInputs(box, () => {
+    box.innerHTML = `
+    <div class="sys-card"><div class="sys-title"><i class="fa-solid fa-envelope"></i> Email delivery ${e ? (e.configured ? pill('Configured', 'ok') : pill('Not configured', 'bad')) : ''}</div>
+      ${e ? sysRow('Provider', e.provider ? nt(e.provider) : 'none — emails are only logged', e.provider ? 'ok' : 'bad') + sysRow('Sender', nt(e.from)) + sysRow('Sent / failed', `${e.sent} / ${e.failed}`) + (e.host ? sysRow('Server', nt(e.host)) : '') + (e.verified === true ? sysRow('Login check', 'OK', 'ok') : e.verified === false ? sysRow('Login check', nt(e.verifyError || 'failed'), 'bad') : '') + (e.fromNote ? sysRow('Sender note', nt(e.fromNote), 'warn') : '') + (e.lastError ? sysRow('Last error', nt(e.lastError), 'bad') : '') : ''}
+      <div class="input-row" style="margin-top:8px;"><input id="sysTestTo" class="message-input" type="email" placeholder="Send a test email to…" autocomplete="off"><button class="admin-btn" style="width:auto;" onclick="adminSendTestEmail()"><i class="fa-solid fa-paper-plane"></i> Send test</button></div>
+      ${sysState.testResult ? `<div class="fld-hint" style="margin-top:6px; color:var(--${sysState.testResult.ok ? 'accent-emerald' : 'accent-rose'});">${sysState.testResult.ok ? 'Delivered to the provider: ' + admEsc(sysState.testResult.to) : 'Failed: ' + admEsc(sysState.testResult.error)}</div>` : ''}
+      <button class="admin-btn" style="width:auto; margin-top:8px;" onclick="socket.emit('admin-check-deliverability')"><i class="fa-solid fa-shield-halved"></i> Check spam protection (SPF · DKIM · DMARC)</button>
+      ${dlv ? `<div style="margin-top:8px;">${dlv.checks.map((c) => sysRow(c.label, nt(c.detail), c.status === 'ok' ? 'ok' : c.status === 'warn' ? 'warn' : 'bad') + (c.fix ? `<div class="fld-hint" style="margin:0 0 6px;">${admEsc(c.fix)}</div>` : '')).join('')}<div class="fld-hint">${dlv.ok ? 'All checks pass for ' + admEsc(dlv.domain) + '.' : 'Fix the red items in your domain\'s DNS, wait a few minutes, then check again.'}</div></div>` : ''}
+      ${e && !e.configured ? '<div class="fld-hint" style="margin-top:6px;">For Zoho set <b>EMAIL_SERVICE=zoho</b>, <b>EMAIL_USER</b>, <b>EMAIL_PASS</b> and <b>EMAIL_FROM</b> (same address), or set <b>RESEND_API_KEY</b> (or BREVO_API_KEY / SENDGRID_API_KEY, or SMTP settings) and <b>EMAIL_FROM</b>, then restart. Sellers cannot receive verification or withdrawal codes until this is green.</div>' : ''}
+    </div>
+    <div class="sys-card"><div class="sys-title"><i class="fa-solid fa-language"></i> Translation ${tr ? (tr.keyed ? pill('Provider key set', 'ok') : pill('Free fallback', 'warn')) : ''}</div>
+      ${tr ? sysRow('Provider', nt(tr.provider)) + sysRow('Translated / failed', `${tr.ok} / ${tr.failed}`) + sysRow('Cached phrases', tr.cached) + (tr.lastError ? sysRow('Last provider error', nt(tr.lastError), 'bad') : '') + (tr.test ? sysRow('Test (EN→ES)', tr.test.ok ? nt(tr.test.text) : 'failed — original text returned', tr.test.ok ? 'ok' : 'bad') : '') : ''}
+      <button class="admin-btn" style="width:auto; margin-top:8px;" onclick="socket.emit('admin-test-translation')"><i class="fa-solid fa-vial"></i> Run translation test</button>
+      ${tr && !tr.keyed ? '<div class="fld-hint" style="margin-top:6px;">The free fallback has small daily quotas. Set DEEPL_API_KEY (free tier available), GOOGLE_TRANSLATE_API_KEY or LIBRETRANSLATE_URL for reliable translation.</div>' : ''}
+    </div>
+    <div class="sys-card"><div class="sys-title"><i class="fa-solid fa-coins"></i> Exchange rates ${fx ? (fx.live ? pill('Live', 'ok') : pill('Built-in defaults', 'warn')) : ''}</div>
+      ${fx ? sysRow('1 GBP', nt('$' + fx.rates.GBP.toFixed(4))) + sysRow('1 EUR', nt('$' + fx.rates.EUR.toFixed(4))) + sysRow('Source', nt(fx.source)) + sysRow('Updated', fx.updatedAt ? admEsc(fmtDateTime(fx.updatedAt)) : '—') + (fx.lastError ? sysRow('Last error', nt(fx.lastError), 'bad') : '') : ''}
+      <button class="admin-btn" style="width:auto; margin-top:8px;" onclick="socket.emit('admin-refresh-fx')"><i class="fa-solid fa-rotate"></i> Refresh rates now</button>
+    </div>
+    <div class="sys-card"><div class="sys-title"><i class="fa-solid fa-location-crosshairs"></i> IP detection ${ip ? (ip.private ? pill('Check proxy setting', 'bad') : pill('Working', 'ok')) : ''}</div>
+      ${ip ? sysRow('Your IP as the server sees it', nt(ip.detected), ip.private ? 'bad' : 'ok') + sysRow('Network (blocks apply to)', nt(ip.network)) + sysRow('Connection address', nt(ip.socketAddress)) + sysRow('X-Forwarded-For', nt(ip.xForwardedFor || '—')) + sysRow('Trusted proxy hops', ip.hops) : ''}
+      <button class="admin-btn" style="width:auto; margin-top:8px;" onclick="socket.emit('admin-get-ip-info')"><i class="fa-solid fa-rotate"></i> Re-check</button>
+      <div class="fld-hint" style="margin-top:6px;">The first line must be your real public IP (compare with any "what is my IP" site). If it shows a private address (10.x, 172.16–31.x, 192.168.x, 127.x), set <b>TRUST_PROXY_HOPS</b> to the number of proxies in front of the app (1 for most hosts, 2 behind Cloudflare), or <b>TRUST_CLOUDFLARE=1</b>.</div>
+    </div>`;
+  });
+}
+function adminSendTestEmail() {
+  const to = (el('sysTestTo').value || '').trim();
+  if (!to) return toast('Enter an email address first.', true);
+  socket.emit('admin-send-test-email', { to });
+}
+
+// ---------------------------------------------------------------- Admin sets a temporary password (shown once)
+socket.on('temp-password', ({ email, password }) => {
+  if (!admOk()) return;
+  showPopup({
+    icon: 'fa-key', tone: 'info', title: 'Temporary password created',
+    body: `Passwords are never stored in a readable form, so existing ones cannot be viewed. This temporary password replaces the old one and every device was signed out. It is shown ONCE — pass it to the seller securely and ask them to change it with "Forgot password" after signing in.`,
+    facts: [['Seller email', email || '—'], ['Temporary password', password]],
+    actions: [{ label: 'Copy password', primary: true, icon: 'fa-copy', keepOpen: true, onClick: () => copyText(password, 'Password copied.') }, { label: 'Done' }]
+  });
+});
+function adminTempPassword(groupId) {
+  showConfirmModal({ title: 'Create a temporary password?', message: 'The seller\'s current password stops working and they are signed out of every device. You will see the new password once.' }, () => socket.emit('admin-set-temp-password', { groupId }));
+}
+function adminRevokeSessions(groupId) {
+  showConfirmModal({ title: 'Sign the seller out everywhere?', message: 'Every device must sign in again with the seller\'s password.' }, () => socket.emit('admin-revoke-seller-sessions', { groupId }));
+}

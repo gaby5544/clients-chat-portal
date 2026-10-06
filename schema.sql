@@ -425,3 +425,4 @@ ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS seller_account_id TEXT;
 UPDATE withdrawal_requests SET funds_reserved = TRUE WHERE status IN ('held_in_vault', 'processing') AND funds_reserved = FALSE;  -- legacy rows already moved their funds
 UPDATE withdrawal_requests SET status = 'declined' WHERE status IN ('rejected', 'failed');
 UPDATE withdrawal_requests SET status = 'pending'  WHERE status = 'held_in_vault';
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_auth_tokens         JSONB NOT NULL DEFAULT '[]';
