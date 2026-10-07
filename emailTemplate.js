@@ -1,175 +1,163 @@
-// The Vistra email design — one template for every email the Transaction Desk sends.
-// Based on the Vistra layout supplied by the client (burgundy + gold, VISTRA monogram header,
-// "Sovereign Wealth & Trust Architecture", signature block and footer kept word-for-word) with
-// the Quantum Secure Transaction Desk shown as a gold badge under the header and in the footer.
+// Vistra email template — the Desk's dark-burgundy / gold letterhead, as designed in the Vistra
+// HTML you supplied, rebuilt as bullet-proof table markup (renders in Gmail, Outlook, Apple Mail,
+// Zoho Mail and on phones) with a matching plain-text version for inbox-placement hygiene.
 //
-// render(spec, t, opts) -> { html, text }
-//   spec = { eyebrow, title, greeting, paragraphs[], code, codeNote, facts[[label,value]],
-//            status:{label,tone}, notice:{tone,text}, cta:{label,url}, quote, preheader, closing[] }
-//   tone: 'success' | 'danger' | 'warn' | 'info' | 'gold'
-//   t(s) translates a human sentence (identity when English); values (amounts, ids, codes) are never passed through it.
+//   Brand lines kept EXACTLY:  VISTRA · Sovereign Wealth & Trust Architecture · Vistra Fund Solutions
+//   Where "Quantum Secure Transaction Desk" appears:
+//     1) the service bar directly under the letterhead (which desk is writing to you)
+//     2) the signature, under "Vistra Fund Solutions"
+//     3) the footer line "Issued by the Quantum Secure Transaction Desk, a service of Vistra Fund Solutions"
+//   Support and Complaints are two separate contact cards, each with its own wording.
 
-const { escapeHtml: esc } = require('./security');
+const BRAND = 'VISTRA';
+const COMPANY = 'Vistra Fund Solutions';
+const SERVICE = 'Quantum Secure Transaction Desk';
+const TAGLINE = 'Sovereign Wealth & Trust Architecture';
+const ADDRESS = 'Vistra New York, 156 W 56th. St. 3rd Floor, New York, NY 10019';
+const CONFIDENTIALITY = 'This message is confidential and intended solely for the recipient. Unauthorized use or distribution is strictly prohibited. Vistra processes all communications and transactions under regulatory oversight.';
+const supportEmail = () => process.env.SUPPORT_EMAIL || 'support@usvistra.com';
+const complaintsEmail = () => process.env.COMPLAINTS_EMAIL || 'complaints@usvistra.com';
+const appUrl = () => (process.env.APP_URL || process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/$/, '');
 
-const ORG = 'VISTRA';
-const ORG_NAME = 'Vistra Fund Solutions';
-const ORG_TAGLINE = 'Sovereign Wealth & Trust Architecture';
-const ADDRESS = process.env.COMPANY_ADDRESS || 'Vistra New York, 156 W 56th. St. 3rd Floor, New York, NY 10019';
+const RTL = new Set(['ar', 'he', 'fa', 'ur']);
+const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const nl2br = (s) => esc(s).replace(/\n/g, '<br>');
 
-const TONES = {
-  success: { fg: '#34d399', bg: '#10241d', line: '#1f6f55' },
-  danger: { fg: '#f87171', bg: '#2a1214', line: '#7f2a30' },
-  warn: { fg: '#d4af37', bg: '#2a2210', line: '#7a6425' },
-  info: { fg: '#93c5fd', bg: '#101a2a', line: '#2d4a77' },
-  gold: { fg: '#d4af37', bg: '#1d1417', line: '#7a6425' }
+// ---- Static wording (translated for non-English recipients) ---------------------------------------
+const STATIC = {
+  respectfully: 'Respectfully,',
+  supportTitle: 'Support',
+  supportText: 'For help with your account, a verification code or a transaction, our Trading Support team is here for you.',
+  complaintsTitle: 'Complaints & Escalations',
+  complaintsText: 'To raise a formal complaint, dispute a decision or request a review of your account, write to our Complaints desk and quote your Account ID. Every complaint is logged, acknowledged and reviewed by a senior officer.',
+  respTime: 'Typical response time:',
+  issuedBy: 'Issued by the Quantum Secure Transaction Desk, a service of Vistra Fund Solutions.',
+  security: 'Security notice',
+  codeNote: 'Valid for 10 minutes · Single use',
+  neverShare: 'Vistra will never ask you for this code by phone, email or chat. Do not share it with anyone.',
+  disputeLead: 'Do you disagree with this decision?',
+  disputeText: 'You have the right to ask for a review. Write to our Complaints desk, quote your Account ID and explain why you believe it should be reconsidered — a senior officer who was not involved in the original decision will examine your case.',
+  rights: 'All rights reserved.'
 };
-const SERIF = "'Times New Roman',Times,serif";   // single quotes: these sit inside style="..." attributes
+
+// ---- Translation with protected terms -------------------------------------------------------------
+const PROTECT = [
+  /Vistra Fund Solutions|Quantum Secure Transaction Desk|Sovereign Wealth & Trust Architecture|VISTRA|Vistra/g,
+  /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g,
+  /\b[A-Z]{2,}-[A-Z0-9-]{4,}\b/g,
+  /[$£€]\s?\d[\d,]*(?:\.\d+)?|\b\d[\d,.]{2,}\b/g
+];
+async function localizeList(strings, lang) {
+  if (!lang || lang === 'en') return strings.slice();
+  let translateMany; try { ({ translateMany } = require('./translator')); } catch (e) { return strings.slice(); }
+  const masked = strings.map((s) => { const keep = []; let out = String(s); for (const re of PROTECT) out = out.replace(re, (m) => { keep.push(m); return `\u27E6${keep.length}\u27E7`; }); return { out, keep }; });
+  let res; try { res = await translateMany(masked.map((m) => m.out), lang); } catch (e) { return strings.slice(); }
+  return strings.map((orig, i) => {
+    const r = res[i]; if (!r || !r.ok) return orig;
+    let t = r.text; const keep = masked[i].keep;
+    for (let n = 1; n <= keep.length; n++) if ((t.match(new RegExp(`\\u27E6\\s*${n}\\s*\\u27E7`, 'g')) || []).length !== 1) return orig;
+    return t.replace(/\u27E6\s*(\d+)\s*\u27E7/g, (_, n) => keep[n - 1] || '');
+  });
+}
+
+// ---- Rendering ------------------------------------------------------------------------------------
+const TONES = { success: ['#34d399', '#0f2a22'], warning: ['#f5c26b', '#2e2410'], danger: ['#fb7185', '#2f1218'], info: ['#d4af37', '#271d0c'] };
+const SERIF = "'Times New Roman',Times,serif";
 const SANS = "'Helvetica Neue',Arial,sans-serif";
 
-// Every human-readable string the template adds itself (so it can be translated in one batch).
-const FIXED = {
-  respectfully: 'Respectfully,',
-  supportTitle: 'Client Support',
-  supportBody: 'Account help, security codes, identity verification, deposits and withdrawals.',
-  complaintsTitle: 'Complaints & Escalations',
-  complaintsBody: 'Formal complaints, disputed decisions, account reviews and suspected unauthorised activity.',
-  email: 'Email',
-  address: 'Address',
-  issued: 'Issued through the Quantum Secure Transaction Desk',
-  confidential: 'This message is confidential and intended solely for the recipient. Unauthorized use or distribution is strictly prohibited. Vistra processes all communications and transactions under regulatory oversight.',
-  rights: 'All rights reserved.',
-  dearDefault: 'Dear Valued Client,',
-  reference: 'Reference'
-};
-const FIXED_KEYS = Object.keys(FIXED);
-
-function badge(desk) {
-  return `<table border="0" cellpadding="0" cellspacing="0" align="center" style="margin:22px auto 0"><tr><td align="center" style="padding:7px 18px;border:1px solid #d4af37;border-radius:30px;background-color:#1a0e11">
-<span style="font-family:${SANS};font-size:10px;font-weight:700;letter-spacing:3px;text-transform:uppercase;color:#d4af37">&#9670;&nbsp; ${esc(desk)} &nbsp;&#9670;</span></td></tr></table>`;
+/**
+ * parts = {
+ *   subject, preheader, eyebrow, title, name?, paragraphs: [..],
+ *   badge?: { text, tone }, details?: [[label, value], ..], code?: '123456', quote?: 'text',
+ *   notice?: 'text' | true (= standard "never share" notice), cta?: { label, url },
+ *   dispute?: true  (adds the "disagree with this decision?" callout pointing to Complaints)
+ * }
+ */
+function collectStrings(parts) {
+  const S = {}; const add = (k, v) => { if (v) S[k] = v; };
+  add('subject', parts.subject); add('preheader', parts.preheader); add('eyebrow', parts.eyebrow); add('title', parts.title);
+  (parts.paragraphs || []).forEach((p, i) => add('p' + i, p));
+  add('badge', parts.badge && parts.badge.text); (parts.details || []).forEach((d, i) => add('d' + i, d[0]));
+  add('quote', parts.quote); if (typeof parts.notice === 'string') add('notice', parts.notice); if (parts.cta) add('cta', parts.cta.label);
+  add('greeting', parts.name ? `Dear ${parts.name},` : 'Dear Client,');
+  Object.entries(STATIC).forEach(([k, v]) => add('s_' + k, v));
+  return S;
 }
-
-function codeBlock(code, note) {
-  return `<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:26px 0"><tr><td align="center" style="padding:26px 12px;background-color:#0d0608;border:1px solid #d4af37;border-radius:6px">
-<div class="code" style="font-family:'Courier New',Courier,monospace;font-size:38px;font-weight:700;letter-spacing:14px;color:#d4af37;text-indent:14px">${esc(code)}</div>
-${note ? `<div style="font-family:${SANS};font-size:11px;letter-spacing:2px;text-transform:uppercase;color:#9ca3af;margin-top:12px">${esc(note)}</div>` : ''}
-</td></tr></table>`;
+async function renderEmail(parts, lang = 'en') {
+  const S = collectStrings(parts); const keys = Object.keys(S); const outv = await localizeList(keys.map((k) => S[k]), lang);
+  const T = {}; keys.forEach((k, i) => { T[k] = outv[i]; });
+  return assemble(parts, T, lang);
 }
+/** English-only, synchronous — for legacy callers that expect a string straight away. */
+function renderEmailSync(parts) { return assemble(parts, collectStrings(parts), 'en'); }
 
-function factsTable(facts) {
-  return `<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:22px 0;border-top:1px solid #3a2a1f">${facts.map(([k, v]) => `
-<tr><td style="padding:12px 0;border-bottom:1px solid #2a1d20;font-family:${SANS};font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:#d4af37;width:38%;vertical-align:top">${esc(k)}</td>
-<td style="padding:12px 0;border-bottom:1px solid #2a1d20;font-family:${SANS};font-size:14px;color:#ffffff;vertical-align:top;word-break:break-word">${esc(v)}</td></tr>`).join('')}</table>`;
-}
-
-function statusPill(status) {
-  const c = TONES[status.tone] || TONES.gold;
-  return `<table role="presentation" cellspacing="0" cellpadding="0" style="margin:0 0 20px"><tr><td style="padding:6px 16px;border:1px solid ${c.fg};border-radius:30px;background-color:${c.bg}">
-<span style="font-family:${SANS};font-size:11px;font-weight:700;letter-spacing:2.5px;text-transform:uppercase;color:${c.fg}">&#9679;&nbsp; ${esc(status.label)}</span></td></tr></table>`;
-}
-
-function noticeBox(n) {
-  const c = TONES[n.tone] || TONES.warn;
-  return `<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:22px 0"><tr><td style="padding:16px 20px;background-color:${c.bg};border-left:3px solid ${c.fg};border-top:1px solid ${c.line};border-right:1px solid ${c.line};border-bottom:1px solid ${c.line};border-radius:4px;font-family:${SANS};font-size:13.5px;line-height:1.75;color:#e5e7eb">${esc(n.text).replace(/\n/g, '<br>')}</td></tr></table>`;
-}
-
-function quoteBox(q) {
-  return `<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:22px 0"><tr><td style="padding:18px 22px;background-color:#0f080a;border-left:3px solid #d4af37;border-radius:4px;font-family:${SERIF};font-size:16px;line-height:1.8;font-style:italic;color:#fffdfa">&ldquo;${esc(q).replace(/\n/g, '<br>')}&rdquo;</td></tr></table>`;
-}
-
-function ctaButton(c) {
-  return `<table role="presentation" cellspacing="0" cellpadding="0" align="center" style="margin:30px auto 8px"><tr><td align="center" bgcolor="#d4af37" style="border-radius:3px;background:linear-gradient(135deg,#e6c75a,#b8922b) #d4af37">
-<a href="${esc(c.url)}" target="_blank" style="display:inline-block;padding:15px 38px;font-family:${SANS};font-size:12px;font-weight:700;letter-spacing:3px;text-transform:uppercase;text-decoration:none;color:#140b0d">${esc(c.label)}</a></td></tr></table>`;
-}
-
-function render(spec, t = (s) => s, opts = {}) {
-  const T = Object.assign({}, FIXED, opts.fixed || {});
-  const desk = opts.desk || 'Quantum Secure Transaction Desk';
-  const supportEmail = opts.supportEmail || 'support@usvistra.com';
-  const complaintsEmail = opts.complaintsEmail || 'complaints@usvistra.com';
+function assemble(parts, T, lang) {
   const year = new Date().getFullYear();
-  const dir = opts.rtl ? 'rtl' : 'ltr';
-  const align = opts.rtl ? 'right' : 'left';
-  const paras = (spec.paragraphs || []).filter(Boolean);
-  const greeting = spec.greeting === false ? '' : (spec.greeting || T.dearDefault);
+  const rtl = RTL.has(String(lang).split('-')[0]);
+  const dir = rtl ? 'rtl' : 'ltr'; const align = rtl ? 'right' : 'left';
 
-  const bodyParts = [];
-  if (spec.status) bodyParts.push(statusPill(spec.status));
-  if (greeting) bodyParts.push(`<p style="margin:0 0 16px;font-family:${SERIF};font-size:17px;color:#fffdfa">${esc(greeting)}</p>`);
-  if (paras[0]) bodyParts.push(`<p style="margin:0 0 16px">${esc(paras[0]).replace(/\n/g, '<br>')}</p>`);
-  if (spec.quote) bodyParts.push(quoteBox(spec.quote));
-  if (spec.code) bodyParts.push(codeBlock(spec.code, spec.codeNote));
-  if (spec.facts && spec.facts.length) bodyParts.push(factsTable(spec.facts));
-  paras.slice(1).forEach((p) => bodyParts.push(`<p style="margin:0 0 16px">${esc(p).replace(/\n/g, '<br>')}</p>`));
-  if (spec.notice) bodyParts.push(noticeBox(spec.notice));
-  if (spec.cta && spec.cta.url) bodyParts.push(ctaButton(spec.cta));
+  const tr = (k, fallback) => (T[k] !== undefined ? T[k] : fallback);
 
-  const html = `<!doctype html>
-<html lang="${esc(opts.lang || 'en')}" dir="${dir}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark light"><meta name="supported-color-schemes" content="dark light">
-<title>${esc(spec.title)}</title>
-<style>@media only screen and (max-width:640px){.card{width:100%!important}.pad{padding:34px 22px!important}.hdr{padding:36px 20px!important}.code{font-size:28px!important;letter-spacing:8px!important;text-indent:8px!important}.ttl{font-size:23px!important}}a{color:#d4af37}</style></head>
-<body style="margin:0;padding:0;background-color:#050203">
-<div style="display:none;max-height:0;overflow:hidden;opacity:0;color:#050203;font-size:1px;line-height:1px">${esc(spec.preheader || spec.title)}&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;</div>
-<table width="100%" cellspacing="0" cellpadding="0" bgcolor="#050203" style="padding:48px 0;background:#050203;width:100%;table-layout:fixed"><tbody><tr><td align="center" style="padding:0 10px">
-<table class="card" cellspacing="0" cellpadding="0" width="620" bgcolor="#140b0d" style="width:620px;max-width:620px;border-radius:4px;overflow:hidden;border:1px solid #3d3317;background:#140b0d"><tbody>
+  const support = supportEmail(), complaints = complaintsEmail(); const respTime = process.env.SUPPORT_RESPONSE_TIME;
+  const url = parts.cta && (parts.cta.url || appUrl());
 
-<tr style="background:#0d0608;border-bottom:2px solid #d4af37"><td class="hdr" align="center" bgcolor="#0d0608" style="padding:50px 40px 44px;background:linear-gradient(#1d0f12 0%,#0d0608 100%) #0d0608;border-bottom:2px solid #d4af37">
-<table border="0" cellpadding="0" cellspacing="0" style="margin:0 auto"><tbody>
-<tr><td align="center"><table border="0" cellpadding="0" cellspacing="0" style="margin:0 auto 18px"><tbody><tr><td align="center" style="width:64px;height:64px;background:#150a0c;border-radius:50%;border:1px solid #d4af37">
-<span style="font-family:${SERIF};font-size:30px;line-height:64px;letter-spacing:2px;font-weight:bold;color:#d4af37">V</span></td></tr></tbody></table></td></tr>
-<tr><td align="center"><span style="font-family:${SERIF};font-size:28px;letter-spacing:7px;text-transform:uppercase;display:block;color:#ffffff">${ORG}</span></td></tr>
-<tr><td align="center" style="padding-top:6px"><span style="font-family:${SANS};font-size:10px;font-weight:600;letter-spacing:6px;text-transform:uppercase;display:block;color:#d4af37">${esc(ORG_TAGLINE)}</span></td></tr>
-</tbody></table>
-${badge(desk)}
-</td></tr>
+  // 2) HTML
+  const gold = '#d4af37';
+  const body = [];
+  body.push(`<div style="font:600 11px ${SANS};letter-spacing:3px;text-transform:uppercase;color:${gold};margin:0 0 10px;">${esc(tr('eyebrow', parts.eyebrow || ''))}</div>`);
+  body.push(`<div class="h1" style="font:400 26px/1.3 ${SERIF};color:#fffdfa;margin:0 0 14px;">${esc(tr('title', parts.title))}</div>`);
+  body.push(`<div style="width:56px;height:2px;background:${gold};margin:0 0 26px;font-size:0;line-height:0;">&nbsp;</div>`);
+  if (parts.badge) { const [c, bg] = TONES[parts.badge.tone] || TONES.info; body.push(`<div style="margin:0 0 22px;"><span style="display:inline-block;padding:6px 16px;border:1px solid ${c};background:${bg};color:${c};border-radius:30px;font:700 11px ${SANS};letter-spacing:2px;text-transform:uppercase;">${esc(tr('badge', parts.badge.text))}</span></div>`); }
+  if (!parts.noGreeting) body.push(`<p style="margin:0 0 16px;font:500 15px/1.8 ${SANS};color:#fffdfa;">${esc(tr('greeting'))}</p>`);
+  (parts.paragraphs || []).forEach((p, i) => body.push(`<p style="margin:0 0 16px;font:15px/1.85 ${SANS};color:#d1d5db;">${nl2br(tr('p' + i, p))}</p>`));
+  if (parts.bodyHtml) body.push(parts.bodyHtml);
+  if (parts.details && parts.details.length) {
+    body.push(`<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:8px 0 24px;border-top:1px solid #2b2112;">${parts.details.map((d, i) => `<tr><td style="padding:12px 0;border-bottom:1px solid #2b2112;font:600 11px ${SANS};letter-spacing:2px;text-transform:uppercase;color:${gold};text-align:${align};width:42%;vertical-align:top;">${esc(tr('d' + i, d[0]))}</td><td style="padding:12px 0;border-bottom:1px solid #2b2112;font:500 15px ${SANS};color:#fffdfa;text-align:${rtl ? 'left' : 'right'};vertical-align:top;word-break:break-word;">${esc(d[1])}</td></tr>`).join('')}</table>`);
+  }
+  if (parts.quote) body.push(`<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:6px 0 24px;"><tr><td style="border-${rtl ? 'right' : 'left'}:3px solid ${gold};background:#1b1114;padding:16px 20px;font:italic 15px/1.7 ${SERIF};color:#e5e7eb;text-align:${align};">${nl2br(tr('quote', parts.quote))}</td></tr></table>`);
+  if (parts.code) body.push(`<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:10px 0 26px;"><tr><td align="center" bgcolor="#0d0608" style="background:#0d0608;border:1px solid ${gold};border-radius:4px;padding:26px 16px;"><div style="font:700 36px ui-monospace,Menlo,Consolas,'Courier New',monospace;letter-spacing:12px;color:#f5d77a;padding-left:12px;" dir="ltr">${esc(parts.code)}</div><div style="margin-top:10px;font:600 11px ${SANS};letter-spacing:2px;text-transform:uppercase;color:#9ca3af;">${esc(tr('s_codeNote'))}</div></td></tr></table>`);
+  if (parts.notice) body.push(`<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:0 0 24px;"><tr><td style="border-${rtl ? 'right' : 'left'}:3px solid ${gold};background:#1b1114;padding:16px 20px;font:13px/1.7 ${SANS};color:#d1d5db;text-align:${align};"><b style="color:#fffdfa;letter-spacing:1px;text-transform:uppercase;font-size:11px;">${esc(tr('s_security'))}</b><br>${esc(typeof parts.notice === 'string' ? tr('notice', parts.notice) : tr('s_neverShare'))}</td></tr></table>`);
+  if (parts.cta && url) body.push(`<table role="presentation" cellspacing="0" cellpadding="0" style="margin:6px 0 26px;"><tr><td align="center" bgcolor="${gold}" style="background:${gold};border-radius:3px;"><a href="${esc(url)}" style="display:inline-block;padding:15px 38px;font:700 12px ${SANS};letter-spacing:2.5px;text-transform:uppercase;color:#140b0d;text-decoration:none;">${esc(tr('cta', parts.cta.label))}</a></td></tr></table>`);
+  if (parts.dispute) body.push(`<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:0 0 24px;"><tr><td style="border:1px solid #3d3218;background:#120a0c;padding:16px 20px;font:13px/1.7 ${SANS};color:#d1d5db;text-align:${align};"><b style="color:${gold};">${esc(tr('s_disputeLead'))}</b> ${esc(tr('s_disputeText'))}<br><a href="mailto:${esc(complaints)}" style="color:${gold};font-weight:600;text-decoration:none;">${esc(complaints)}</a></td></tr></table>`);
+  // signature (exact wording from the Vistra template)
+  body.push(`<p style="margin:34px 0 0;font:600 16px/1.7 ${SERIF};color:#fffdfa;">${esc(tr('s_respectfully'))}<br><span style="font:400 15px ${SERIF};letter-spacing:.5px;color:${gold};display:inline-block;margin-top:4px;">Trading Support Coordinator</span><br><span style="font:600 16px ${SERIF};letter-spacing:1px;color:#ffffff;display:inline-block;margin-top:2px;">${COMPANY}</span><br><span style="font:600 10px ${SANS};letter-spacing:3px;text-transform:uppercase;color:#9ca3af;display:inline-block;margin-top:6px;">${SERVICE}</span></p>`);
 
-<tr><td class="pad" align="${align}" bgcolor="#170d10" style="padding:52px 46px 40px;font-size:15px;line-height:1.9;font-family:${SANS};background-color:#170d10;color:#d1d5db;text-align:${align}">
-${spec.eyebrow ? `<div style="font-family:${SANS};font-size:11px;font-weight:700;letter-spacing:4px;text-transform:uppercase;color:#d4af37;margin:0 0 12px">${esc(spec.eyebrow)}</div>` : ''}
-<div class="ttl" style="font-family:${SERIF};font-size:27px;line-height:1.3;color:#ffffff;margin:0 0 6px">${esc(spec.title)}</div>
-<table role="presentation" cellspacing="0" cellpadding="0" style="margin:14px 0 26px"><tr><td width="56" height="2" bgcolor="#d4af37" style="font-size:0;line-height:0;height:2px">&nbsp;</td></tr></table>
-${bodyParts.join('\n')}
-<p style="margin:34px 0 0;font-family:${SERIF};font-size:16px;color:#fffdfa;font-weight:600"><br>${esc(T.respectfully)}<br>
-<span style="font-family:${SERIF};font-size:15px;letter-spacing:.5px;display:inline-block;margin-top:4px;font-weight:normal;color:#d4af37">Trading Support Coordinator</span><br>
-<span style="font-family:${SERIF};font-size:16px;letter-spacing:1px;display:inline-block;margin-top:2px;color:#ffffff">${ORG_NAME}</span></p>
-</td></tr>
+  const card = (title, text, mail, extra) => `<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:0 0 14px;"><tr><td style="border-${rtl ? 'right' : 'left'}:2px solid ${gold};padding:2px 16px;text-align:${align};"><b style="font:700 11px ${SERIF};text-transform:uppercase;letter-spacing:1.5px;color:#e5e7eb;">${esc(title)}</b><div style="margin-top:6px;font:12px/1.7 ${SANS};color:#9ca3af;">${esc(text)}${extra ? ' ' + esc(extra) : ''}</div><div style="margin-top:6px;font:12px ${SANS};">📧 <a href="mailto:${esc(mail)}" style="color:${gold};font-weight:600;text-decoration:none;">${esc(mail)}</a></div></td></tr></table>`;
+  const footer = `${card(tr('s_supportTitle'), tr('s_supportText'), support, respTime ? `${tr('s_respTime')} ${respTime}.` : '')}${card(tr('s_complaintsTitle'), tr('s_complaintsText'), complaints)}
+    <div style="margin-top:6px;font:12px/1.7 ${SANS};color:#9ca3af;text-align:${align};">🏢 ${esc(ADDRESS)}</div><hr style="border:0;border-top:1px solid #2b2112;margin:20px 0;">
+    <div style="font:italic 10px/1.6 ${SANS};color:#6b7280;text-align:${align};">${esc(tr('s_issuedBy'))}<br>${esc(CONFIDENTIALITY.replace(/Vistra processes/, 'Vistra processes'))}</div>
+    <div style="margin-top:10px;font:10px ${SANS};letter-spacing:.5px;color:#6b7280;text-align:${align};">© ${year} ${COMPANY}. ${esc(tr('s_rights'))}</div>`;
 
-<tr bgcolor="#0b0507" style="background-color:#0b0507;border-top:1px solid #3a2a1f"><td align="${align}" style="padding:36px 46px 34px;font-size:12px;line-height:1.7;font-family:${SANS};color:#9ca3af;background-color:#0b0507;border-top:1px solid #3a2a1f;text-align:${align}">
-<table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr>
-<td valign="top" width="50%" style="padding:0 14px 18px 0;font-family:${SANS};font-size:12px;line-height:1.7;color:#9ca3af">
-<b style="text-transform:uppercase;letter-spacing:1.5px;font-family:${SERIF};font-size:11px;color:#e5e7eb">${esc(T.supportTitle)}</b><br>
-<span style="font-size:11.5px">${esc(T.supportBody)}</span><br>
-<span style="display:inline-block;margin-top:6px">&#128231; ${esc(T.email)}: <a href="mailto:${esc(supportEmail)}" style="text-decoration:none;font-weight:600;color:#d4af37">${esc(supportEmail)}</a></span></td>
-<td valign="top" width="50%" style="padding:0 0 18px 14px;border-${opts.rtl ? 'right' : 'left'}:1px solid #2a1d20;font-family:${SANS};font-size:12px;line-height:1.7;color:#9ca3af">
-<b style="text-transform:uppercase;letter-spacing:1.5px;font-family:${SERIF};font-size:11px;color:#e5e7eb">${esc(T.complaintsTitle)}</b><br>
-<span style="font-size:11.5px">${esc(T.complaintsBody)}</span><br>
-<span style="display:inline-block;margin-top:6px">&#128231; ${esc(T.email)}: <a href="mailto:${esc(complaintsEmail)}" style="text-decoration:none;font-weight:600;color:#d4af37">${esc(complaintsEmail)}</a></span></td>
-</tr></table>
-<div style="margin-top:4px">&#127970; ${esc(T.address)}: ${esc(ADDRESS)}</div>
-<hr style="border:none;border-top:1px solid #2a1d20;margin:20px 0">
-<div style="font-size:10px;line-height:1.6;font-style:italic;color:#6b7280">${esc(T.confidential)}</div>
-<div style="margin-top:12px;font-size:10px;letter-spacing:.5px;color:#6b7280">&copy; ${year} ${ORG_NAME}. ${esc(T.rights)}</div>
-<div style="margin-top:6px;font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#7a6425">${esc(T.issued)}</div>
-</td></tr>
+  const html = `<!doctype html><html lang="${esc(lang)}" dir="${dir}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><meta name="supported-color-schemes" content="dark"><style>@media only screen and (max-width:480px){.px{padding-left:24px!important;padding-right:24px!important}.h1{font-size:23px!important}}</style><title>${esc(tr('subject', parts.subject))}</title></head>
+<body style="margin:0;padding:0;background:#050203;">
+<div style="display:none;max-height:0;overflow:hidden;opacity:0;color:#050203;font-size:1px;line-height:1px;">${esc(tr('preheader', parts.preheader || parts.title))}&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;</div>
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" bgcolor="#050203" style="background:#050203;"><tr><td align="center" style="padding:44px 12px;">
+<table role="presentation" width="620" cellspacing="0" cellpadding="0" bgcolor="#140b0d" style="width:100%;max-width:620px;background:#140b0d;border:1px solid #3d3218;border-radius:4px;overflow:hidden;">
+ <tr><td align="center" bgcolor="#0d0608" style="background:#0d0608;background-image:linear-gradient(#1d0f12,#0d0608);border-bottom:2px solid ${gold};padding:46px 30px 40px;">
+  <table role="presentation" cellspacing="0" cellpadding="0" style="margin:0 auto 16px;"><tr><td align="center" width="64" height="64" bgcolor="#150b0d" style="width:64px;height:64px;background:#150b0d;border:1px solid ${gold};border-radius:50%;font:700 30px/64px ${SERIF};color:${gold};letter-spacing:2px;">V</td></tr></table>
+  <div style="font:400 28px ${SERIF};letter-spacing:7px;text-transform:uppercase;color:#ffffff;">${BRAND}</div>
+  <div style="margin-top:8px;font:600 10px ${SANS};letter-spacing:6px;text-transform:uppercase;color:${gold};">${esc(TAGLINE)}</div>
+ </td></tr>
+ <tr><td align="center" bgcolor="#100809" style="background:#100809;border-bottom:1px solid #2b2112;padding:13px 20px;"><span style="font:600 10px ${SANS};letter-spacing:4px;text-transform:uppercase;color:${gold};">${SERVICE}</span></td></tr>
+ <tr><td class="px" bgcolor="#170d10" style="background:#170d10;padding:44px 40px 40px;text-align:${align};">${body.join('\n')}</td></tr>
+ <tr><td class="px" bgcolor="#0b0507" style="background:#0b0507;border-top:1px solid #2b2112;padding:34px 40px 30px;">${footer}</td></tr>
+</table></td></tr></table></body></html>`;
 
-</tbody></table></td></tr></tbody></table></body></html>`;
-
-  // ---- plain-text twin (always sent alongside the HTML) ----
+  // 3) plain text (always sent alongside the HTML)
   const L = [];
-  const rule = '='.repeat(56);
-  L.push(rule, `${ORG}  |  ${ORG_TAGLINE}`, desk.toUpperCase(), rule, '');
-  if (spec.eyebrow) L.push(spec.eyebrow.toUpperCase());
-  L.push(spec.title, '');
-  if (spec.status) L.push(`[ ${spec.status.label.toUpperCase()} ]`, '');
-  if (greeting) L.push(greeting, '');
-  if (paras[0]) L.push(paras[0], '');
-  if (spec.quote) L.push(`"${spec.quote}"`, '');
-  if (spec.code) L.push(`    ${spec.code}`, ...(spec.codeNote ? [`    (${spec.codeNote})`] : []), '');
-  if (spec.facts && spec.facts.length) { spec.facts.forEach(([k, v]) => L.push(`${k}: ${v}`)); L.push(''); }
-  paras.slice(1).forEach((p) => L.push(p, ''));
-  if (spec.notice) L.push(`>> ${spec.notice.text}`, '');
-  if (spec.cta && spec.cta.url) L.push(`${spec.cta.label}: ${spec.cta.url}`, '');
-  L.push(T.respectfully, 'Trading Support Coordinator', ORG_NAME, '', '-'.repeat(56));
-  L.push(`${T.supportTitle}: ${supportEmail}`, `  ${T.supportBody}`, `${T.complaintsTitle}: ${complaintsEmail}`, `  ${T.complaintsBody}`, `${T.address}: ${ADDRESS}`, '', T.issued, `(c) ${year} ${ORG_NAME}. ${T.rights}`);
-  return { html, text: L.join('\n') };
+  L.push(`${BRAND} — ${TAGLINE}`, SERVICE, '='.repeat(46), '', String(tr('eyebrow', parts.eyebrow || '')).toUpperCase(), tr('title', parts.title), '', tr('greeting'), '');
+  if (parts.badge) L.push(`[ ${tr('badge', parts.badge.text)} ]`, '');
+  (parts.paragraphs || []).forEach((p, i) => L.push(tr('p' + i, p), ''));
+  (parts.details || []).forEach((d, i) => L.push(`${tr('d' + i, d[0])}: ${d[1]}`)); if (parts.details && parts.details.length) L.push('');
+  if (parts.quote) L.push(`"${tr('quote', parts.quote)}"`, '');
+  if (parts.code) L.push(`>>> ${parts.code} <<<`, tr('s_codeNote'), '');
+  if (parts.notice) L.push(`${tr('s_security')}: ${typeof parts.notice === 'string' ? tr('notice', parts.notice) : tr('s_neverShare')}`, '');
+  if (parts.cta && url) L.push(`${tr('cta', parts.cta.label)}: ${url}`, '');
+  if (parts.dispute) L.push(`${tr('s_disputeLead')} ${tr('s_disputeText')} ${complaints}`, '');
+  L.push(tr('s_respectfully'), 'Trading Support Coordinator', COMPANY, SERVICE, '', '-'.repeat(46),
+    `${String(tr('s_supportTitle')).toUpperCase()}: ${support}`, tr('s_supportText') + (respTime ? ` ${tr('s_respTime')} ${respTime}.` : ''), '',
+    `${String(tr('s_complaintsTitle')).toUpperCase()}: ${complaints}`, tr('s_complaintsText'), '', ADDRESS, '', tr('s_issuedBy'), CONFIDENTIALITY, `© ${year} ${COMPANY}. ${tr('s_rights')}`);
+  return { subject: tr('subject', parts.subject), html, text: L.join('\n') };
 }
 
-module.exports = { render, FIXED, FIXED_KEYS, ORG, ORG_NAME, ORG_TAGLINE, ADDRESS };
+module.exports = { renderEmail, renderEmailSync, localizeList, BRAND, COMPANY, SERVICE, TAGLINE, ADDRESS, supportEmail, complaintsEmail, appUrl };

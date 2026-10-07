@@ -135,24 +135,5 @@ online, start with `DEPLOY.md` (works on any host) or `DEPLOY_NORTHFLANK.md`
 instructions are still in `DEPLOY_RENDER.md` if you want them.
 
 
----
-
-## v4.0 additions — configuration
-
-| Variable | Purpose |
-|---|---|
-| `REQUIRE_EMAIL_CODES` | `true` / `false` / `auto` (default). Email codes for registration and withdrawals; `auto` = on whenever email delivery is configured. |
-| `SUPPORT_EMAIL` | Client Support address (default `support@usvistra.com`) — Reply-To of every email. |
-| `COMPLAINTS_EMAIL` | Complaints & Escalations address (default `complaints@usvistra.com`) — shown to disabled sellers. |
-| `EMAIL_SERVICE`, `EMAIL_USER`, `EMAIL_PASS`, `EMAIL_FROM` | Email login (Zoho: `zoho`, mailbox, App Password). See **EMAIL-SETUP-ZOHO.md**. |
-| `ZOHO_REGION`, `EMAIL_FROM_ALIASES`, `EMAIL_DKIM_SELECTOR`, `APP_URL`, `COMPANY_ADDRESS` | Optional email tuning. |
-| `FACE_MATCH`, `FACE_MATCH_STRONG/REVIEW/REJECT` | Free on-server face matching (`off` disables; defaults 0.50 / 0.60 / 0.68). Needs ~600 MB RAM free while a check runs. |
-| `TRANSLATE_PROVIDERS` | Order of free translation providers (default `gtx,lingva,mymemory`). |
-| `GOOGLE_TRANSLATE_API_KEY` | Optional paid-tier provider. Not needed — translation is free by default. |
-| `LIBRETRANSLATE_URL`, `LIBRETRANSLATE_API_KEY` | Alternative self-hosted translation. |
-| `MYMEMORY_EMAIL` | Raises the free MyMemory daily quota (fallback provider). |
-| `DAILY_WITHDRAWAL_LIMIT` | Daily limit in account currency (default `10000000`). |
-| `TRUST_PROXY_HOPS` | Reverse proxies in front of the app (default `1`) — needed so IP logging/blocking sees the real visitor. |
-| `TRUST_CLOUDFLARE` | `1` if behind Cloudflare (uses `CF-Connecting-IP`). |
-
-`sharp` (optional dependency) powers the automatic KYC image-quality checks. See `V4-CHANGES.md` for the item-by-item list.
+## v3.1
+See **CHANGES-v3.1.md** for the full item-by-item report, new environment variables and test instructions.

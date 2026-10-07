@@ -205,7 +205,7 @@ function loginAsAdmin() {
 function joinSession(adminKey = null) {
   const selectedRole = adminKey ? 'ADMINISTRATOR' : (urlLockedRole || el('roleSelect').value);
   const email = localStorage.getItem('q_user_email') || undefined;
-  socket.emit('join-room', { groupId: activeGroupId, role: selectedRole, adminKey, sessionToken, email, lang: localStorage.getItem('q_ui_lang') || undefined });
+  socket.emit('join-room', { groupId: activeGroupId, role: selectedRole, adminKey, sessionToken, email });
 }
 
 socket.on('connect', () => { currentSocketId = socket.id; joinSession(adminPasskeyMemory); });
@@ -222,6 +222,7 @@ socket.on('init-state', async (data) => {
   currentGroupCustomNames = data.group.customNames || { A: 'Buyer', B: 'Seller' };
   currentGroupEmails = data.group.emails || { A: null, B: null };
   _myToken = data.sessionToken; // must be set before rendering messages below
+  _myUid = data.uid;
   document.body.classList.toggle('is-admin', isAdminConfirmed);
   document.body.classList.remove('role-admin', 'role-super_admin', 'role-moderator');
   if (currentAdminRole) document.body.classList.add('role-' + currentAdminRole.toLowerCase());
@@ -273,16 +274,17 @@ socket.on('init-state', async (data) => {
   // never flashes stale data left over from a previously viewed group.
   lastPresenceUsers = [];
   renderPresenceBadges(lastPresenceUsers);
-  if (window.v4OnInitState) window.v4OnInitState(data);
 });
 
 // ---------------- MESSAGES ----------------
 let _myToken = null;
+let _myUid = null;
 function myToken() { return _myToken; }
+function myUid() { return _myUid; }
 
 function bubbleClassFor(data) {
   if (data.sender === 'SYSTEM') return 'msg-system';
-  const mine = data.senderToken === myToken();
+  const mine = data.senderId === myUid();
   if (mine) return 'msg-party msg-mine-class';
   if (data.senderRole === 'ADMINISTRATOR') return 'msg-admin';
   return 'msg-other';
@@ -290,10 +292,9 @@ function bubbleClassFor(data) {
 
 function renderMessage(data) {
   messagesById.set(data.id, data);
-  setTimeout(() => { if (window.v4AfterMessage) window.v4AfterMessage(data); }, 0); // auto-translate + read receipts (v4.js)
   const container = el('messageContainer');
   const wrapper = document.createElement('div');
-  const mine = data.senderToken === myToken();
+  const mine = data.senderId === myUid();
   wrapper.className = `msg-wrapper ${mine ? 'msg-mine' : ''}`;
   wrapper.id = `msg-row-${data.id}`;
 
@@ -413,14 +414,12 @@ socket.on('messages-bulk-deleted', ({ messageIds }) => {
 socket.on('reaction-updated', ({ messageId, reactions }) => renderReactions(messageId, reactions));
 
 // ---------------- SEND MESSAGE / TRANSLATION ----------------
-async function translateText(text, targetLang) {
-  // Every translation goes through the server (/api/translate): private provider key, shared cache,
-  // and a vendor outage degrades to "show the original" instead of a broken chat.
+async function translateText(text, targetLang, sourceLang = 'autodetect') {
   if (!text || !targetLang) return text;
   try {
-    const res = await fetch('/api/translate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ texts: [text], target: targetLang }) });
+    const res = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${sourceLang}|${targetLang}`);
     const data = await res.json();
-    return (data && data.translations && data.translations[0]) || text;
+    return data?.responseData?.translatedText || text;
   } catch (err) { return text; }
 }
 
@@ -693,7 +692,7 @@ function triggerCtxDelete() {
   );
 }
 
-function closeModal(id) { const m = el(id); if (m) m.classList.add('hidden'); }
+function closeModal(id) { el(id).classList.add('hidden'); }
 
 // ---------------- PINNED ----------------
 function renderPinned(list) {
@@ -1005,7 +1004,7 @@ socket.on('withdrawal-updated', (w) => {
   renderWithdrawalsQueue();
 });
 socket.on('withdrawal-resolved', (w) => { withdrawalsQueueCache = withdrawalsQueueCache.filter(x => !['completed', 'rejected', 'failed'].includes(x.status) || x.id !== w.id); renderWithdrawalsQueue(); });
-socket.on('transaction-account-created', (d) => { closeModal('txRegModal'); if (window.v4OnAccountCreated) window.v4OnAccountCreated(d); else { toast('Your Transaction Account is ready.'); openTxAccountView(); } });
+socket.on('transaction-account-created', () => { closeModal('txRegModal'); toast('Your Transaction Account is ready.'); openTxAccountView(); });
 socket.on('kyc-queue-list', (list) => { kycQueueCache = list; renderKycQueue(); });
 socket.on('kyc-submitted', (acct) => {
   kycQueueCache = [acct, ...kycQueueCache.filter(x => x.groupId !== acct.groupId)];
@@ -1142,7 +1141,7 @@ function renderTxAccountUI() {
   if (el('txHeldNote')) {
     const pendingDeposits = sellerDeposits.filter(d => d.status === 'held_in_vault').length;
     const pendingIncoming = sellerIncoming.filter(i => i.status === 'held_in_vault').length;
-    const pendingWithdrawals = sellerWithdrawals.filter(w => ['pending', 'processing'].includes(w.status)).length;
+    const pendingWithdrawals = sellerWithdrawals.filter(w => w.status === 'held_in_vault').length;
     const parts = [];
     if (pendingDeposits) parts.push(`${pendingDeposits} deposit`);
     if (pendingIncoming) parts.push(`${pendingIncoming} incoming payment`);
@@ -1211,7 +1210,6 @@ function mergedActivity() {
   const inc = sellerIncoming.map(i => ({ date: i.receivedAt, type: `Payment · ${i.payerName}`, amount: `+${fmtMoney(i.amount, i.amountCurrency)}`, status: i.status, note: i.statusReason || '' }));
   return [...deps, ...wds, ...inc].sort((a, b) => new Date(b.date) - new Date(a.date));
 }
-function statusLabelText(status) { return ({ rejected: 'declined', failed: 'declined', held_in_vault: 'held in vault' })[status] || String(status).replace(/_/g, ' '); }
 function statusPillClass(status) {
   if (['verified', 'completed', 'credited'].includes(status)) return 'enabled';
   if (['rejected', 'failed', 'reversed'].includes(status)) return 'disabled';
@@ -1223,14 +1221,14 @@ function renderTxDepositsAndWithdrawals() {
   if (recentBody) {
     recentBody.innerHTML = all.length ? all.slice(0, 5).map(row => `
       <tr><td>${fmtDate(row.date)}</td><td>${escapeHtml(row.type)}</td><td>${escapeHtml(row.amount)}</td>
-      <td><span class="tx-status-badge ${statusPillClass(row.status)}">${statusLabelText(row.status)}</span></td></tr>`).join('')
+      <td><span class="tx-status-badge ${statusPillClass(row.status)}">${row.status.replace(/_/g, ' ')}</span></td></tr>`).join('')
       : '<tr><td colspan="4" class="tx-empty">No activity yet.</td></tr>';
   }
   const fullBody = el('txFullActivityBody');
   if (fullBody) {
     fullBody.innerHTML = all.length ? all.map(row => `
       <tr><td>${fmtDate(row.date)}</td><td>${escapeHtml(row.type)}</td><td>${escapeHtml(row.amount)}</td>
-      <td><span class="tx-status-badge ${statusPillClass(row.status)}">${statusLabelText(row.status)}</span></td><td>${escapeHtml(row.note)}</td></tr>`).join('')
+      <td><span class="tx-status-badge ${statusPillClass(row.status)}">${row.status.replace(/_/g, ' ')}</span></td><td>${escapeHtml(row.note)}</td></tr>`).join('')
       : '<tr><td colspan="5" class="tx-empty">No activity yet.</td></tr>';
   }
   const incomingBox = el('txIncomingList');
@@ -1253,7 +1251,7 @@ function renderTxDepositsAndWithdrawals() {
   if (wdOnlyBody) {
     wdOnlyBody.innerHTML = sellerWithdrawals.length ? sellerWithdrawals.map(w => `
       <tr><td>${fmtDate(w.createdAt)}</td><td>${fmtMoney(w.amount, w.amountCurrency)}</td>
-      <td><span class="tx-status-badge ${statusPillClass(w.status)}">${statusLabelText(w.status)}</span></td></tr>`).join('')
+      <td><span class="tx-status-badge ${statusPillClass(w.status)}">${w.status.replace(/_/g, ' ')}</span></td></tr>`).join('')
       : '<tr><td colspan="3" class="tx-empty">No withdrawals yet.</td></tr>';
   }
   renderTxAccountUI(); // held-note / last-withdrawal depend on these lists too
@@ -1534,7 +1532,7 @@ function renderFundsDesk() {
       <div class="funds-desk-avatar">${escapeHtml(initialsOfName(s.sellerName))}</div>
       <div class="funds-desk-info">
         <div class="funds-desk-name">${escapeHtml(s.sellerName)}</div>
-        <div class="funds-desk-sub">${s.countryCode ? v4flag(s.countryCode) + ' ' : ''}${escapeHtml(s.groupName)} · ${escapeHtml(s.currency || '')}${s.accountId ? ' · ID ' + escapeHtml(s.accountId) : ''}${s.disabled ? ' · DISABLED' : ''} · KYC: ${escapeHtml((s.kycStatus || '').replace(/_/g, ' '))}</div>
+        <div class="funds-desk-sub">${escapeHtml(s.groupName)} · ${escapeHtml(s.currency || '')} · KYC: ${escapeHtml((s.kycStatus || '').replace(/_/g, ' '))}</div>
       </div>
       <div class="funds-desk-balances">
         <div class="funds-desk-avail">${fmtMoney(s.balances.available, s.currency)}</div>
@@ -1595,7 +1593,7 @@ function renderFundsDeskModal() {
         <div class="ledger-row-main">
           <div class="ledger-row-title-line"><span class="ledger-row-title">${escapeHtml(w.method === 'crypto' ? `${w.asset} withdrawal` : 'Bank withdrawal')}</span><span class="ledger-row-amount out">−${fmtMoney(w.amount, w.amountCurrency)}</span></div>
           <div class="ledger-row-sub">${w.method === 'crypto' ? escapeHtml(w.destination || '') : `${escapeHtml(w.beneficiaryName || '')} · ${escapeHtml(w.bankName || '')}`}</div>
-          <div class="ledger-row-sub">${fmtDate(w.createdAt)} · <span class="tx-status-badge ${statusPillClass(w.status)}" style="padding:2px 8px; font-size:0.64rem;">${escapeHtml(statusLabelText(w.status))}</span></div>
+          <div class="ledger-row-sub">${fmtDate(w.createdAt)} · <span class="tx-status-badge ${statusPillClass(w.status)}" style="padding:2px 8px; font-size:0.64rem;">${escapeHtml(w.status.replace(/_/g, ' '))}</span></div>
           <div class="ledger-row-ref">${escapeHtml(w.ref)}</div>
           ${w.statusReason ? `<div class="ledger-row-note"><i class="fa-solid fa-note-sticky"></i> ${escapeHtml(w.statusReason)}</div>` : ''}
           <div class="ledger-row-actions">${withdrawalRowActionsHtml(w)}</div>
@@ -1686,10 +1684,10 @@ function copyShownInviteLink(party) {
   );
 }
 function kickSelectedUser() {
-  const targetSessionToken = el('kickUserSelect').value;
-  if (!targetSessionToken) return toast('No user selected.', true);
+  const targetUid = el('kickUserSelect').value;
+  if (!targetUid) return toast('No user selected.', true);
   showConfirmModal({ title: 'Disconnect User', message: 'Force-disconnect this user? They can rejoin using their invite link.' }, () => {
-    socket.emit('admin-kick-user', { targetSessionToken });
+    socket.emit('admin-kick-user', { targetUid });
     toast('User disconnected.');
   });
 }
@@ -1714,33 +1712,33 @@ function renderDirectory() {
       <div class="directory-item">
         <div class="avatar" style="width:36px;height:36px;font-size:0.85rem;">${initialsOf(u.displayName)}<span class="online-ring ${u.isOnline ? '' : 'off'}"></span></div>
         <div class="directory-meta">
-          <div class="directory-name">${escapeHtml(u.displayName)}${u.countryCode ? ` <span class="v4-dir-flag" title="${escapeHtml(u.countryName || '')}">${v4flag(u.countryCode)}</span>` : ''}</div>
+          <div class="directory-name">${escapeHtml(u.displayName)}</div>
           <div class="directory-role">${u.isOnline ? 'Online' : 'Offline'}</div>
         </div>
         <span class="role-chip ${u.isAdmin ? 'admin' : (u.role === 'PARTY A' ? 'buyer' : 'seller')}">${u.isAdmin ? 'Admin' : (u.role === 'PARTY A' ? 'Buyer' : 'Seller')}</span>
-        ${u.sessionToken !== myToken() ? `<i class="fa-solid fa-trash directory-delete-btn" onclick="deleteDirectoryUser('${u.sessionToken}')" title="Remove from directory"></i>` : ''}
+        ${u.uid !== myUid() ? `<i class="fa-solid fa-trash directory-delete-btn" onclick="deleteDirectoryUser('${u.uid}')" title="Remove from directory"></i>` : ''}
       </div>`).join('');
   }
   el('directoryContainer').innerHTML = html || '<div style="padding:16px; color:var(--text-muted); font-size:0.85rem;">No users yet.</div>';
 
   const select = el('activeUsersSelect');
   if (select) {
-    select.innerHTML = directoryCache.filter(u => u.sessionToken !== myToken()).map(u =>
-      `<option value="${u.sessionToken}">${escapeHtml(u.displayName)} (${u.isAdmin ? 'Admin' : u.role})</option>`
+    select.innerHTML = directoryCache.filter(u => u.uid !== myUid()).map(u =>
+      `<option value="${u.uid}">${escapeHtml(u.displayName)} (${u.isAdmin ? 'Admin' : u.role})</option>`
     ).join('');
   }
   const kickSelect = el('kickUserSelect');
   if (kickSelect) {
-    kickSelect.innerHTML = directoryCache.filter(u => u.sessionToken !== myToken() && !u.isAdmin && u.isOnline).map(u =>
-      `<option value="${u.sessionToken}">${escapeHtml(u.displayName)} (${u.role})</option>`
+    kickSelect.innerHTML = directoryCache.filter(u => u.uid !== myUid() && !u.isAdmin && u.isOnline).map(u =>
+      `<option value="${u.uid}">${escapeHtml(u.displayName)} (${u.role})</option>`
     ).join('') || '<option value="">No online users to disconnect</option>';
   }
 }
 
-function deleteDirectoryUser(targetSessionToken) {
+function deleteDirectoryUser(targetUid) {
   showConfirmModal(
     { title: 'Remove User', message: 'Remove this user from the directory? If they are currently online, they will be disconnected.' },
-    () => socket.emit('admin-delete-user', { targetSessionToken })
+    () => socket.emit('admin-delete-user', { targetUid })
   );
 }
 
@@ -1820,17 +1818,17 @@ function loadAdminNotes() { el('adminPrivateNotes').value = localStorage.getItem
 
 // ---------------- ADMIN DM ----------------
 function initiateAdminDM() {
-  const targetSessionToken = el('activeUsersSelect').value;
-  if (!targetSessionToken) return toast('No user selected.', true);
+  const targetUid = el('activeUsersSelect').value;
+  if (!targetUid) return toast('No user selected.', true);
   showPromptModal({ title: 'Direct Message', placeholder: 'Type your message...' }, (initialMessage) => {
-    socket.emit('admin-initiate-dm', { targetSessionToken, initialMessage });
+    socket.emit('admin-initiate-dm', { targetUid, initialMessage });
   });
 }
 socket.on('dm-channel-opened', () => { el('dmModal').style.display = 'flex'; });
 socket.on('dm-message', (msg) => {
   el('dmModal').style.display = 'flex';
   const body = el('dmBody');
-  const isSelf = msg.senderToken === myToken();
+  const isSelf = msg.senderId === myUid();
   const row = document.createElement('div');
   row.className = `dm-bubble-row ${isSelf ? 'sent' : 'received'}`;
   row.innerHTML = `<div class="dm-bubble ${isSelf ? 'sent' : 'received'}"><strong>${msg.sender}</strong><div>${msg.text}</div></div>`;
@@ -2183,109 +2181,44 @@ function cselClose() {
   cselOpenPanel.panel.remove();
   cselOpenPanel.trigger.classList.remove('open');
   cselOpenPanel = null;
-  window.removeEventListener('scroll', cselOnScroll, true);
+  window.removeEventListener('scroll', cselClose, true);
   window.removeEventListener('resize', cselClose, true);
 }
-// Scrolling the LIST itself must never close it (that is what made long lists such as the
-// country picker impossible to scroll); only scrolling the page behind it does.
-function cselOnScroll(e) {
-  if (cselOpenPanel && e.target && cselOpenPanel.panel.contains(e.target)) return;
-  cselClose();
-}
-
-function cselFlagHtml(code) {
-  if (!code) return '';
-  const c = String(code).toLowerCase();
-  return `<img class="csel-flag" alt="" loading="lazy" src="https://flagcdn.com/24x18/${c}.png" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'csel-flag-emoji',textContent:cselEmojiFlag('${c}')}))">`;
-}
-function cselEmojiFlag(c) { return String(c).toUpperCase().replace(/./g, ch => String.fromCodePoint(127397 + ch.charCodeAt(0))); }
-function cselSearchable(select) { return select.dataset.search === '1' || select.options.length > 14; }
-function cselNorm(s) { return String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase(); }
 
 function cselBuildPanel(select, trigger) {
   const panel = document.createElement('div');
   panel.className = 'csel-panel';
-  panel.addEventListener('click', (e) => e.stopPropagation()); // clicking the search box must not close the list
-  const searchable = cselSearchable(select);
-  let searchInput = null;
-  if (searchable) {
-    const box = document.createElement('div');
-    box.className = 'csel-search';
-    box.innerHTML = '<i class="fa-solid fa-magnifying-glass"></i><input type="text" autocomplete="off" spellcheck="false" placeholder="Search…">';
-    panel.appendChild(box);
-    searchInput = box.querySelector('input');
-  }
-  const list = document.createElement('div');
-  list.className = 'csel-list';
-  panel.appendChild(list);
-
-  const rows = [];
   Array.from(select.options).forEach((opt) => {
-    if (opt.disabled && opt.value === '') return; // placeholder option
     const row = document.createElement('div');
     row.className = 'csel-option' + (opt.value === select.value ? ' selected' : '');
-    const flag = opt.dataset.flag ? cselFlagHtml(opt.dataset.flag) : '';
-    const extra = opt.dataset.hint ? `<span class="csel-hint">${opt.dataset.hint}</span>` : '';
-    row.innerHTML = `${flag}<span class="csel-opt-label"></span>${extra}`;
-    row.querySelector('.csel-opt-label').textContent = opt.dataset.label || opt.textContent;
-    row.dataset.search = cselNorm((opt.dataset.label || opt.textContent) + ' ' + (opt.dataset.hint || '') + ' ' + (opt.dataset.keywords || ''));
+    row.textContent = opt.textContent;
     row.addEventListener('click', () => {
       select.value = opt.value;
       select.dispatchEvent(new Event('change', { bubbles: true }));
       cselSyncTrigger(select, trigger);
       cselClose();
     });
-    list.appendChild(row);
-    rows.push(row);
+    panel.appendChild(row);
   });
-  const empty = document.createElement('div');
-  empty.className = 'csel-empty hidden';
-  empty.textContent = 'No matches';
-  list.appendChild(empty);
 
-  if (searchInput) {
-    const apply = () => {
-      const q = cselNorm(searchInput.value).trim();
-      let shown = 0; let first = null;
-      rows.forEach((r) => { const hit = !q || r.dataset.search.includes(q); r.classList.toggle('hidden', !hit); if (hit) { shown++; if (!first) first = r; } });
-      empty.classList.toggle('hidden', shown > 0);
-      rows.forEach((r) => r.classList.remove('kbd'));
-      if (first && q) first.classList.add('kbd');
-    };
-    searchInput.addEventListener('input', apply);
-    searchInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); const target = rows.find((r) => !r.classList.contains('hidden') && r.classList.contains('kbd')) || rows.find((r) => !r.classList.contains('hidden')); if (target) target.click(); }
-    });
-  }
-
-  // Position as a fixed-position "portal" anchored to the trigger, so it is never clipped by
-  // a modal body's overflow:auto — flip upward if it would otherwise run off the screen.
-  document.body.appendChild(panel);
+  // Position as a fixed-position "portal" anchored to the trigger, so it is
+  // never clipped by a modal body's overflow:auto — flip upward if it would
+  // otherwise run off the bottom of the screen.
+  document.body.appendChild(panel); // measure first, off-screen-safe (absolute default until positioned)
   const tr = trigger.getBoundingClientRect();
-  const maxH = Math.max(180, Math.min(340, window.innerHeight * 0.5));
-  list.style.maxHeight = `${maxH - (searchable ? 52 : 0)}px`;
   const panelH = panel.offsetHeight;
   const spaceBelow = window.innerHeight - tr.bottom;
-  const openUpward = spaceBelow < panelH + 12 && tr.top > spaceBelow;
-  panel.style.left = `${Math.max(8, Math.min(tr.left, window.innerWidth - Math.max(tr.width, 240) - 8))}px`;
-  panel.style.width = `${Math.max(tr.width, 240)}px`;
+  const openUpward = spaceBelow < panelH + 12 && tr.top > panelH + 12;
+  panel.style.left = `${Math.max(8, tr.left)}px`;
+  panel.style.width = `${tr.width}px`;
   panel.style.top = openUpward ? `${Math.max(8, tr.top - panelH - 6)}px` : `${tr.bottom + 6}px`;
-  const sel = list.querySelector('.csel-option.selected');
-  if (sel) list.scrollTop = Math.max(0, sel.offsetTop - 60);
-  if (searchInput) setTimeout(() => searchInput.focus({ preventScroll: true }), 0);
   return panel;
 }
 
 function cselSyncTrigger(select, trigger) {
   const label = trigger.querySelector('.csel-trigger-label');
   const selected = select.options[select.selectedIndex];
-  const flag = selected && selected.dataset.flag ? cselFlagHtml(selected.dataset.flag) : '';
-  label.innerHTML = flag;
-  const txt = document.createElement('span');
-  txt.className = 'csel-trigger-text';
-  txt.textContent = selected ? (selected.dataset.label || selected.textContent) : '';
-  if (!selected || (selected.disabled && selected.value === '')) txt.classList.add('placeholder');
-  label.appendChild(txt);
+  label.textContent = selected ? selected.textContent : '';
 }
 
 function enhanceSelect(select) {
@@ -2304,7 +2237,6 @@ function enhanceSelect(select) {
   trigger.innerHTML = '<span class="csel-trigger-label"></span><i class="fa-solid fa-chevron-down csel-trigger-chevron"></i>';
   wrap.appendChild(trigger);
   cselSyncTrigger(select, trigger);
-  select._cselTrigger = trigger;
 
   trigger.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -2314,18 +2246,15 @@ function enhanceSelect(select) {
     const panel = cselBuildPanel(select, trigger);
     trigger.classList.add('open');
     cselOpenPanel = { panel, trigger };
-    window.addEventListener('scroll', cselOnScroll, true);
+    window.addEventListener('scroll', cselClose, true);
     window.addEventListener('resize', cselClose, true);
   });
-  // Programmatic changes (select.value = 'X') keep the visible label in step.
-  select.addEventListener('change', () => cselSyncTrigger(select, trigger));
 
+  // A disabled select (none currently, but future-proof) should look and act disabled.
   const syncDisabled = () => { trigger.disabled = select.disabled; trigger.style.opacity = select.disabled ? '0.5' : ''; trigger.style.cursor = select.disabled ? 'not-allowed' : 'pointer'; };
   syncDisabled();
   new MutationObserver(syncDisabled).observe(select, { attributes: true, attributeFilter: ['disabled'] });
 }
-// Call after changing a select's options or value from code.
-function refreshSelect(select) { if (select && select._cselTrigger) cselSyncTrigger(select, select._cselTrigger); }
 
 function initCustomSelects() {
   document.querySelectorAll('select.csel').forEach(enhanceSelect);

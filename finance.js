@@ -4,9 +4,6 @@
 // (admin notes, proof files, admin session tokens) are stripped in one place.
 
 const crypto = require('crypto');
-const Escrow = require('./escrow');
-const COUNTRIES = require('./public/countries.js');
-const Email = require('./email');
 
 const CURRENCIES = new Set(['USD', 'GBP', 'EUR']);
 const CRYPTO_ASSETS = new Set(['BTC', 'ETH', 'USDT']);
@@ -24,29 +21,6 @@ function fxRate(from, to) {
 }
 function convertCurrency(amount, from, to) {
   return round2(Number(amount) * fxRate(from, to));
-}
-
-// ---- Presentation of money ----
-// Below one million: full figure with thousands separators ($250,000.00).
-// One million and above: compact and elegant ($2.00M, $1.25B) — never a wall of zeros.
-const CCY_SYMBOL = { USD: '$', GBP: '£', EUR: '€' };
-function fmtElite(amount, ccy) {
-  const n = Number(amount) || 0;
-  const abs = Math.abs(n);
-  const sym = CCY_SYMBOL[ccy] || '';
-  const suffix = CCY_SYMBOL[ccy] ? '' : ` ${ccy || ''}`.trimEnd();
-  const sign = n < 0 ? '-' : '';
-  let body;
-  if (abs >= 1e12) body = `${(abs / 1e12).toFixed(2)}T`;
-  else if (abs >= 1e9) body = `${(abs / 1e9).toFixed(2)}B`;
-  else if (abs >= 1e6) body = `${(abs / 1e6).toFixed(2)}M`;
-  else body = abs.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  return `${sign}${sym}${body}${suffix ? ' ' + suffix.trim() : ''}`;
-}
-function fmtFull(amount, ccy) {
-  const n = Number(amount) || 0;
-  const body = n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  return CCY_SYMBOL[ccy] ? `${CCY_SYMBOL[ccy]}${body}` : `${body} ${ccy || ''}`.trim();
 }
 
 // ---- Human-friendly references (derived from the record id — no extra column) ----
@@ -86,47 +60,54 @@ function safeHistory(history) {
 }
 
 // ---- Seller account state (sensitive: only the seller + finance admins) ----
-const DAILY_WITHDRAWAL_LIMIT = Number(process.env.DAILY_WITHDRAWAL_LIMIT) > 0 ? Number(process.env.DAILY_WITHDRAWAL_LIMIT) : 10000000;
-const dateOnly = (d) => (d ? (d instanceof Date ? d.toISOString() : String(d)).slice(0, 10) : null);
-const maskTail = (v) => { const t = String(v || ''); return t.length <= 4 ? t : `${'•'.repeat(Math.min(t.length - 4, 8))}${t.slice(-4)}`; };
+const COMPLAINTS_EMAIL = process.env.COMPLAINTS_EMAIL || 'complaints@usvistra.com';
+const ACCOUNT_TYPE_LABEL = { standard: 'Standard account', business: 'Business account' };
 
-/** forAdmin = true adds fields a seller must never receive (IP, raw ID number, auto-check report, business filing). */
+function dateOnly(v) {
+  if (!v) return null;
+  return (v instanceof Date ? v.toISOString() : String(v)).slice(0, 10);
+}
+function jsonOf(v, fallback) {
+  if (v === null || v === undefined) return fallback;
+  if (typeof v === 'string') { try { return JSON.parse(v); } catch (e) { return fallback; } }
+  return v;
+}
+
 function publicSellerAccount(g, { forAdmin = false } = {}) {
-  const country = g.seller_country || null;
-  const c = COUNTRIES.byName(country);
-  const biz = g.business_data || null;
+  const business = jsonOf(g.business_profile, null);
   const out = {
     groupId: g.id,
     groupName: g.name,
     registered: g.seller_registered,
     fullName: g.seller_full_name || null,
     email: g.email_b || null,
-    emailVerified: !!g.seller_email_verified,
+    emailLocked: !!g.seller_email_locked,
+    emailVerified: !!g.seller_email_verified_at,
     phone: g.seller_phone || null,
-    accountId: g.seller_account_id || null,
-    accountType: g.seller_account_type || 'Standard account',
-    language: g.seller_language || 'en',
     currency: g.seller_currency || null,
     currencyLocked: !!g.currency_locked_at,
     dateOfBirth: dateOnly(g.seller_date_of_birth),
-    country,
-    countryCode: c ? c.code : null,
+    country: g.seller_country || null,
+    countryIso: g.seller_country_iso || null,
+    accountId: g.seller_account_id || null,
+    accountType: g.seller_account_type || 'standard',
+    accountTypeLabel: ACCOUNT_TYPE_LABEL[g.seller_account_type] || 'Standard account',
+    language: g.seller_language || 'en',
+    termsAcceptedAt: g.seller_terms_accepted_at || null,
+    termsVersion: g.seller_terms_version || null,
     registeredAt: g.seller_registered_at || null,
-    termsAcceptedAt: g.terms_accepted_at || null,
-    termsVersion: g.terms_version || null,
     disabled: !!g.seller_disabled,
     disabledReason: g.seller_disabled ? (g.seller_disabled_reason || null) : null,
     disabledAt: g.seller_disabled ? (g.seller_disabled_at || null) : null,
+    complaintsEmail: COMPLAINTS_EMAIL,
     disbursementEnabled: !!g.disbursement_enabled,
     cryptoDepositVerified: !!g.crypto_deposit_verified,
-    dailyLimit: DAILY_WITHDRAWAL_LIMIT,
-    emailCodeRequired: Email.emailCodesRequired(),
     business: {
       status: g.business_status || 'none',
-      rejectionReason: g.business_rejection_reason || null,
+      companyName: business ? business.companyName || null : null,
       submittedAt: g.business_submitted_at || null,
       reviewedAt: g.business_reviewed_at || null,
-      companyName: biz ? biz.companyName || null : null
+      rejectionReason: g.business_rejection_reason || null
     },
     kyc: {
       status: g.kyc_status,
@@ -136,10 +117,6 @@ function publicSellerAccount(g, { forAdmin = false } = {}) {
       proofAddressUrl: g.kyc_proof_address_url || null,
       proofAddressType: g.kyc_proof_address_type || null,
       selfieUrl: g.kyc_selfie_url || null,
-      nameOnId: g.kyc_name_on_id || null,
-      idExpiry: dateOnly(g.kyc_id_expiry),
-      issuingCountry: g.kyc_issuing_country || null,
-      idNumberMasked: g.kyc_id_number ? maskTail(g.kyc_id_number) : null,
       submittedAt: g.kyc_submitted_at || null,
       reviewedAt: g.kyc_reviewed_at || null,
       rejectionReason: g.kyc_rejection_reason || null
@@ -147,15 +124,28 @@ function publicSellerAccount(g, { forAdmin = false } = {}) {
     balances: {
       available: Number(g.balance_available || 0),
       held: Number(g.balance_held || 0),
+      pending: Number(g.balance_pending || 0),
       totalDeposited: Number(g.total_deposited || 0)
     }
   };
   if (forAdmin) {
-    out.registeredIp = g.seller_registered_ip || null;
-    out.passwordSet = !!g.seller_password_hash;
+    out.dateOfBirth = dateOnly(g.seller_date_of_birth);
+    out.passwordSet = !!g.seller_password_hash;          // login uses a salted hash; the readable copy is encrypted and only opened via the audited reveal action
+    out.passwordStored = !!g.seller_password_enc;
+    out.passwordAdminAccess = !!g.password_admin_access;
+    out.passwordReveals = jsonOf(g.seller_password_reveals, []).slice(-10);
+    out.passwordChangedAt = g.seller_password_changed_at || g.seller_registered_at || null;
+    out.failedLogins = Number(g.seller_failed_logins || 0);
+    out.lockedUntil = g.seller_locked_until || null;
+    out.ips = jsonOf(g.seller_ip_log, []).map((r) => ({ ...r, blocked: jsonOf(g.seller_blocked_ips, []).includes(r.ip) }));
+    out.blockedIps = jsonOf(g.seller_blocked_ips, []);
+    out.business.profile = business;
     out.kyc.idNumber = g.kyc_id_number || null;
-    out.kyc.autoReport = g.kyc_auto_report || null;
-    out.business.data = biz;
+    out.kyc.idExpiry = dateOnly(g.kyc_id_expiry);
+    out.kyc.idName = g.kyc_id_name || null;
+    out.kyc.idDob = dateOnly(g.kyc_id_dob);
+    out.kyc.autoResult = jsonOf(g.kyc_auto_result, null);
+    out.cryptoDepositRequiredUsd = g.crypto_deposit_required_usd === null || g.crypto_deposit_required_usd === undefined ? null : Number(g.crypto_deposit_required_usd);
   }
   return out;
 }
@@ -168,60 +158,50 @@ function publicDeposit(d) {
   };
 }
 
-// Withdrawals have exactly four stages: pending -> processing -> completed, or declined.
-// (Older records may still carry 'held_in_vault' or 'failed'; they read as pending / declined.)
-function normalizeWdStatus(status) {
-  if (status === 'held_in_vault') return 'pending';
-  if (status === 'failed') return 'rejected';
-  return status;
-}
-
 function publicWithdrawal(w, { forAdmin = false } = {}) {
-  const status = normalizeWdStatus(w.status);
-  return {
+  const out = {
     id: w.id, ref: refFor('withdrawal', w.id), groupId: w.group_id, method: w.method, asset: w.asset, network: w.network,
     destination: w.destination, beneficiaryName: w.beneficiary_name, bankName: w.bank_name,
-    bankAccount: forAdmin ? w.bank_account : maskTail(w.bank_account), bankSwift: w.bank_swift, bankCountry: w.bank_country,
+    bankAccount: w.bank_account, bankSwift: w.bank_swift, bankCountry: w.bank_country,
     amount: Number(w.amount), amountCurrency: w.amount_currency, amountLedger: Number(w.amount_ledger),
-    rawStatus: w.status, status, statusReason: w.status_reason, statusHistory: safeHistory(w.status_history),
-    confirmedAt: w.confirmed_at || null, fundsReserved: !!w.funds_reserved,
-    ip: forAdmin ? (w.ip || null) : undefined,
+    status: w.status, statusReason: w.status_reason, statusHistory: safeHistory(w.status_history),
     createdAt: w.created_at, updatedAt: w.updated_at,
-    receiptUrl: status === 'completed' ? receiptUrl('withdrawal', w.id) : null
+    sellerAccountId: w.seller_account_id || null,
+    emailConfirmed: !!w.email_confirmed_at,
+    receiptUrl: w.status === 'completed' ? receiptUrl('withdrawal', w.id) : null
   };
+  if (forAdmin) out.requestIp = w.request_ip || null;
+  return out;
 }
 
 // Incoming funds recorded by the Desk. Sellers get everything about the
-// payment itself plus the SAFE escrow tracker view (no timers, ever); only
-// admins additionally get the internal note, proof file, payer contact details,
-// the full escrow console data and who recorded it.
-function publicIncoming(i, forAdmin, { accountId } = {}) {
+// payment itself; only admins additionally get the internal note, the proof
+// file and who recorded it.
+function publicIncoming(i, forAdmin, accountId) {
+  const { publicTrack } = require('./trackingDefs');
   const out = {
     id: i.id, ref: refFor('incoming', i.id), groupId: i.group_id,
-    payerName: i.payer_name, payerCompany: i.payer_company || null, payerCountry: i.payer_country || null, purpose: i.purpose,
-    orderRef: i.order_ref || null,
+    payerName: i.payer_name, payerCountry: i.payer_country || null, purpose: i.purpose,
     method: i.method, asset: i.asset || null, network: i.network || null, externalRef: i.external_ref || null,
+    bankName: i.bank_name || null, senderAccount: i.sender_account || null, feeAmount: Number(i.fee_amount || 0),
     amount: Number(i.amount), amountCurrency: i.amount_currency, amountLedger: Number(i.amount_ledger),
     fxRate: Number(i.fx_rate || 1), receivedAt: i.received_at,
     status: i.status, statusReason: i.status_reason || null, statusHistory: safeHistory(i.status_history),
     createdAt: i.created_at, updatedAt: i.updated_at,
-    receiptUrl: i.status === 'credited' ? receiptUrl('incoming', i.id) : null,
-    tracker: i.status === 'reversed' ? null : Escrow.sellerView(i.review, { accountId })
+    track: publicTrack(i, { accountId, forAdmin: !!forAdmin }),
+    receiptUrl: ['credited', 'held_in_vault'].includes(i.status) ? receiptUrl('incoming', i.id) : null
   };
   if (forAdmin) {
     out.payerEmail = i.payer_email || null;
-    out.payerPhone = i.payer_phone || null;
-    out.payerBank = i.payer_bank || null;
     out.internalNote = i.internal_note || null;
-    out.buyerVisibleNote = !!i.buyer_visible_note;
+    out.noteSharedWithBuyer = !!i.note_shared_with_buyer;
     out.proofUrl = i.proof_url || null;
-    out.escrow = Escrow.adminView(i.review, { accountId });
   }
   return out;
 }
 
 module.exports = {
-  CURRENCIES, CRYPTO_ASSETS, FX_TO_USD, CCY_SYMBOL, DAILY_WITHDRAWAL_LIMIT, round2, fxRate, convertCurrency, fmtElite, fmtFull, normalizeWdStatus, maskTail,
+  CURRENCIES, CRYPTO_ASSETS, FX_TO_USD, round2, fxRate, convertCurrency,
   refFor, signReceipt, verifyReceiptSig, receiptUrl, safeHistory,
   publicSellerAccount, publicDeposit, publicWithdrawal, publicIncoming
 };

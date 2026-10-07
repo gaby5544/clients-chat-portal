@@ -319,139 +319,97 @@ CREATE INDEX IF NOT EXISTS idx_incoming_group ON incoming_funds(group_id, receiv
 CREATE INDEX IF NOT EXISTS idx_incoming_status ON incoming_funds(status);
 
 -- ============================================================================
--- v4.0 ADDITIONS — registration hardening, account IDs, escrow review,
--- withdrawals, business accounts, IP controls, reminders. All idempotent.
+-- v3.1 — Seller account hardening, tracking, withdrawals v2, compliance.
+-- All additions are idempotent (safe to re-run on a live database).
 -- ============================================================================
 
--- Seller account profile (registration)
-ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_phone            TEXT;
-ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_email_verified   BOOLEAN NOT NULL DEFAULT FALSE;
-ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_account_id       TEXT;
-ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_account_type     TEXT NOT NULL DEFAULT 'Standard account';
-ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_language         TEXT NOT NULL DEFAULT 'en';
-ALTER TABLE groups ADD COLUMN IF NOT EXISTS terms_accepted_at       TIMESTAMPTZ;
-ALTER TABLE groups ADD COLUMN IF NOT EXISTS terms_version           TEXT;
-ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_registered_ip    TEXT;
-ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_registered_at    TIMESTAMPTZ;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_groups_account_id ON groups(seller_account_id) WHERE seller_account_id IS NOT NULL;
+-- Seller profile / identity
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_phone               TEXT;           -- E.164, e.g. +233244123456
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_country_iso         TEXT;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_account_id          TEXT;           -- unique 11-digit public account ID
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_account_type        TEXT NOT NULL DEFAULT 'standard';
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_language            TEXT NOT NULL DEFAULT 'en';
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_terms_accepted_at   TIMESTAMPTZ;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_terms_version       TEXT;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_email_locked        BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_email_verified_at   TIMESTAMPTZ;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_registered_at       TIMESTAMPTZ;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_password_changed_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_groups_account_id ON groups(seller_account_id);
 
--- Admin enable / disable of a seller account
-ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_disabled         BOOLEAN NOT NULL DEFAULT FALSE;
-ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_disabled_reason  TEXT;
-ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_disabled_at      TIMESTAMPTZ;
+-- Account enable / disable (admin)
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_disabled            BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_disabled_reason     TEXT;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_disabled_at         TIMESTAMPTZ;
 
--- Disbursement gate: admin switches this on once BOTH parties are confirmed
--- and the deal is in the disbursement stage. Sellers cannot withdraw until then.
-ALTER TABLE groups ADD COLUMN IF NOT EXISTS disbursement_enabled    BOOLEAN NOT NULL DEFAULT FALSE;
+-- IP detection (JSON arrays of {ip, firstSeen, lastSeen, events[], count})
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_ip_log              JSONB NOT NULL DEFAULT '[]';
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_blocked_ips         JSONB NOT NULL DEFAULT '[]';
 
--- Crypto-withdrawal one-time unlock (prior crypto deposit requirement)
-ALTER TABLE groups ADD COLUMN IF NOT EXISTS crypto_deposit_verified BOOLEAN NOT NULL DEFAULT FALSE;
+-- Withdrawal gate: the seller may only withdraw once the Desk puts this
+-- group's transaction into the disbursement stage.
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS disbursement_enabled       BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS disbursement_updated_at    TIMESTAMPTZ;
 
--- Business (unlimited withdrawal) upgrade
-ALTER TABLE groups ADD COLUMN IF NOT EXISTS business_status           TEXT NOT NULL DEFAULT 'none'; -- none|pending|verified|rejected
-ALTER TABLE groups ADD COLUMN IF NOT EXISTS business_data             JSONB;
-ALTER TABLE groups ADD COLUMN IF NOT EXISTS business_submitted_at     TIMESTAMPTZ;
-ALTER TABLE groups ADD COLUMN IF NOT EXISTS business_reviewed_at      TIMESTAMPTZ;
-ALTER TABLE groups ADD COLUMN IF NOT EXISTS business_rejection_reason TEXT;
+-- Funds that left the available balance for a withdrawal that is still in flight.
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS balance_pending            NUMERIC(18,2) NOT NULL DEFAULT 0;
 
--- Automated KYC pre-check report (admin reference only)
-ALTER TABLE groups ADD COLUMN IF NOT EXISTS kyc_auto_report           JSONB;
+-- Crypto prior-deposit requirement (one-time unlock) + business account (unlimited withdrawals)
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS crypto_deposit_verified    BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS crypto_deposit_required_usd NUMERIC(18,2);
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS business_status            TEXT NOT NULL DEFAULT 'none'; -- none|pending|verified|rejected
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS business_profile           JSONB;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS business_submitted_at      TIMESTAMPTZ;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS business_reviewed_at       TIMESTAMPTZ;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS business_rejection_reason  TEXT;
 
--- Per-user language + detected country (for flags / translated notifications)
-ALTER TABLE users ADD COLUMN IF NOT EXISTS language     TEXT;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS country_name TEXT;
+-- KYC details captured for automatic validation
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS kyc_id_number              TEXT;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS kyc_id_expiry              DATE;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS kyc_id_name                TEXT;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS kyc_id_dob                 DATE;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS kyc_auto_result            JSONB;
 
--- Email verification / withdrawal confirmation codes (single table, by purpose)
-CREATE TABLE IF NOT EXISTS verification_codes (
-  id          TEXT PRIMARY KEY,
-  group_id    TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
-  purpose     TEXT NOT NULL,                 -- register | withdraw
-  email       TEXT,
-  code_hash   TEXT NOT NULL,
-  payload     JSONB,                         -- withdraw: the request awaiting confirmation
-  attempts    INTEGER NOT NULL DEFAULT 0,
-  expires_at  TIMESTAMPTZ NOT NULL,
-  consumed_at TIMESTAMPTZ,
-  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_verification_group ON verification_codes(group_id, purpose, created_at);
+-- Registration email verification (code is stored hashed, never in clear)
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS reg_email_target           TEXT;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS reg_email_code_hash        TEXT;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS reg_email_code_expires     TIMESTAMPTZ;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS reg_email_code_attempts    INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS reg_email_verified         BOOLEAN NOT NULL DEFAULT FALSE;
 
--- Password-reset attempt counting
-ALTER TABLE password_resets ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0;
+-- Incoming funds: richer record + live stage tracking
+ALTER TABLE incoming_funds ADD COLUMN IF NOT EXISTS bank_name              TEXT;
+ALTER TABLE incoming_funds ADD COLUMN IF NOT EXISTS sender_account         TEXT;
+ALTER TABLE incoming_funds ADD COLUMN IF NOT EXISTS fee_amount             NUMERIC(18,2) NOT NULL DEFAULT 0;
+ALTER TABLE incoming_funds ADD COLUMN IF NOT EXISTS note_shared_with_buyer BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE incoming_funds ADD COLUMN IF NOT EXISTS track_enabled          BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE incoming_funds ADD COLUMN IF NOT EXISTS track_mode             TEXT NOT NULL DEFAULT 'auto';   -- auto | manual
+ALTER TABLE incoming_funds ADD COLUMN IF NOT EXISTS track_stage            INTEGER NOT NULL DEFAULT 1;     -- 1..5, 6 = finished
+ALTER TABLE incoming_funds ADD COLUMN IF NOT EXISTS track_check            INTEGER NOT NULL DEFAULT 0;     -- checks done in current stage
+ALTER TABLE incoming_funds ADD COLUMN IF NOT EXISTS track_elapsed_ms       BIGINT  NOT NULL DEFAULT 0;     -- progress inside current stage
+ALTER TABLE incoming_funds ADD COLUMN IF NOT EXISTS track_paused           BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE incoming_funds ADD COLUMN IF NOT EXISTS track_speed            NUMERIC(12,2) NOT NULL DEFAULT 1;
+ALTER TABLE incoming_funds ADD COLUMN IF NOT EXISTS track_timers           JSONB;                          -- seconds per stage [5]
+ALTER TABLE incoming_funds ADD COLUMN IF NOT EXISTS track_show_timer       BOOLEAN NOT NULL DEFAULT FALSE; -- seller may see the active stage countdown
+ALTER TABLE incoming_funds ADD COLUMN IF NOT EXISTS track_stage_times      JSONB NOT NULL DEFAULT '{}';    -- {"1":iso,...} when each stage started
+ALTER TABLE incoming_funds ADD COLUMN IF NOT EXISTS track_finished_at      TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_incoming_track ON incoming_funds(track_enabled, track_stage);
 
--- Authorised seller sessions (a registered seller's seat can only be taken by login)
-CREATE TABLE IF NOT EXISTS seller_sessions (
-  group_id      TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
-  session_token TEXT NOT NULL,
-  ip            TEXT,
-  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  PRIMARY KEY (group_id, session_token)
-);
+-- Withdrawals v2
+ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS request_ip         TEXT;
+ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS email_confirmed_at TIMESTAMPTZ;
+ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS seller_account_id  TEXT;
 
--- IP detection: every registration / login / join / withdrawal is logged
-CREATE TABLE IF NOT EXISTS ip_events (
-  id          SERIAL PRIMARY KEY,
-  group_id    TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
-  kind        TEXT NOT NULL,                 -- register | login | login_blocked | join | withdraw
-  ip          TEXT NOT NULL,
-  country     TEXT,
-  user_agent  TEXT,
-  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_ip_events_group ON ip_events(group_id, created_at);
-
-CREATE TABLE IF NOT EXISTS blocked_ips (
-  group_id    TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
-  ip          TEXT NOT NULL,
-  reason      TEXT,
-  blocked_by  TEXT,
-  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  PRIMARY KEY (group_id, ip)
-);
-
--- Admin-configurable settings (crypto deposit tiers, etc.)
+-- Small key/value store for admin-editable settings (compliance tiers etc.)
 CREATE TABLE IF NOT EXISTS app_settings (
   key         TEXT PRIMARY KEY,
   value       JSONB NOT NULL,
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Incoming funds: richer record + escrow payment review (5 stages)
-ALTER TABLE incoming_funds ADD COLUMN IF NOT EXISTS payer_company       TEXT;
-ALTER TABLE incoming_funds ADD COLUMN IF NOT EXISTS payer_bank          TEXT;
-ALTER TABLE incoming_funds ADD COLUMN IF NOT EXISTS payer_phone         TEXT;
-ALTER TABLE incoming_funds ADD COLUMN IF NOT EXISTS order_ref           TEXT;
-ALTER TABLE incoming_funds ADD COLUMN IF NOT EXISTS buyer_visible_note  BOOLEAN NOT NULL DEFAULT FALSE;
-ALTER TABLE incoming_funds ADD COLUMN IF NOT EXISTS review              JSONB;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS language TEXT;   -- preferred UI / notification language (ISO code)
 
--- Withdrawals: IP + email-code confirmation timestamp
-ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS ip             TEXT;
-ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS confirmed_at   TIMESTAMPTZ;
-
--- Unread reminders: when the oldest unread arrived and when we last nudged
-ALTER TABLE unread_counts ADD COLUMN IF NOT EXISTS since            TIMESTAMPTZ;
-ALTER TABLE unread_counts ADD COLUMN IF NOT EXISTS last_reminded_at TIMESTAMPTZ;
-
--- KYC details the automatic pre-check validates
-ALTER TABLE groups ADD COLUMN IF NOT EXISTS kyc_id_number         TEXT;
-ALTER TABLE groups ADD COLUMN IF NOT EXISTS kyc_id_expiry         DATE;
-ALTER TABLE groups ADD COLUMN IF NOT EXISTS kyc_name_on_id        TEXT;
-ALTER TABLE groups ADD COLUMN IF NOT EXISTS kyc_issuing_country   TEXT;
-
--- Chat messages meant for one audience only (e.g. a Desk note released to the buyer):
--- NULL = everyone in the group, otherwise 'buyer' | 'seller' | 'admin'.
-ALTER TABLE messages ADD COLUMN IF NOT EXISTS audience TEXT;
-
--- Withdrawals: money leaves the main balance the moment the request is confirmed.
--- funds_reserved says whether this request's amount is currently held out of "available".
-ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS funds_reserved BOOLEAN NOT NULL DEFAULT FALSE;
-UPDATE withdrawal_requests SET funds_reserved = TRUE WHERE funds_reserved = FALSE AND status IN ('held_in_vault', 'processing');
-
--- Permanent translation cache: each sentence is translated once, for everyone, free forever.
-CREATE TABLE IF NOT EXISTS translation_cache (
-  lang       TEXT NOT NULL,
-  h          TEXT NOT NULL,
-  text       TEXT NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  PRIMARY KEY (lang, h)
-);
+-- v3.1.1 — staff password viewing (encrypted, audited) and assigned-admin access
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_password_enc       TEXT;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS password_admin_access     BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_password_reveals   JSONB NOT NULL DEFAULT '[]';

@@ -8,9 +8,9 @@ const { Server } = require('socket.io');
 const { initStore } = require('./db');
 const { registerSocketHandlers } = require('./socketHandlers');
 const { buildRouter } = require('./routes');
-const { startEscrowLoop } = require('./fundsHandlers');
-const { startReminderLoop } = require('./notifyService');
-const IP = require('./ipTools');
+const { startTrackingEngine } = require('./tracking');
+const { startReminderEngine } = require('./notifier');
+const { loadEmailSettings } = require('./accountHandlers');
 
 const app = express();
 const server = http.createServer(app);
@@ -21,9 +21,7 @@ const io = new Server(server, {
 
 // Basic hardening
 app.disable('x-powered-by');
-// The host's load balancer sits in front of this app: trust exactly that many proxy hops so that
-// rate limits, the IP audit trail and IP blocks all see the REAL visitor address (TRUST_PROXY_HOPS, default 1).
-app.set('trust proxy', IP.HOPS);
+app.set('trust proxy', 1); // Render / Northflank sit behind one proxy — gives rate limits and IP logging the real client address
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
@@ -54,11 +52,10 @@ const PORT = process.env.PORT || 3000;
 initStore()
   .then(() => {
     server.listen(PORT, () => {
+      loadEmailSettings();       // email provider saved from the admin dashboard
+      startTrackingEngine(io);   // advances every live payment tracker and auto-releases finished ones
+      startReminderEngine(io);   // unread-message reminders every 60 minutes
       console.log(`Quantum Secure Transaction Desk running on port ${PORT}`);
-      // Background jobs: the escrow-review clock (runs on the server so closing a page never stops it)
-      // and the 60-minute unread-message reminders.
-      startEscrowLoop(io);
-      startReminderLoop(io);
     });
   })
   .catch((err) => {

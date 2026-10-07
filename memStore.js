@@ -46,31 +46,19 @@ function makeDefaultGroup(id, name) {
     balance_available: 0,
     balance_held: 0,
     total_deposited: 0,
-    // ---- v4 additions ----
-    seller_phone: null,
-    seller_email_verified: false,
-    seller_account_id: null,
-    seller_account_type: 'Standard account',
-    seller_language: 'en',
-    terms_accepted_at: null,
-    terms_version: null,
-    seller_registered_ip: null,
-    seller_registered_at: null,
-    seller_disabled: false,
-    seller_disabled_reason: null,
-    seller_disabled_at: null,
-    disbursement_enabled: false,
-    crypto_deposit_verified: false,
-    business_status: 'none',
-    business_data: null,
-    business_submitted_at: null,
-    business_reviewed_at: null,
-    business_rejection_reason: null,
-    kyc_auto_report: null,
-    kyc_id_number: null,
-    kyc_id_expiry: null,
-    kyc_name_on_id: null,
-    kyc_issuing_country: null
+    // ---- v3.1 ----
+    seller_phone: null, seller_country_iso: null, seller_account_id: null, seller_account_type: 'standard',
+    seller_language: 'en', seller_terms_accepted_at: null, seller_terms_version: null,
+    seller_email_locked: false, seller_email_verified_at: null, seller_registered_at: null, seller_password_changed_at: null,
+    seller_disabled: false, seller_disabled_reason: null, seller_disabled_at: null,
+    seller_ip_log: [], seller_blocked_ips: [],
+    disbursement_enabled: false, disbursement_updated_at: null,
+    balance_pending: 0,
+    crypto_deposit_verified: false, crypto_deposit_required_usd: null,
+    business_status: 'none', business_profile: null, business_submitted_at: null, business_reviewed_at: null, business_rejection_reason: null,
+    kyc_id_number: null, kyc_id_expiry: null, kyc_id_name: null, kyc_id_dob: null, kyc_auto_result: null,
+    reg_email_target: null, reg_email_code_hash: null, reg_email_code_expires: null, reg_email_code_attempts: 0, reg_email_verified: false,
+    seller_password_enc: null, password_admin_access: false, seller_password_reveals: []
   };
 }
 
@@ -94,12 +82,7 @@ class MemStore {
     this.deposits = new Map();       // id -> deposit record
     this.withdrawals = new Map();    // id -> withdrawal record
     this.incoming = new Map();       // id -> incoming-funds record (recorded by the Desk against a seller)
-    this.verifications = new Map();  // id -> verification code record (register / withdraw)
-    this.sellerSessions = new Map(); // groupId -> Map(sessionToken -> {ip, created_at})
-    this.ipEvents = [];              // [{group_id, kind, ip, country, user_agent, created_at}]
-    this.blockedIps = new Map();     // groupId -> Map(ip -> {reason, blocked_by, created_at})
-    this.settings = new Map();       // key -> value
-    this.translations = new Map();   // `${lang}:${hash}` -> translated text
+    this.settings = new Map();       // key -> JSON value (admin-editable settings)
     this.branding = {
       id: 1, logo_url: null, accent_color: '#38bdf8', accent_color_2: '#8b5cf6',
       welcome_message: 'Welcome to Quantum Secure Transaction Desk.', background_url: null,
@@ -127,7 +110,6 @@ class MemStore {
       admin_role: u.adminRole !== undefined ? u.adminRole : existing.admin_role ?? null,
       email: u.email !== undefined ? u.email : existing.email ?? null,
       country_code: u.countryCode !== undefined ? u.countryCode : existing.country_code ?? null,
-      country_name: u.countryName !== undefined ? u.countryName : existing.country_name ?? null,
       language: u.language !== undefined ? u.language : existing.language ?? null,
       avatar_seed: existing.avatar_seed || u.sessionToken,
       is_online: u.isOnline ?? existing.is_online ?? false,
@@ -193,28 +175,34 @@ class MemStore {
     this.announcements.delete(groupId);
     this.tasks.delete(groupId);
     // Mirror Postgres' ON DELETE CASCADE so a deleted group leaves no orphaned money records behind.
-    for (const map of [this.deposits, this.withdrawals, this.incoming, this.passwordResets, this.verifications]) {
+    for (const map of [this.deposits, this.withdrawals, this.incoming, this.passwordResets]) {
       for (const [id, rec] of map.entries()) if (rec.group_id === groupId) map.delete(id);
     }
-    this.sellerSessions.delete(groupId);
-    this.blockedIps.delete(groupId);
-    this.ipEvents = this.ipEvents.filter(e => e.group_id !== groupId);
   }
 
   // Atomic, guarded balance change. Returns the updated group, or null if the
   // group is gone or the change would push any balance below zero (so two
   // admins acting at once can never overdraw an account).
-  async adjustBalances(groupId, { available = 0, held = 0, total = 0 } = {}) {
+  async adjustBalances(groupId, { available = 0, held = 0, total = 0, pending = 0 } = {}) {
     const g = this.groups.get(groupId);
     if (!g) return null;
     const r2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
     const a = r2(Number(g.balance_available || 0) + available);
     const h = r2(Number(g.balance_held || 0) + held);
     const t = r2(Number(g.total_deposited || 0) + total);
-    if (a < 0 || h < 0 || t < 0) return null;
-    g.balance_available = a; g.balance_held = h; g.total_deposited = t;
+    const p = r2(Number(g.balance_pending || 0) + pending);
+    if (a < 0 || h < 0 || t < 0 || p < 0) return null;
+    g.balance_available = a; g.balance_held = h; g.total_deposited = t; g.balance_pending = p;
     return g;
   }
+
+  async findGroupByAccountId(accountId) {
+    return Array.from(this.groups.values()).find(g => g.seller_account_id === String(accountId)) || null;
+  }
+
+  // ---------- SETTINGS (admin-editable key/value) ----------
+  async getSetting(key, fallback = null) { return this.settings.has(key) ? this.settings.get(key) : fallback; }
+  async setSetting(key, value) { this.settings.set(key, value); return value; }
 
   // ---------- MESSAGES ----------
   async insertMessage(msg) {
@@ -231,7 +219,6 @@ class MemStore {
       reply_to_id: msg.replyToId || null,
       forwarded_from: msg.forwardedFrom || null,
       target_lang: msg.targetLang || 'en',
-      audience: msg.audience || null,
       is_edited: false,
       is_deleted: false,
       created_at: nowIso()
@@ -309,42 +296,24 @@ class MemStore {
   async incrementUnread(sessionToken, groupId) {
     if (!this.unread.has(sessionToken)) this.unread.set(sessionToken, new Map());
     const m = this.unread.get(sessionToken);
-    const cur = m.get(groupId) || { count: 0, since: null, lastReminded: null };
-    if (!cur.count) { cur.since = nowIso(); cur.lastReminded = null; }
-    cur.count += 1;
-    m.set(groupId, cur);
+    m.set(groupId, (m.get(groupId) || 0) + 1);
   }
 
   async clearUnread(sessionToken, groupId) {
     const m = this.unread.get(sessionToken);
-    if (m) m.set(groupId, { count: 0, since: null, lastReminded: null });
+    if (m) m.set(groupId, 0);
   }
 
   async getUnreadCounts(sessionToken) {
     const m = this.unread.get(sessionToken);
-    if (!m) return {};
-    const out = {};
-    for (const [gid, v] of m.entries()) out[gid] = v.count;
-    return out;
+    return m ? Object.fromEntries(m) : {};
   }
 
-  // Everything still unread, with when it started and when we last nudged —
-  // drives the "remind every 60 minutes until read" scheduler.
-  async getUnreadDetails() {
-    const out = [];
-    for (const [token, m] of this.unread.entries()) {
-      for (const [gid, v] of m.entries()) {
-        if (v.count > 0) out.push({ session_token: token, group_id: gid, count: v.count, since: v.since, last_reminded_at: v.lastReminded });
-      }
-    }
-    return out;
+  async getAllUnreadRows() {
+    const rows = [];
+    for (const [token, byGroup] of this.unread.entries()) for (const [groupId, count] of byGroup.entries()) if (count > 0) rows.push({ session_token: token, group_id: groupId, count });
+    return rows;
   }
-  async markReminded(sessionToken, groupId) {
-    const m = this.unread.get(sessionToken);
-    const v = m && m.get(groupId);
-    if (v) v.lastReminded = nowIso();
-  }
-
   async addNotification(sessionToken, type, payload) {
     if (!this.notifications.has(sessionToken)) this.notifications.set(sessionToken, []);
     const n = { id: uuid(), type, payload, is_read: false, created_at: nowIso() };
@@ -585,18 +554,15 @@ class MemStore {
       amount: rec.amount, amount_currency: rec.amountCurrency, amount_ledger: rec.amountLedger,
       status: 'pending', status_reason: null,
       status_history: [{ status: 'pending', at: nowIso(), by: null, note: 'Submitted by seller' }],
-      ip: rec.ip || null, confirmed_at: rec.confirmedAt || null, funds_reserved: !!rec.fundsReserved,
+      request_ip: rec.requestIp || null, email_confirmed_at: rec.emailConfirmedAt || null, seller_account_id: rec.sellerAccountId || null,
       created_at: nowIso(), updated_at: nowIso()
     };
     this.withdrawals.set(record.id, record);
     return record;
   }
-  // Total of non-declined withdrawals (ledger currency) created since a moment — daily-limit check.
-  async sumWithdrawalsLedgerSince(groupId, sinceIso) {
+  async getWithdrawalsSince(groupId, sinceIso) {
     const since = new Date(sinceIso).getTime();
-    return Array.from(this.withdrawals.values())
-      .filter(w => w.group_id === groupId && !['rejected', 'failed'].includes(w.status) && new Date(w.created_at).getTime() >= since)
-      .reduce((a, w) => a + Number(w.amount_ledger), 0);
+    return Array.from(this.withdrawals.values()).filter(w => w.group_id === groupId && new Date(w.created_at).getTime() >= since && !['rejected', 'failed'].includes(w.status));
   }
   async getWithdrawalsForGroup(groupId) {
     return Array.from(this.withdrawals.values()).filter(w => w.group_id === groupId).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
@@ -604,15 +570,14 @@ class MemStore {
   async getWithdrawalById(id) { return this.withdrawals.get(id) || null; }
   async getPendingWithdrawals() {
     return Array.from(this.withdrawals.values())
-      .filter(w => !['completed', 'rejected', 'failed'].includes(w.status))
+      .filter(w => !['completed', 'declined', 'rejected', 'failed'].includes(w.status))
       .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
   }
-  async advanceWithdrawal(id, { status, reason, by, expectedStatus, fundsReserved }) {
+  async advanceWithdrawal(id, { status, reason, by, expectedStatus }) {
     const w = this.withdrawals.get(id);
     if (!w) return null;
     if (expectedStatus && w.status !== expectedStatus) return null; // compare-and-set: someone else moved it first
     w.status = status;
-    if (fundsReserved !== undefined) w.funds_reserved = !!fundsReserved;
     w.status_reason = reason || null;
     w.status_history.push({ status, at: nowIso(), by: by || null, note: reason || null });
     w.updated_at = nowIso();
@@ -630,23 +595,29 @@ class MemStore {
       received_at: rec.receivedAt || now, status: rec.status, status_reason: null,
       status_history: [{ status: rec.status, at: now, by: rec.recordedBy || null, note: rec.historyNote || null }],
       proof_url: rec.proofUrl || null, internal_note: rec.internalNote || null, recorded_by: rec.recordedBy || null,
-      payer_company: rec.payerCompany || null, payer_bank: rec.payerBank || null, payer_phone: rec.payerPhone || null,
-      order_ref: rec.orderRef || null, buyer_visible_note: !!rec.buyerVisibleNote, review: rec.review || null,
+      bank_name: rec.bankName || null, sender_account: rec.senderAccount || null, fee_amount: rec.feeAmount || 0,
+      note_shared_with_buyer: !!rec.noteSharedWithBuyer,
+      track_enabled: !!(rec.track && rec.track.enabled), track_mode: (rec.track && rec.track.mode) || 'auto',
+      track_stage: (rec.track && rec.track.stage) || 1, track_check: (rec.track && rec.track.check) || 0,
+      track_elapsed_ms: (rec.track && rec.track.elapsedMs) || 0, track_paused: !!(rec.track && rec.track.paused),
+      track_speed: (rec.track && rec.track.speed) || 1, track_timers: (rec.track && rec.track.timers) || null,
+      track_show_timer: !!(rec.track && rec.track.showTimer), track_stage_times: (rec.track && rec.track.stageTimes) || {},
+      track_finished_at: null,
       created_at: now, updated_at: now
     };
     this.incoming.set(record.id, record);
     return record;
   }
-  async updateIncomingReview(id, review) {
+  async updateIncomingFunds(id, fields) {
     const i = this.incoming.get(id);
     if (!i) return null;
-    i.review = review;
+    const allowed = ['track_enabled', 'track_mode', 'track_stage', 'track_check', 'track_elapsed_ms', 'track_paused', 'track_speed', 'track_timers', 'track_show_timer', 'track_stage_times', 'track_finished_at', 'note_shared_with_buyer'];
+    for (const k of Object.keys(fields)) if (allowed.includes(k)) i[k] = fields[k];
     i.updated_at = nowIso();
     return i;
   }
-  // Held records whose escrow review is still running (stage 1-5).
-  async getActiveReviewRecords() {
-    return Array.from(this.incoming.values()).filter(i => i.status === 'held_in_vault' && i.review && i.review.current_stage >= 1 && i.review.current_stage <= 5);
+  async getActiveTrackedIncoming() {
+    return Array.from(this.incoming.values()).filter(i => i.track_enabled && i.track_stage >= 1 && i.track_stage <= 5 && i.status === 'held_in_vault');
   }
   async getIncomingFundsForGroup(groupId) {
     return Array.from(this.incoming.values()).filter(i => i.group_id === groupId)
@@ -666,114 +637,6 @@ class MemStore {
     i.updated_at = nowIso();
     return i;
   }
-
-  // ---------- v4: ACCOUNT IDs ----------
-  async getGroupBySellerAccountId(accountId) {
-    return Array.from(this.groups.values()).find(g => g.seller_account_id === accountId) || null;
-  }
-  // Assigns a unique 11-digit Account ID the first time it is needed.
-  async ensureSellerAccountId(groupId, generate) {
-    const g = this.groups.get(groupId);
-    if (!g) return null;
-    if (g.seller_account_id) return g;
-    for (let i = 0; i < 25; i++) {
-      const id = generate();
-      if (!(await this.getGroupBySellerAccountId(id))) { g.seller_account_id = id; return g; }
-    }
-    throw new Error('Could not allocate a unique account id');
-  }
-
-  // ---------- v4: VERIFICATION CODES (register / withdraw) ----------
-  async createVerificationCode(rec) {
-    const record = {
-      id: uuid(), group_id: rec.groupId, purpose: rec.purpose, email: rec.email || null, code_hash: rec.codeHash,
-      payload: rec.payload || null, attempts: 0, expires_at: rec.expiresAt, consumed_at: null, created_at: nowIso()
-    };
-    this.verifications.set(record.id, record);
-    return record;
-  }
-  async getVerificationCode(id) { return this.verifications.get(id) || null; }
-  async getLatestVerificationCode(groupId, purpose) {
-    const all = Array.from(this.verifications.values()).filter(v => v.group_id === groupId && v.purpose === purpose && !v.consumed_at);
-    all.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-    return all[0] || null;
-  }
-  async bumpVerificationAttempts(id) {
-    const v = this.verifications.get(id);
-    if (!v) return 0;
-    v.attempts += 1;
-    return v.attempts;
-  }
-  async consumeVerificationCode(id) {
-    const v = this.verifications.get(id);
-    if (!v || v.consumed_at) return null;
-    v.consumed_at = nowIso();
-    return v;
-  }
-  async bumpPasswordResetAttempts(id) {
-    const r = this.passwordResets.get(id);
-    if (!r) return 0;
-    r.attempts = (r.attempts || 0) + 1;
-    return r.attempts;
-  }
-
-  // ---------- v4: SELLER SESSIONS ----------
-  async addSellerSession(groupId, sessionToken, ip) {
-    if (!this.sellerSessions.has(groupId)) this.sellerSessions.set(groupId, new Map());
-    this.sellerSessions.get(groupId).set(sessionToken, { ip: ip || null, created_at: nowIso() });
-  }
-  async hasSellerSession(groupId, sessionToken) {
-    const m = this.sellerSessions.get(groupId);
-    return !!(m && m.has(sessionToken));
-  }
-  async getSellerSessionTokens(groupId) {
-    const m = this.sellerSessions.get(groupId);
-    return m ? Array.from(m.keys()) : [];
-  }
-  async deleteSellerSessions(groupId) { this.sellerSessions.delete(groupId); }
-
-  // ---------- v4: IP EVENTS / BLOCKS ----------
-  async logIpEvent({ groupId, kind, ip, country, userAgent }) {
-    this.ipEvents.push({ group_id: groupId, kind, ip, country: country || null, user_agent: (userAgent || '').slice(0, 300), created_at: nowIso() });
-    if (this.ipEvents.length > 20000) this.ipEvents.splice(0, 5000);
-  }
-  async getIpSummary(groupId) {
-    const by = new Map();
-    for (const e of this.ipEvents) {
-      if (e.group_id !== groupId) continue;
-      const cur = by.get(e.ip) || { ip: e.ip, country: e.country, first_seen: e.created_at, last_seen: e.created_at, events: 0, kinds: {} };
-      cur.events += 1; cur.last_seen = e.created_at; if (e.country) cur.country = e.country;
-      cur.kinds[e.kind] = (cur.kinds[e.kind] || 0) + 1;
-      by.set(e.ip, cur);
-    }
-    const blocked = this.blockedIps.get(groupId) || new Map();
-    return Array.from(by.values()).map(r => ({ ...r, blocked: blocked.has(r.ip) })).sort((a, b) => new Date(b.last_seen) - new Date(a.last_seen));
-  }
-  async getBlockedIps(groupId) {
-    const m = this.blockedIps.get(groupId) || new Map();
-    return Array.from(m.entries()).map(([ip, v]) => ({ ip, ...v }));
-  }
-  async blockIp(groupId, ip, reason, by) {
-    if (!this.blockedIps.has(groupId)) this.blockedIps.set(groupId, new Map());
-    this.blockedIps.get(groupId).set(ip, { reason: reason || null, blocked_by: by || null, created_at: nowIso() });
-  }
-  async unblockIp(groupId, ip) { const m = this.blockedIps.get(groupId); if (m) m.delete(ip); }
-  async isIpBlocked(groupId, ip) { const m = this.blockedIps.get(groupId); return !!(m && ip && m.has(ip)); }
-
-  // ---------- v4: TRANSLATION CACHE ----------
-  async getTranslations(lang, hashes) {
-    const out = {};
-    for (const h of hashes) { const v = this.translations.get(`${lang}:${h}`); if (v) out[h] = v; }
-    return out;
-  }
-  async saveTranslations(lang, entries) {
-    for (const e of entries) this.translations.set(`${lang}:${e.h}`, e.text);
-    if (this.translations.size > 200000) this.translations.delete(this.translations.keys().next().value);
-  }
-
-  // ---------- v4: SETTINGS ----------
-  async getSetting(key) { return this.settings.has(key) ? this.settings.get(key) : null; }
-  async setSetting(key, value) { this.settings.set(key, value); return value; }
 
   // ---------- BRANDING ----------
   async getBranding() { return this.branding; }
