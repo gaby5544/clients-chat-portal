@@ -12,7 +12,7 @@ function flagHtml(iso, name) {
 // ====================================================================
 // 1. Dead invite links: the server says "expired" -> show only the expired page
 // ====================================================================
-socket.on('link-expired', () => { try { socket.disconnect(); } catch (e) { /* ignore */ } location.replace('/expired'); });
+socket.on('link-expired', () => { try { if (sessionStorage.getItem('q_admin_reveal') === '1') return; } catch (e) { /* ignore */ } try { socket.disconnect(); } catch (e) { /* ignore */ } location.replace('/expired'); });
 
 // ====================================================================
 // 2. Installed-app start screen: no invite link => professional sign-in screen (never a group)
