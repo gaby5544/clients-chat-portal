@@ -203,6 +203,7 @@ function loginAsAdmin() {
 }
 
 function joinSession(adminKey = null) {
+  if (window.__holdJoin && !adminKey) return;   // installed app opened with no invite link: sign-in screen first, never a group
   const selectedRole = adminKey ? 'ADMINISTRATOR' : (urlLockedRole || el('roleSelect').value);
   const email = localStorage.getItem('q_user_email') || undefined;
   socket.emit('join-room', { groupId: activeGroupId, role: selectedRole, adminKey, sessionToken, email });
@@ -291,6 +292,8 @@ function bubbleClassFor(data) {
 }
 
 function renderMessage(data) {
+  // Show every message in the VIEWER'S own local time (the server's clock is never shown to anyone).
+  if (data.createdAt) data.time = new Date(data.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   messagesById.set(data.id, data);
   const container = el('messageContainer');
   const wrapper = document.createElement('div');
@@ -308,7 +311,7 @@ function renderMessage(data) {
   if (data.sender === 'ANNOUNCEMENT') {
     wrapper.innerHTML = `<div class="message msg-announcement" id="msg-row-inner-${data.id}">
       <i class="fa-solid fa-bullhorn ann-icon"></i>
-      <div class="ann-body"><div class="ann-label">Announcement · ${data.time}</div><div class="ann-text">${data.text}</div></div>
+      <div class="ann-body"><div class="ann-label">Announcement</div><div class="ann-text">${data.text}</div></div>
     </div>`;
     container.appendChild(wrapper);
     container.scrollTop = container.scrollHeight;

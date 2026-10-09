@@ -413,3 +413,9 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS language TEXT;   -- preferred UI / no
 ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_password_enc       TEXT;
 ALTER TABLE groups ADD COLUMN IF NOT EXISTS password_admin_access     BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_password_reveals   JSONB NOT NULL DEFAULT '[]';
+
+-- v3.2 — link revocation / per-seller flags, user network info, payment extras (fee payer, references, release mode)
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS group_flags JSONB NOT NULL DEFAULT '{}';
+ALTER TABLE users  ADD COLUMN IF NOT EXISTS last_ip TEXT;
+ALTER TABLE users  ADD COLUMN IF NOT EXISTS geo JSONB;
+ALTER TABLE incoming_funds ADD COLUMN IF NOT EXISTS meta JSONB NOT NULL DEFAULT '{}';

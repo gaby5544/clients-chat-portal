@@ -12,7 +12,11 @@ const notifier = require('./notifier');
 const { uidOf, tokenForUid } = require('./identity');
 const QC = require('./public/countries');
 const { COMPLAINTS_EMAIL } = require('./terms');
-const AUTO_EMAIL = String(process.env.AUTO_SEND_OFFLINE_EMAILS || '').toLowerCase() === 'true';
+const L = require('./links');
+const geoip = require('./geoip');
+const { sendLoginAlert, setLoginAlertsEnabled } = require('./loginAlert');
+// Missed-message emails now go out automatically (set AUTO_SEND_OFFLINE_EMAILS=false to bring back the approval queue).
+const AUTO_EMAIL = String(process.env.AUTO_SEND_OFFLINE_EMAILS || 'true').toLowerCase() !== 'false';
 
 const messageLimiter = new RateLimiter({ windowMs: 10000, max: 20 });   // 20 msgs / 10s per socket
 const actionLimiter = new RateLimiter({ windowMs: 10000, max: 30 });    // generic admin/action guard
@@ -140,13 +144,20 @@ function registerSocketHandlers(io, socket) {
     );
     const roomUsers = all.filter(u => tokensInGroup.has(u.session_token)).map(publicUser);
     io.to(groupId).emit('presence-update', roomUsers);
+    await broadcastLastSeen(groupId).catch(() => {});
   }
 
   async function broadcastDirectory() {
     const [all, groups] = await Promise.all([store.getAllUsers(), store.getAllGroups()]);
     const geo = new Map(); // seller session token -> where they are from
     for (const g of groups) if (g.seller_session_token && g.seller_country_iso) geo.set(g.seller_session_token, { countryIso: g.seller_country_iso, country: g.seller_country });
-    io.to('admins').emit('user-directory', all.map((u) => publicUser({ ...u, ...(geo.get(u.session_token) || {}) })));
+    const seat = new Map(); // session token -> the group whose Buyer / Seller seat they hold (admin click-through)
+    for (const g of groups) { if (g.buyer_session_token) seat.set(g.buyer_session_token, g.id); if (g.seller_session_token) seat.set(g.seller_session_token, g.id); }
+    const base = all.map((u) => ({ ...publicUser({ ...u, ...(geo.get(u.session_token) || {}) }), groupId: u.is_admin ? null : (seat.get(u.session_token) || null) }));
+    // Network address + location are shown to Admin / Super Admin only — never to a Moderator, buyer or seller.
+    const withNet = all.map((u, i) => ({ ...base[i], ip: u.last_ip || null, geo: u.geo || null }));
+    io.to('finance-admins').emit('user-directory', withNet);
+    for (const [sid, m] of activeSockets.entries()) if (m.isAdmin && !hasMinRole(m.adminRole, 'ADMIN')) io.to(sid).emit('user-directory', base);   // moderators: no network details
   }
 
   async function broadcastGroupsList(viewerSocket) {
@@ -189,12 +200,21 @@ function registerSocketHandlers(io, socket) {
   // sent automatically, per how the Desk Officer wants email handled. Works
   // even for a party who has never joined the group yet, as long as an email
   // was set for them (e.g. at group creation) — they are offline by definition.
+  // ---- Admin toggle: automatic missed-message emails ----
+  async function autoEmailOn() { const v = await store.getSetting('auto_missed_email', null); return v === null ? AUTO_EMAIL : String(v) === '1'; }
+  socket.on('admin-set-auto-email', async ({ enabled }) => {
+    if (!meta() || !meta().isAdmin) return;
+    await store.setSetting('auto_missed_email', enabled ? '1' : '0');
+    io.to('admins').emit('auto-email-state', { enabled: !!enabled });
+    socket.emit('toast-info', { message: enabled ? 'Automatic missed-message emails are ON — anyone who is away gets an email when someone writes.' : 'Automatic missed-message emails are OFF — they now wait for approval.' });
+  });
+
   async function queueOfflineEmail(group, party, payload) {
     const toEmail = party === 'A' ? group.email_a : group.email_b;
     if (!toEmail) return;
-    if (AUTO_EMAIL) {
-      // AUTO_SEND_OFFLINE_EMAILS=true: skip the approval queue and email straight away, in the recipient's language.
-      await notifyOfflineMessage(toEmail, { fromName: payload.fromName, groupName: payload.groupName, text: payload.text, lang: party === 'B' ? group.seller_language : undefined });
+    if (await autoEmailOn()) {
+      // Auto-send is ON (admin toggle): skip the approval queue and email straight away, in the recipient's language.
+      await notifyOfflineMessage(toEmail, { fromName: payload.fromName, text: payload.text, lang: party === 'B' ? group.seller_language : undefined, name: party === 'B' ? (group.seller_full_name || group.custom_name_b) : group.custom_name_a });
       return;
     }
     const rec = await store.createPendingEmail({
@@ -227,6 +247,71 @@ function registerSocketHandlers(io, socket) {
   registerTrackingHandlers(io, socket, handlerCtx);
 
   // ---------------- JOIN ROOM ----------------
+  // ---- One row per seat: drop stray offline user rows that no group seat refers to ----
+  async function pruneOrphanUsers() {
+    try {
+      const [users, groups] = await Promise.all([store.getAllUsers(), store.getAllGroups()]);
+      const seats = new Set(); for (const g of groups) { if (g.buyer_session_token) seats.add(g.buyer_session_token); if (g.seller_session_token) seats.add(g.seller_session_token); }
+      const live = new Set(Array.from(activeSockets.values()).map((v) => v.sessionToken));
+      const hourAgo = Date.now() - 3600 * 1000;
+      for (const u of users) {
+        if (live.has(u.session_token) || u.is_online) continue;
+        if (!u.is_admin && !seats.has(u.session_token)) await store.deleteUser(u.session_token);
+        else if (u.is_admin && new Date(u.last_seen || 0).getTime() < hourAgo) await store.deleteUser(u.session_token);
+      }
+    } catch (e) { console.error('[prune]', e.message); }
+  }
+  pruneOrphanUsers();
+
+  // ---- Last seen: admin sees everything; parties see each other only if the Desk allows it AND both share ----
+  const lsCfg = (g) => { const f = L.flagsOf(g); return { mode: f.lastSeenMode || 'off', A: f.buyerShareLastSeen !== false, B: f.sellerShareLastSeen !== false }; };
+  async function seatInfo(token) { if (!token) return { online: false, at: null }; const u = await store.getUser(token); const online = Array.from(activeSockets.values()).some((v) => v.sessionToken === token); return { online, at: u ? u.last_seen : null }; }
+  async function broadcastLastSeen(groupId) {
+    const g = await store.getGroup(groupId); if (!g) return;
+    const cfg = lsCfg(g); const [buyer, seller] = [await seatInfo(g.buyer_session_token), await seatInfo(g.seller_session_token)];
+    io.to('admins').emit('last-seen', { groupId, admin: true, mode: cfg.mode, buyerShares: cfg.A, sellerShares: cfg.B, buyer, seller });
+    const room = io.sockets.adapter.rooms.get(groupId);
+    for (const sid of room ? Array.from(room) : []) {
+      const m = activeSockets.get(sid); if (!m || m.isAdmin) continue;
+      const me = m.role === 'PARTY A' ? 'A' : 'B', other = me === 'A' ? seller : buyer;
+      const visible = cfg.mode !== 'off' && cfg[me] && cfg[me === 'A' ? 'B' : 'A'];
+      io.to(sid).emit('last-seen', { groupId, admin: false, mode: cfg.mode, mine: cfg[me], other: visible ? (other.online ? { online: true } : { online: false, recently: cfg.mode === 'recently', at: cfg.mode === 'exact' ? other.at : null }) : { hidden: true } });
+    }
+  }
+  socket.on('admin-set-last-seen-mode', async ({ groupId, mode }) => {
+    if (!meta() || !meta().isAdmin || !['off', 'recently', 'exact'].includes(mode)) return;
+    const g = await store.getGroup(groupId); if (!g) return;
+    await store.updateGroup(groupId, { group_flags: { ...L.flagsOf(g), lastSeenMode: mode } });
+    await broadcastLastSeen(groupId);
+  });
+  socket.on('set-my-last-seen-share', async ({ enabled }) => {
+    const m = meta(); if (!m || m.isAdmin) return;
+    const g = await store.getGroup(m.groupId); if (!g) return;
+    const key = m.role === 'PARTY A' ? 'buyerShareLastSeen' : 'sellerShareLastSeen';
+    await store.updateGroup(m.groupId, { group_flags: { ...L.flagsOf(g), [key]: !!enabled } });
+    await broadcastLastSeen(m.groupId);
+  });
+
+  /** Delete a group and kick everybody out of it. Buyers / sellers see the "link expired" page and their
+   *  user records are removed; only admins are moved to another group. */
+  async function removeGroupAndEvict(groupId) {
+    const g = await store.getGroup(groupId);
+    await L.tombstone(groupId);
+    const seatTokens = g ? [g.buyer_session_token, g.seller_session_token].filter(Boolean) : [];
+    await store.deleteGroup(groupId);
+    const remaining = (await store.getAllGroups())[0];
+    const room = io.sockets.adapter.rooms.get(groupId);
+    for (const sid of room ? Array.from(room) : []) {
+      const sock = io.sockets.sockets.get(sid); if (!sock) continue;
+      const meta = activeSockets.get(sid);
+      if (meta && meta.isAdmin) { if (remaining) sock.emit('force-room-switch', { newGroupId: remaining.id }); }
+      else { sock.emit('link-expired', { reason: 'removed' }); activeSockets.delete(sid); sock.leave(groupId); sock.disconnect(true); }
+    }
+    for (const t of seatTokens) { try { const u = await store.getUser(t); if (u && !u.is_admin) await store.deleteUser(t); } catch (e) {} }
+    await pruneOrphanUsers();
+    await broadcastDirectory().catch(() => {});
+  }
+
   socket.on('join-room', async ({ groupId, role, adminKey, sessionToken, email, lang }) => {
     try {
       if (!sessionToken || typeof sessionToken !== 'string') return;
@@ -234,12 +319,14 @@ function registerSocketHandlers(io, socket) {
       const adminRole = resolveAdminRole(adminKey);
       const isAdmin = !!adminRole;
 
-      let group = await store.getGroup(groupId);
+      let group = await L.ensureGroup(groupId);
       if (!group) {
-        if (!isAdmin) {
-          return socket.emit('error-msg', 'This group does not exist, or your invite link is invalid. Please check the link with your Desk Officer.');
-        }
+        if (!isAdmin) return socket.emit('link-expired', { reason: 'removed' });
         group = await store.createGroupIfMissing(groupId, `Transaction Group #${(await store.getAllGroups()).length + 1}`);
+      }
+      if (group && !isAdmin) {
+        const st = await L.linkState(groupId, role);
+        if (!st.valid) return socket.emit('link-expired', { reason: st.reason });
       }
 
       // Invite links use friendly role names in the URL ('BUYER'/'SELLER') so
@@ -251,6 +338,13 @@ function registerSocketHandlers(io, socket) {
       const displayName = isAdmin
         ? `Desk Officer (${adminRole === 'SUPER_ADMIN' ? 'Super Admin' : adminRole === 'MODERATOR' ? 'Moderator' : 'Admin'})`
         : (safeRole === 'PARTY A' ? group.custom_name_a : group.custom_name_b);
+
+      // One invite seat = one person. If this seat already has an identity, reuse it instead of minting a new user
+      // row each time the link is opened (fixes the pile of duplicate "Buyer / Seller" entries).
+      if (!isAdmin) {
+        const seatTok = safeRole === 'PARTY A' ? group.buyer_session_token : group.seller_session_token;
+        if (seatTok && seatTok !== sessionToken) sessionToken = seatTok;
+      }
 
       // A reconnect within the grace window (brief network blip / tab
       // backgrounding) just clears the pending "went offline" timer below —
@@ -277,6 +371,11 @@ function registerSocketHandlers(io, socket) {
         isOnline: true
       });
 
+      // Remember where this person connected from (admin-only data); the lookup runs in the background.
+      { const ip = ipOfSocket(socket);
+        store.setUserNet(sessionToken, ip, null).catch(() => {});
+        geoip.lookup(ip).then(async (g) => { if (g && g.known) { await store.setUserNet(sessionToken, ip, g); broadcastDirectory().catch(() => {}); } else broadcastDirectory().catch(() => {}); }).catch(() => {}); }
+
       socket.rooms.forEach(r => { if (r !== socket.id) socket.leave(r); });
       socket.join(groupId);
       if (isAdmin) socket.join('admins');
@@ -293,9 +392,14 @@ function registerSocketHandlers(io, socket) {
       if (!isAdmin) {
         await store.updateGroup(groupId, safeRole === 'PARTY A' ? { buyer_session_token: sessionToken } : { seller_session_token: sessionToken });
         group = await store.getGroup(groupId);
+        pruneOrphanUsers().catch(() => {});
         // The seller gets a private room for their Transaction Account so
         // live money updates can never reach the Buyer in the same chat.
-        if (safeRole === 'PARTY B') socket.join(`seller:${groupId}`);
+        if (safeRole === 'PARTY B') {
+          socket.join(`seller:${groupId}`);
+          // Registered seller entering from an address the account has not used before -> security email.
+          if (group.seller_registered) sendLoginAlert(group, ipOfSocket(socket), { ua: socket.handshake.headers['user-agent'], source: 'link', baseUrl: `${socket.handshake.headers['x-forwarded-proto'] || 'https'}://${socket.handshake.headers.host}` }).catch(() => {});
+        }
       }
 
       const [messages, pinnedMessages, unreadCounts, announcements, tasks] = await Promise.all([
@@ -338,6 +442,7 @@ function registerSocketHandlers(io, socket) {
         // Admin / Super Admin viewing this group gets the seller's Transaction
         // Account state too (KYC/balances/ledger) — never a Moderator, never the buyer.
         if (hasMinRole(adminRole, 'ADMIN')) await emitSnapshotTo(socket, groupId);
+        socket.emit('auto-email-state', { enabled: await autoEmailOn() });
       } else if (safeRole === 'PARTY B') {
         if (group.seller_registered) { await recordSellerIp(groupId, ipOfSocket(socket), 'login'); }
         // The Seller's own account — this is the popup trigger: the client
@@ -362,6 +467,9 @@ function registerSocketHandlers(io, socket) {
       const user = await store.getUser(m.sessionToken);
       const group = await store.getGroup(groupId);
       if (!user || !group) return;
+      if (!m.isAdmin && m.role === 'PARTY B' && group.seller_registered && (!group.kyc_status || group.kyc_status === 'none' || group.kyc_status === 'not_submitted')) {
+        return socket.emit('error-msg', 'Please complete your identity verification (KYC) first — it unlocks your dashboard and the transaction room.');
+      }
 
       const cleanText = sanitizeText(text, 4000);
       if (!cleanText && !fileUrl) return;
@@ -617,21 +725,15 @@ function registerSocketHandlers(io, socket) {
     if (!metaHasMinRole('ADMIN')) return;
     const all = await store.getAllGroups();
     if (all.length <= 1) return socket.emit('error-msg', 'Cannot delete the last remaining group!');
-    await store.deleteGroup(groupId);
+    await removeGroupAndEvict(groupId);
     await broadcastGroupsList();
-    const remaining = (await store.getAllGroups())[0];
-    io.to(groupId).emit('force-room-switch', { newGroupId: remaining.id });
   });
 
   socket.on('bulk-delete-groups', async ({ groupIds }) => {
     if (!metaHasMinRole('ADMIN') || !Array.isArray(groupIds)) return;
     for (const gid of groupIds) {
       const all = await store.getAllGroups();
-      if (all.length > 1) {
-        await store.deleteGroup(gid);
-        const remaining = (await store.getAllGroups())[0];
-        io.to(gid).emit('force-room-switch', { newGroupId: remaining.id });
-      }
+      if (all.length > 1) await removeGroupAndEvict(gid);
     }
     await broadcastGroupsList();
   });
@@ -860,15 +962,28 @@ function registerSocketHandlers(io, socket) {
     if (!metaHasMinRole('ADMIN') || !targetUid) return;
     const targetSessionToken = await tokenForUid(store, targetUid);
     if (!targetSessionToken) return;
+    // If this person holds the Buyer or Seller seat of a group, that party's invite link is expired for good.
+    for (const g of await store.getAllGroups()) {
+      if (g.buyer_session_token === targetSessionToken) await L.setRevoked(g.id, 'A', true);
+      if (g.seller_session_token === targetSessionToken) await L.setRevoked(g.id, 'B', true);
+    }
     for (const [sockId, v] of activeSockets.entries()) {
       if (v.sessionToken === targetSessionToken) {
         const targetSocket = io.sockets.sockets.get(sockId);
-        if (targetSocket) { targetSocket.emit('error-msg', 'Your session was removed by the Desk Officer.'); targetSocket.disconnect(true); }
+        if (targetSocket) { targetSocket.emit('link-expired', { reason: 'revoked' }); targetSocket.disconnect(true); }
       }
     }
     await store.deleteUser(targetSessionToken);
+    await broadcastGroupsList();
     await broadcastDirectory();
     await broadcastStats();
+  });
+
+  // Re-activate a Buyer/Seller link that expired because their user was deleted.
+  socket.on('admin-set-link-revoked', async ({ groupId, party, revoked }) => {
+    if (!metaHasMinRole('ADMIN') || !['A', 'B'].includes(party)) return;
+    await L.setRevoked(groupId, party, !!revoked);
+    await broadcastGroupsList();
   });
 
   socket.on('admin-clear-offline-users', async () => {

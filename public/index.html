@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover">
 <title>Quantum Secure Transaction Desk</title>
 <!-- Brand favicon: SVG (scales perfectly on modern browsers) + PNG/apple-touch fallbacks
      so the logo shows in the browser tab and on a home-screen bookmark on any device. -->
@@ -14,12 +14,16 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="Transaction Desk">
+<meta name="apple-mobile-web-app-title" content="Vistra">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0a0e18">
+<meta name="application-name" content="Vistra">
 <script src="/socket.io/socket.io.js"></script>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Sora:wght@600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<link rel="stylesheet" href="/vendor/fonts/fonts.css">
+<link rel="stylesheet" href="/vendor/fa/all.min.css">
 <link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/v32.css">
+<script>(function(){var p=new URLSearchParams(location.search);var bare=!p.get("groupId")&&!p.has("officer")&&sessionStorage.getItem("q_admin_reveal")!=="1";window.__holdJoin=bare;if(bare)document.documentElement.classList.add("gate-signin");})();</script>
 </head>
 <body>
 
@@ -633,11 +637,10 @@
   <div class="modal-box next-box">
     <div class="modal-body" style="text-align:center;">
       <div class="next-badge"><i class="fa-solid fa-circle-check"></i></div>
-      <h2 class="next-title">Your account is ready</h2>
+      <h2 class="next-title" id="nextStepTitle">Your account is ready</h2>
       <div class="next-id">Account ID <b id="nextStepAccountId">—</b></div>
-      <p class="next-sub">Welcome aboard. Choose how you would like to continue — you can always do the other later.</p>
-      <button class="next-card" onclick="chooseNextStep('transaction')"><span class="next-ico cyan"><i class="fa-solid fa-comments-dollar"></i></span><span class="next-text"><b>Start transaction</b><small>Go straight to your transaction group and begin your deal with the buyer right away.</small></span><i class="fa-solid fa-chevron-right"></i></button>
-      <button class="next-card" onclick="chooseNextStep('kyc')"><span class="next-ico violet"><i class="fa-solid fa-id-card"></i></span><span class="next-text"><b>Continue KYC verification</b><small>Verify your identity now to unlock withdrawals the moment your funds are ready.</small></span><i class="fa-solid fa-chevron-right"></i></button>
+      <p class="next-sub">Your secure account is active. The next step is a short identity verification — it protects you, your funds and the other party. Once you submit it, your dashboard and transaction room open straight away.</p>
+      <button class="next-card" onclick="chooseNextStep('kyc')"><span class="next-ico violet"><i class="fa-solid fa-id-card"></i></span><span class="next-text"><b>Continue to identity verification</b><small>About two minutes: your ID document and a quick live selfie. You only do this once.</small></span><i class="fa-solid fa-chevron-right"></i></button>
     </div>
   </div>
 </div>
@@ -1268,5 +1271,7 @@
 <script src="/app.js"></script>
 <script src="/translate.js"></script>
 <script src="/v31.js"></script>
+<script src="/funddefaults.js"></script>
+<script src="/v32.js"></script>
 </body>
 </html>

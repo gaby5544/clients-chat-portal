@@ -29,6 +29,20 @@ app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 // since it rides over HTTP first).
 app.use(rateLimit({ windowMs: 60 * 1000, max: 300, standardHeaders: true, legacyHeaders: false }));
 
+// Dead invite links never receive the app — only the "link expired" page (HTTP 410). Checked on the server, so
+// nothing of the workspace is ever downloaded, cached or flashed on screen.
+const { linkState, expiredPageHtml } = require('./links');
+app.get('/expired', (req, res) => { res.set('Cache-Control', 'no-store').type('html').send(expiredPageHtml()); });
+app.get(['/', '/index.html'], async (req, res, next) => {
+  try {
+    if (Object.prototype.hasOwnProperty.call(req.query, 'officer')) return next();   // admin entry
+    if (typeof req.query.groupId !== 'string' || !req.query.groupId) return next();
+    const st = await linkState(req.query.groupId, typeof req.query.role === 'string' ? req.query.role : null);
+    if (st.valid) return next();
+    res.status(410).set('Cache-Control', 'no-store').type('html').send(expiredPageHtml());
+  } catch (e) { next(); }
+});
+
 app.use(express.static(path.join(__dirname, 'public'), {
   setHeaders: (res, filePath) => {
     // HTML/JS/CSS must always be revalidated — this app is actively updated,

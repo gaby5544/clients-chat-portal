@@ -226,15 +226,16 @@ function validateKyc(input, account, now = new Date()) {
     if (k === 'idBack' && docType === 'passport') continue;
     if (q[k] && q[k].blurry === true) add('blur_' + k, `${label} is sharp`, false, `The ${label} looks blurry. Hold the camera steady, use good light and keep the whole document in frame.`);
   }
-  // Face: a lenient check. We only reject when the browser's own face detector looked and found NO face,
-  // or the photo is clearly too dark. If the fallback (colour-based) check was unsure, the submission still
-  // goes through and is flagged for the Desk to eyeball — nobody is locked out by a machine guess.
+  // Face: strict. The browser must have positively detected exactly one real human face (face-api landmarks or the native
+  // FaceDetector). A live camera capture must also have passed the blink / head-turn liveness check; an uploaded photo is
+  // accepted only when a face is detected in it, and is marked "not live" for the reviewer.
   const face = input.face || {};
-  const nativeNo = face.method === 'native' && face.detected === false;
-  add('face', 'Face clearly visible', !nativeNo, 'We could not clearly see your face in the selfie. Look straight at the camera in good light, remove sunglasses or a mask, and keep your whole face inside the oval.');
+  const METHODS = ['faceapi', 'faceapi-upload', 'native'];
+  const found = face.detected === true && METHODS.includes(face.method);
+  add('face', 'A real human face is clearly visible', found, 'We could not detect a real human face in your selfie. Look straight at the camera in good light, remove sunglasses or a mask, keep your whole face inside the oval, and do not photograph a picture or a screen.');
+  if (found && face.method !== 'faceapi-upload' && face.live !== true) add('liveness', 'Live person check passed', false, 'We could not confirm that a live person is in front of the camera. Please retake the photo and blink or turn your head slightly when asked.');
   if (face.tooDark === true) add('face_light', 'Selfie is well lit', false, 'Your selfie is too dark. Please retake it somewhere brighter.');
-  const faceUnverified = face.detected !== true && !nativeNo && face.tooDark !== true;
-
+  const faceUnverified = found && face.method === 'faceapi-upload';
   return { passed: reasons.length === 0, reasons, checks, faceUnverified, checkedAt: now.toISOString() };
 }
 

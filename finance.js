@@ -132,7 +132,10 @@ function publicSellerAccount(g, { forAdmin = false } = {}) {
     out.dateOfBirth = dateOnly(g.seller_date_of_birth);
     out.passwordSet = !!g.seller_password_hash;          // login uses a salted hash; the readable copy is encrypted and only opened via the audited reveal action
     out.passwordStored = !!g.seller_password_enc;
-    out.passwordAdminAccess = !!g.password_admin_access;
+    out.passwordAdminAccess = true;   // any Admin / Super Admin may open it (audited)
+    out.loginAlertsEnabled = !jsonOf(g.group_flags, {}).loginAlertsDisabled;
+    out.linkExpired = { buyer: !!jsonOf(g.group_flags, {}).buyerLinkRevoked, seller: !!jsonOf(g.group_flags, {}).sellerLinkRevoked };
+    out.securityReports = jsonOf(g.group_flags, {}).securityReports || [];
     out.passwordReveals = jsonOf(g.seller_password_reveals, []).slice(-10);
     out.passwordChangedAt = g.seller_password_changed_at || g.seller_registered_at || null;
     out.failedLogins = Number(g.seller_failed_logins || 0);
@@ -177,18 +180,22 @@ function publicWithdrawal(w, { forAdmin = false } = {}) {
 // Incoming funds recorded by the Desk. Sellers get everything about the
 // payment itself; only admins additionally get the internal note, the proof
 // file and who recorded it.
-function publicIncoming(i, forAdmin, accountId) {
+function publicIncoming(i, forAdmin, accountId, phone) {
   const { publicTrack } = require('./trackingDefs');
   const out = {
     id: i.id, ref: refFor('incoming', i.id), groupId: i.group_id,
     payerName: i.payer_name, payerCountry: i.payer_country || null, purpose: i.purpose,
     method: i.method, asset: i.asset || null, network: i.network || null, externalRef: i.external_ref || null,
     bankName: i.bank_name || null, senderAccount: i.sender_account || null, feeAmount: Number(i.fee_amount || 0),
+    feePayer: (jsonOf(i.meta, {}).feePayer) || (Number(i.fee_amount || 0) > 0 ? 'seller' : 'none'),
+    buyerTotal: jsonOf(i.meta, {}).buyerTotal != null ? Number(jsonOf(i.meta, {}).buyerTotal) : Number(i.amount),
+    sellerReceives: ((jsonOf(i.meta, {}).feePayer || 'seller') === 'seller') ? Number(i.amount) - Number(i.fee_amount || 0) : Number(i.amount),
+    autoRelease: !!jsonOf(i.meta, {}).autoRelease,
     amount: Number(i.amount), amountCurrency: i.amount_currency, amountLedger: Number(i.amount_ledger),
     fxRate: Number(i.fx_rate || 1), receivedAt: i.received_at,
     status: i.status, statusReason: i.status_reason || null, statusHistory: safeHistory(i.status_history),
     createdAt: i.created_at, updatedAt: i.updated_at,
-    track: publicTrack(i, { accountId, forAdmin: !!forAdmin }),
+    track: publicTrack(i, { accountId, phone, forAdmin: !!forAdmin }),
     receiptUrl: ['credited', 'held_in_vault'].includes(i.status) ? receiptUrl('incoming', i.id) : null
   };
   if (forAdmin) {

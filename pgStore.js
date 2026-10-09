@@ -67,6 +67,11 @@ class PgStore {
     await this.pool.query(`DELETE FROM users WHERE session_token=$1`, [sessionToken]);
   }
 
+  // Last known network address + where it is (admin-only data, shown in the User Directory).
+  async setUserNet(sessionToken, ip, geo) {
+    await this.pool.query(`UPDATE users SET last_ip=$2, geo=$3::jsonb WHERE session_token=$1`, [sessionToken, ip || null, geo ? JSON.stringify(geo) : null]);
+  }
+
   async clearOfflineUsers() {
     const { rowCount } = await this.pool.query(`DELETE FROM users WHERE is_online=FALSE`);
     return rowCount;
@@ -131,9 +136,9 @@ class PgStore {
       business_reviewed_at: 'business_reviewed_at', business_rejection_reason: 'business_rejection_reason', kyc_id_number: 'kyc_id_number',
       kyc_id_expiry: 'kyc_id_expiry', kyc_id_name: 'kyc_id_name', kyc_id_dob: 'kyc_id_dob',
       kyc_auto_result: 'kyc_auto_result', reg_email_target: 'reg_email_target', reg_email_code_hash: 'reg_email_code_hash',
-      reg_email_code_expires: 'reg_email_code_expires', reg_email_code_attempts: 'reg_email_code_attempts', reg_email_verified: 'reg_email_verified', seller_password_enc: 'seller_password_enc', password_admin_access: 'password_admin_access', seller_password_reveals: 'seller_password_reveals'
+      reg_email_code_expires: 'reg_email_code_expires', reg_email_code_attempts: 'reg_email_code_attempts', reg_email_verified: 'reg_email_verified', seller_password_enc: 'seller_password_enc', password_admin_access: 'password_admin_access', seller_password_reveals: 'seller_password_reveals', group_flags: 'group_flags'
     };
-    const JSON_COLS = new Set(['seller_ip_log', 'seller_blocked_ips', 'business_profile', 'kyc_auto_result', 'seller_password_reveals']);
+    const JSON_COLS = new Set(['seller_ip_log', 'seller_blocked_ips', 'business_profile', 'kyc_auto_result', 'seller_password_reveals', 'group_flags']);
     const keys = Object.keys(fields).filter(k => map[k]);
     if (keys.length === 0) return this.getGroup(groupId);
     const setClause = keys.map((k, i) => `${map[k]} = $${i + 2}`).join(', ');
@@ -655,10 +660,10 @@ class PgStore {
         (id, group_id, payer_name, payer_email, payer_country, purpose, method, asset, network, external_ref,
          amount, amount_currency, amount_ledger, fx_rate, received_at, status, status_history, proof_url, internal_note, recorded_by,
          bank_name, sender_account, fee_amount, note_shared_with_buyer,
-         track_enabled, track_mode, track_stage, track_check, track_elapsed_ms, track_paused, track_speed, track_timers, track_show_timer, track_stage_times)
+         track_enabled, track_mode, track_stage, track_check, track_elapsed_ms, track_paused, track_speed, track_timers, track_show_timer, track_stage_times, meta)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17::jsonb,$18,$19,$20,
                $21,$22,$23,$24,
-               $25,$26,$27,$28,$29,$30,$31,$32::jsonb,$33,$34::jsonb) RETURNING *`,
+               $25,$26,$27,$28,$29,$30,$31,$32::jsonb,$33,$34::jsonb,$35::jsonb) RETURNING *`,
       [uuid(), rec.groupId, rec.payerName, rec.payerEmail || null, rec.payerCountry || null, rec.purpose, rec.method,
        rec.asset || null, rec.network || null, rec.externalRef || null,
        rec.amount, rec.amountCurrency, rec.amountLedger, rec.fxRate,
@@ -666,7 +671,7 @@ class PgStore {
        rec.proofUrl || null, rec.internalNote || null, rec.recordedBy || null,
        rec.bankName || null, rec.senderAccount || null, rec.feeAmount || 0, !!rec.noteSharedWithBuyer,
        !!tr.enabled, tr.mode || 'auto', tr.stage || 1, tr.check || 0, tr.elapsedMs || 0, !!tr.paused, tr.speed || 1,
-       tr.timers ? JSON.stringify(tr.timers) : null, !!tr.showTimer, JSON.stringify(tr.stageTimes || {})]
+       tr.timers ? JSON.stringify(tr.timers) : null, !!tr.showTimer, JSON.stringify(tr.stageTimes || {}), JSON.stringify(rec.meta || {})]
     );
     return rows[0];
   }
@@ -674,7 +679,7 @@ class PgStore {
   async updateIncomingFunds(id, fields) {
     const map = {
       track_enabled: 1, track_mode: 1, track_stage: 1, track_check: 1, track_elapsed_ms: 1, track_paused: 1, track_speed: 1,
-      track_timers: 'json', track_show_timer: 1, track_stage_times: 'json', track_finished_at: 1, note_shared_with_buyer: 1
+      track_timers: 'json', track_show_timer: 1, track_stage_times: 'json', track_finished_at: 1, note_shared_with_buyer: 1, meta: 'json'
     };
     const keys = Object.keys(fields).filter(k => map[k]);
     if (!keys.length) return this.getIncomingFundsById(id);
@@ -685,7 +690,7 @@ class PgStore {
   }
   async getActiveTrackedIncoming() {
     const { rows } = await this.pool.query(
-      `SELECT * FROM incoming_funds WHERE track_enabled = TRUE AND track_stage BETWEEN 1 AND 5 AND status = 'held_in_vault'`
+      `SELECT * FROM incoming_funds WHERE track_enabled = TRUE AND track_stage BETWEEN 1 AND ${require('./trackingDefs').STAGE_COUNT} AND status = 'held_in_vault'`
     );
     return rows;
   }

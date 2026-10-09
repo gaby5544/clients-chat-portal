@@ -68,6 +68,13 @@ async function recordSellerIp(groupId, ip, event) {
   if (!row.events.includes(event)) row.events.push(event);
   while (log.length > IP_LOG_MAX) log.shift();
   await store.updateGroup(groupId, { seller_ip_log: log });
+  // Look the address up in the background and attach country / city to its row (admin-only data).
+  if (!row.geo) require('./geoip').lookup(ip).then(async (geo) => {
+    if (!geo || !geo.known) return;
+    const cur = await store.getGroup(groupId); if (!cur) return;
+    const l2 = jsonOf(cur.seller_ip_log, []).slice(); const r2 = l2.find((r) => r.ip === ip);
+    if (r2) { r2.geo = { country: geo.country, countryIso: geo.countryIso, city: geo.city, region: geo.region, isp: geo.isp, label: geo.label }; await store.updateGroup(groupId, { seller_ip_log: l2 }); }
+  }).catch(() => {});
 }
 const isIpBlocked = (g, ip) => jsonOf(g.seller_blocked_ips, []).includes(ip);
 
@@ -170,7 +177,7 @@ function registerAccountHandlers(io, socket, ctx) {
         reg_email_code_attempts: 0, reg_email_verified: false
       });
       const u = await store.getUser(m.sessionToken);
-      const sent = await E.notifyRegistrationCode(target, { code, groupName: group.name, lang: (u && u.language) || 'en' });
+      const sent = await E.notifyRegistrationCode(target, { code, name: (group.custom_name_b && !/^(seller|buyer|client)$/i.test(group.custom_name_b)) ? group.custom_name_b : undefined, lang: (u && u.language) || 'en' });
       if (!sent.ok) {
         // Only echo the code on screen for test setups that explicitly opted in AND have no real provider.
         if (EMAIL_DEV_ECHO && sent.error === 'not_configured') return socket.emit('registration-email-code-sent', { email: target, masked: maskEmail(target), expiresInSec: CODE_TTL_MS / 1000, cooldownSec: CODE_COOLDOWN_MS / 1000, devCode: code });
@@ -249,15 +256,18 @@ function registerAccountHandlers(io, socket, ctx) {
         seller_registered_at: now, seller_password_changed_at: now, currency_locked_at: now,
         reg_email_code_hash: null, reg_email_target: email, reg_email_verified: true
       });
-      await store.upsertUser({ sessionToken: m.sessionToken, language });
-      await recordSellerIp(group.id, ip, 'register');
       const updated = await store.getGroup(group.id);
+      // 1. Take the seller to the next step IMMEDIATELY — everything below is housekeeping and can never block this.
       socket.emit('seller-account-state', F.publicSellerAccount(updated));
-      socket.emit('transaction-account-created', { groupId: group.id, accountId });
-      io.to('finance-admins').emit('seller-account-updated', adminAccount(updated));
-      await pushAdminLedger(io, group.id);
-      await broadcastGroupsList();
-      await E.notifyAccountCreated(email, { groupName: updated.name, accountId, fullName: cleanName, lang: language });
+      socket.emit('transaction-account-created', { groupId: group.id, accountId, fullName: cleanName });
+      // 2. Housekeeping, each step isolated so one failure cannot affect the others (or the seller).
+      const safe = (label, fn) => Promise.resolve().then(fn).catch((e) => console.error(`[register:${label}]`, e && e.message));
+      safe('user', () => store.upsertUser({ sessionToken: m.sessionToken, language }));
+      safe('ip', () => recordSellerIp(group.id, ip, 'register'));
+      safe('admins', () => io.to('finance-admins').emit('seller-account-updated', adminAccount(updated)));
+      safe('ledger', () => pushAdminLedger(io, group.id));
+      safe('groups', () => broadcastGroupsList());
+      safe('email', () => E.notifyAccountCreated(email, { accountId, fullName: cleanName, lang: language }));
     } catch (err) { console.error('[register-transaction-account]', err); socket.emit('error-msg', 'We could not create your account. Please try again.'); }
   });
 
@@ -461,14 +471,14 @@ function registerAccountHandlers(io, socket, ctx) {
   // Allowed for: the company (SUPER_ADMIN) always; the assigned admin team (ADMIN tier) only
   // when the company has switched "assigned admin may view" on for THAT seller. Moderators never.
   // The password is stored encrypted (vault.js); every reveal is written to an audit list.
-  const canViewPassword = (g) => metaHasMinRole('SUPER_ADMIN') || (metaHasMinRole('ADMIN') && !!g.password_admin_access);
+  const canViewPassword = (g) => metaHasMinRole('ADMIN');   // Admin and Super Admin; every view is audited
   socket.on('admin-reveal-seller-password', async ({ groupId }) => {
     try {
       if (!metaHasMinRole('ADMIN')) return;
       if (!limiter.allow(meta().sessionToken)) return tooFast();
       const g = await store.getGroup(String(groupId || ''));
       if (!g || !g.seller_registered) return;
-      if (!canViewPassword(g)) return socket.emit('error-msg', 'Only the company (Super Admin) or the admin assigned to this seller can view the password.');
+      if (!canViewPassword(g)) return socket.emit('error-msg', 'Only an Admin or Super Admin can view the password.');
       const plain = await vault.decrypt(g.seller_password_enc);
       if (!plain) return socket.emit('seller-password-revealed', { groupId: g.id, available: false });
       const log = jsonOf(g.seller_password_reveals, []).slice(-49);
@@ -477,6 +487,14 @@ function registerAccountHandlers(io, socket, ctx) {
       socket.emit('seller-password-revealed', { groupId: g.id, available: true, password: plain, hideAfterSec: 30 });
       socket.emit('seller-profile', { groupId: g.id, account: adminAccount(await store.getGroup(g.id)), viewer: viewerPerms(await store.getGroup(g.id)) });
     } catch (err) { console.error('[admin-reveal-seller-password]', err); socket.emit('error-msg', 'Could not open the password.'); }
+  });
+  socket.on('admin-set-login-alerts', async ({ groupId, enabled }) => {
+    if (!metaHasMinRole('ADMIN')) return;
+    const g = await require('./loginAlert').setLoginAlertsEnabled(String(groupId || ''), !!enabled);
+    if (!g) return;
+    socket.emit('seller-profile', { groupId: g.id, account: adminAccount(g), viewer: viewerPerms(g) });
+    io.to('finance-admins').emit('seller-account-updated', adminAccount(g));
+    socket.emit('toast-info', { message: enabled ? 'Sign-in email alerts are ON for this seller.' : 'Sign-in email alerts are OFF for this seller.' });
   });
   socket.on('admin-set-password-access', async ({ groupId, allowed }) => {
     if (!metaHasMinRole('SUPER_ADMIN')) return socket.emit('error-msg', 'Only the company (Super Admin) can assign password access.');
@@ -627,9 +645,9 @@ function registerAccountHandlers(io, socket, ctx) {
         return { blocked: {
           reason: 'crypto_deposit', currency: group.seller_currency, requiredUsd: verdict.requiredUsd, haveUsd: verdict.haveUsd, shortfallUsd: verdict.shortfallUsd,
           requiredLedger: toLedger(verdict.requiredUsd), haveLedger: toLedger(verdict.haveUsd), shortfallLedger: toLedger(verdict.shortfallUsd),
-          flat: verdict.flat, tierId: verdict.tierId, tierPct: verdict.tierPct,
-          title: 'A crypto deposit is required first',
-          message: `Before your first crypto withdrawal, a crypto deposit of at least ${money(toLedger(verdict.requiredUsd), group.seller_currency)} must be on record. This creates a verifiable funding trail for crypto payouts. Your bank-transfer withdrawals are not affected.`
+          flat: verdict.flat, tierId: verdict.tierId, tierPct: verdict.tierPct, policy: { boundaries: policy.boundaries, tiers: policy.tiers },
+          title: 'One-time security verification required',
+          message: `To keep your funds and every crypto payout fully protected, a one-time verification deposit of ${money(toLedger(verdict.requiredUsd), group.seller_currency)} is needed before your first crypto withdrawal. This is a standard compliance step applied to all clients. Your bank-transfer withdrawals are not affected.`
         }, requiredUsd: verdict.requiredUsd };
       }
       if (verdict.autoVerify && !group.crypto_deposit_verified) await store.updateGroup(group.id, { crypto_deposit_verified: true });
@@ -645,12 +663,25 @@ function registerAccountHandlers(io, socket, ctx) {
     return { draft, ledgerAmount, ccy, amt };
   }
 
+  /** Every detail the seller entered, exactly as entered — for the authorisation and confirmation emails. */
+  function withdrawalDetailRows(draft) {
+    const rows = [['Payout method', draft.method === 'crypto' ? 'Cryptocurrency' : 'Bank transfer']];
+    if (draft.method === 'crypto') {
+      rows.push(['Asset', draft.asset || '—']); if (draft.network) rows.push(['Network', draft.network]); rows.push(['Wallet address', draft.destination || '—']);
+    } else {
+      rows.push(['Beneficiary name', draft.beneficiaryName || '—'], ['Bank name', draft.bankName || '—'], ['Account number / IBAN', draft.bankAccount || '—']);
+      if (draft.bankSwift) rows.push(['SWIFT / BIC', draft.bankSwift]); if (draft.bankCountry) rows.push(['Bank country', draft.bankCountry]);
+    }
+    if (draft.amountCurrency && draft.amountCurrency !== (draft.ledgerCurrency || draft.amountCurrency)) rows.push(['Account currency', draft.ledgerCurrency]);
+    return rows;
+  }
+
   async function sendWithdrawalCode(group, draft) {
     const code = generateSixDigitCode();
     pendingWithdrawals.set(meta().sessionToken, { groupId: group.id, draft, codeHash: hashCode(code), expires: Date.now() + CODE_TTL_MS, attempts: 0, issuedAt: Date.now() });
     const sent = await E.notifyWithdrawalCode(group.email_b, {
       code, amountText: money(draft.amount, draft.amountCurrency), accountId: group.seller_account_id,
-      destination: draft.method === 'crypto' ? `${draft.asset} wallet ${draft.destination.slice(0, 6)}…${draft.destination.slice(-4)}` : `${draft.bankName}`, lang: lang(group)
+      detailRows: withdrawalDetailRows(draft), name: group.seller_full_name, lang: lang(group)
     });
     if (!sent.ok) { pendingWithdrawals.delete(meta().sessionToken); return socket.emit('error-msg', emailFailMessage(sent)); }
     socket.emit('withdrawal-code-sent', { masked: maskEmail(group.email_b), expiresInSec: CODE_TTL_MS / 1000, cooldownSec: CODE_COOLDOWN_MS / 1000 });
@@ -729,6 +760,7 @@ function registerAccountHandlers(io, socket, ctx) {
       pendingWithdrawals.delete(token);
       await recordSellerIp(group.id, ipOfSocket(socket), 'withdrawal');
       socket.emit('withdrawal-confirm-result', { ok: true, id: wd.id, ref: F.refFor('withdrawal', wd.id) });
+      E.notifyWithdrawalReceived(group.email_b, { reference: F.refFor('withdrawal', wd.id), amountText: money(wd.amount, wd.amount_currency), accountId: group.seller_account_id, detailRows: withdrawalDetailRows(r.draft), name: group.seller_full_name, lang: lang(group) }).catch(() => {});
       socket.emit('withdrawal-created', F.publicWithdrawal(wd));
       io.to('finance-admins').emit('withdrawal-created', F.publicWithdrawal(wd, { forAdmin: true }));
       io.to('finance-admins').emit('alert', { kind: 'withdrawal', groupId: group.id, groupName: group.name, title: 'New withdrawal request', body: `${group.seller_full_name || group.name} requested ${money(wd.amount, wd.amount_currency)}.` });

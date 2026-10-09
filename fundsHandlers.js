@@ -69,7 +69,7 @@ async function sellerSnapshot(groupId) {
     account: F.publicSellerAccount(g),
     deposits: deps.map(F.publicDeposit),
     withdrawals: wds.map((w) => F.publicWithdrawal(w)),
-    incoming: inc.map((i) => F.publicIncoming(i, false, g.seller_account_id))
+    incoming: inc.map((i) => F.publicIncoming(i, false, g.seller_account_id, g.seller_phone))
   };
 }
 
@@ -117,7 +117,7 @@ async function adminLedger(g) {
       account: F.publicSellerAccount(g, { forAdmin: true }),
       deposits: deps.map(F.publicDeposit),
       withdrawals: wds.map((w) => F.publicWithdrawal(w, { forAdmin: true })),
-      incoming: inc.map((i) => F.publicIncoming(i, true, g.seller_account_id))
+      incoming: inc.map((i) => F.publicIncoming(i, true, g.seller_account_id, g.seller_phone))
     },
     summary: summaryOf(g, counts)
   };
@@ -194,11 +194,15 @@ function parseIncoming(p, group) {
   if (!Number.isFinite(amount) || amount <= 0) return { error: 'Please enter a valid amount.' };
   if (amount > MAX_AMOUNT) return { error: 'That amount is above the maximum allowed for a single entry.' };
   const amountCurrency = F.CURRENCIES.has(p.amountCurrency) ? p.amountCurrency : group.seller_currency;
-  const feeAmount = F.round2(Number(p.feeAmount || 0));
-  if (!Number.isFinite(feeAmount) || feeAmount < 0) return { error: 'The fee must be zero or a positive amount.' };
-  if (feeAmount >= amount) return { error: 'The fee must be smaller than the amount received.' };
+  // Who bears the bank / processing charge. 'buyer' (default): the buyer pays it ON TOP, so the seller is credited
+  // the full amount. 'seller': it is deducted from the amount. 'none': no charge.
+  const feePayer = ['buyer', 'seller', 'none'].includes(p.feePayer) ? p.feePayer : 'buyer';
+  let feeAmount = F.round2(Number(p.feeAmount || 0));
+  if (!Number.isFinite(feeAmount) || feeAmount < 0) return { error: 'The charge must be zero or a positive amount.' };
+  if (feePayer === 'none') feeAmount = 0;
+  if (feePayer === 'seller' && feeAmount >= amount) return { error: 'The charge must be smaller than the amount received.' };
   const fxRate = F.fxRate(amountCurrency, group.seller_currency);
-  const amountLedger = F.convertCurrency(amount - feeAmount, amountCurrency, group.seller_currency); // net of fee
+  const amountLedger = F.convertCurrency(feePayer === 'seller' ? amount - feeAmount : amount, amountCurrency, group.seller_currency);
   if (amountLedger <= 0) return { error: 'That amount is too small once converted to the seller\'s currency.' };
   if (!['credit', 'hold', 'track'].includes(p.treatment)) return { error: 'Please choose how the funds should be handled.' };
 
@@ -226,14 +230,15 @@ function parseIncoming(p, group) {
       timers = T.splitTotal(tot);
     } else timers = T.defaultTimers();
     const mode = p.trackMode === 'manual' ? 'manual' : 'auto';
-    track = { enabled: true, mode, stage: 1, check: 0, elapsedMs: 0, paused: false, speed: 1, timers, showTimer: !!p.showTimerToSeller, stageTimes: { 1: new Date().toISOString() } };
+    track = { enabled: true, autoRelease: p.autoRelease === true, mode, stage: 1, check: 0, elapsedMs: 0, paused: false, speed: 1, timers, showTimer: !!p.showTimerToSeller, stageTimes: { 1: new Date().toISOString() } };
   }
   const internalNote = sanitizeText(p.internalNote, 1000) || null;
 
   return {
     value: {
       payerName, purpose, method: p.method, asset, network,
-      amount, amountCurrency, fxRate, feeAmount, amountLedger, treatment: p.treatment, receivedAt,
+      amount, amountCurrency, fxRate, feeAmount, feePayer, amountLedger, treatment: p.treatment, receivedAt,
+      meta: { feePayer, buyerTotal: feePayer === 'buyer' ? F.round2(amount + feeAmount) : amount, autoRelease: p.autoRelease === true },
       payerEmail: payerEmail || null, payerCountry: sanitizeText(p.payerCountry, 100) || null,
       externalRef: sanitizeText(p.externalRef, 200) || null,
       bankName: sanitizeText(p.bankName, 200) || null, senderAccount: sanitizeText(p.senderAccount, 100) || null,
@@ -241,6 +246,20 @@ function parseIncoming(p, group) {
       notifySeller: p.notifySeller !== false
     }
   };
+}
+
+/** Rows shown to the seller in the "funds received" email: reference, bank, and the charge with who pays it. */
+function incomingExtraDetails(v, rec) {
+  const rows = [];
+  if (v.externalRef) rows.push([v.method === 'crypto' ? 'Transaction hash' : 'Bank reference', v.externalRef]);
+  if (v.bankName) rows.push(['Sending bank', v.bankName]);
+  if (v.feeAmount > 0) {
+    rows.push(['Bank / processing charge', `${fmt(v.feeAmount, v.amountCurrency)} — ${v.feePayer === 'buyer' ? 'paid by the buyer (not deducted from your amount)' : 'deducted from the amount'}`]);
+    if (v.feePayer === 'buyer') rows.push(['Buyer paid in total', fmt(v.meta.buyerTotal, v.amountCurrency)]);
+  }
+  rows.push(['You receive', v.feePayer === 'seller' ? fmt(v.amount - v.feeAmount, v.amountCurrency) : fmt(v.amount, v.amountCurrency)]);
+  rows.push(['Payment reference', F.refFor('incoming', rec.id)]);
+  return rows;
 }
 
 function registerFundsHandlers(io, socket, ctx) {
@@ -295,7 +314,7 @@ function registerFundsHandlers(io, socket, ctx) {
         rec = await store.createIncomingFunds({
           groupId: group.id, payerName: v.payerName, payerEmail: v.payerEmail, payerCountry: v.payerCountry,
           purpose: v.purpose, method: v.method, asset: v.asset, network: v.network, externalRef: v.externalRef,
-          bankName: v.bankName, senderAccount: v.senderAccount, feeAmount: v.feeAmount, noteSharedWithBuyer: v.noteSharedWithBuyer,
+          bankName: v.bankName, senderAccount: v.senderAccount, feeAmount: v.feeAmount, meta: v.meta, noteSharedWithBuyer: v.noteSharedWithBuyer,
           amount: v.amount, amountCurrency: v.amountCurrency, amountLedger: L, fxRate: v.fxRate,
           receivedAt: v.receivedAt, status: credited ? 'credited' : 'held_in_vault',
           historyNote: credited ? 'Funds received and credited to your available balance'
@@ -321,7 +340,7 @@ function registerFundsHandlers(io, socket, ctx) {
       }
       if (v.notifySeller) {
         await alertSellerOffline(io, group, { title, body });
-        if (group.email_b) await notifyIncomingFunds(group.email_b, { groupName: group.name, amountText, payerName: v.payerName, purpose: v.purpose, status: rec.status, lang: group.seller_language });
+        if (group.email_b) await notifyIncomingFunds(group.email_b, { amountText, payerName: v.payerName, purpose: v.purpose, status: rec.status, lang: group.seller_language, accountId: group.seller_account_id, extraDetails: incomingExtraDetails(v, rec) });
       }
     } catch (err) {
       console.error('[admin-record-incoming-funds] error:', err);
@@ -379,7 +398,7 @@ function registerFundsHandlers(io, socket, ctx) {
       await alertSellerOffline(io, group, { title, body });
       if (group.email_b) {
         await notifyIncomingFunds(group.email_b, {
-          groupName: group.name, amountText, payerName: rec.payer_name, purpose: rec.purpose,
+          amountText, payerName: rec.payer_name, purpose: rec.purpose, accountId: group.seller_account_id,
           status: toStatus === 'credited' ? 'released' : 'reversed', reason: note, lang: group.seller_language
         });
       }
@@ -444,7 +463,7 @@ function registerFundsHandlers(io, socket, ctx) {
       io.to('finance-admins').emit('withdrawal-updated', F.publicWithdrawal(updated, { forAdmin: true }));
       if (['completed', 'declined'].includes(toStatus)) io.to('finance-admins').emit('withdrawal-resolved', F.publicWithdrawal(updated, { forAdmin: true }));
       await alertSellerOffline(io, group, { title, body });
-      if (group.email_b) await notifyWithdrawalStatus(group.email_b, { groupName: group.name, amount: wd.amount, currency: wd.amount_currency, status: toStatus, reason: updated.status_reason, lang: group.seller_language });
+      if (group.email_b) await notifyWithdrawalStatus(group.email_b, { amount: wd.amount, currency: wd.amount_currency, status: toStatus, reason: updated.status_reason, reference: pub.ref, accountId: group.seller_account_id, name: group.seller_full_name, lang: group.seller_language });
       if (ctx.broadcastGroupsList) await ctx.broadcastGroupsList();
     } catch (err) {
       console.error('[admin-advance-withdrawal] error:', err);

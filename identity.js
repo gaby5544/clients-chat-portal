@@ -26,4 +26,10 @@ async function tokenForUid(store, uid) {
   return null;
 }
 
-module.exports = { initIdentity, uidOf, tokenForUid };
+/** Keyed hash for signed links (login-alert confirmations). Same stable secret as the opaque user IDs. */
+function hmac(label, data) {
+  if (!secret) secret = crypto.randomBytes(32).toString('hex');
+  return crypto.createHmac('sha256', secret).update(label + '|' + data).digest('base64url');
+}
+
+module.exports = { initIdentity, uidOf, tokenForUid, hmac };

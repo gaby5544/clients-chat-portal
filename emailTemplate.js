@@ -22,6 +22,8 @@ const appUrl = () => (process.env.APP_URL || process.env.PUBLIC_URL || process.e
 const RTL = new Set(['ar', 'he', 'fa', 'ur']);
 const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const nl2br = (s) => esc(s).replace(/\n/g, '<br>');
+/** Names are HTML-escaped when stored; undo that so the template can escape exactly once. */
+const unesc = (s) => String(s == null ? '' : s).replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#0?39;/g, "'").replace(/&amp;/g, '&');
 
 // ---- Static wording (translated for non-English recipients) ---------------------------------------
 const STATIC = {
@@ -78,8 +80,8 @@ function collectStrings(parts) {
   add('subject', parts.subject); add('preheader', parts.preheader); add('eyebrow', parts.eyebrow); add('title', parts.title);
   (parts.paragraphs || []).forEach((p, i) => add('p' + i, p));
   add('badge', parts.badge && parts.badge.text); (parts.details || []).forEach((d, i) => add('d' + i, d[0]));
-  add('quote', parts.quote); if (typeof parts.notice === 'string') add('notice', parts.notice); if (parts.cta) add('cta', parts.cta.label);
-  add('greeting', parts.name ? `Dear ${parts.name},` : 'Dear Client,');
+  add('quote', parts.quote); if (typeof parts.notice === 'string') add('notice', parts.notice); if (parts.cta) add('cta', parts.cta.label); if (parts.cta2) add('cta2', parts.cta2.label);
+  add('greeting', parts.name ? `Dear ${unesc(parts.name)},` : 'Dear Client,');
   Object.entries(STATIC).forEach(([k, v]) => add('s_' + k, v));
   return S;
 }
@@ -118,6 +120,7 @@ function assemble(parts, T, lang) {
   if (parts.code) body.push(`<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:10px 0 26px;"><tr><td align="center" bgcolor="#0d0608" style="background:#0d0608;border:1px solid ${gold};border-radius:4px;padding:26px 16px;"><div style="font:700 36px ui-monospace,Menlo,Consolas,'Courier New',monospace;letter-spacing:12px;color:#f5d77a;padding-left:12px;" dir="ltr">${esc(parts.code)}</div><div style="margin-top:10px;font:600 11px ${SANS};letter-spacing:2px;text-transform:uppercase;color:#9ca3af;">${esc(tr('s_codeNote'))}</div></td></tr></table>`);
   if (parts.notice) body.push(`<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:0 0 24px;"><tr><td style="border-${rtl ? 'right' : 'left'}:3px solid ${gold};background:#1b1114;padding:16px 20px;font:13px/1.7 ${SANS};color:#d1d5db;text-align:${align};"><b style="color:#fffdfa;letter-spacing:1px;text-transform:uppercase;font-size:11px;">${esc(tr('s_security'))}</b><br>${esc(typeof parts.notice === 'string' ? tr('notice', parts.notice) : tr('s_neverShare'))}</td></tr></table>`);
   if (parts.cta && url) body.push(`<table role="presentation" cellspacing="0" cellpadding="0" style="margin:6px 0 26px;"><tr><td align="center" bgcolor="${gold}" style="background:${gold};border-radius:3px;"><a href="${esc(url)}" style="display:inline-block;padding:15px 38px;font:700 12px ${SANS};letter-spacing:2.5px;text-transform:uppercase;color:#140b0d;text-decoration:none;">${esc(tr('cta', parts.cta.label))}</a></td></tr></table>`);
+  if (parts.cta2 && parts.cta2.url) body.push(`<table role="presentation" cellspacing="0" cellpadding="0" style="margin:-10px 0 26px;"><tr><td align="center" style="border:1px solid ${gold};border-radius:3px;"><a href="${esc(parts.cta2.url)}" style="display:inline-block;padding:14px 36px;font:700 12px ${SANS};letter-spacing:2.5px;text-transform:uppercase;color:${gold};text-decoration:none;">${esc(tr('cta2', parts.cta2.label))}</a></td></tr></table>`);
   if (parts.dispute) body.push(`<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:0 0 24px;"><tr><td style="border:1px solid #3d3218;background:#120a0c;padding:16px 20px;font:13px/1.7 ${SANS};color:#d1d5db;text-align:${align};"><b style="color:${gold};">${esc(tr('s_disputeLead'))}</b> ${esc(tr('s_disputeText'))}<br><a href="mailto:${esc(complaints)}" style="color:${gold};font-weight:600;text-decoration:none;">${esc(complaints)}</a></td></tr></table>`);
   // signature (exact wording from the Vistra template)
   body.push(`<p style="margin:34px 0 0;font:600 16px/1.7 ${SERIF};color:#fffdfa;">${esc(tr('s_respectfully'))}<br><span style="font:400 15px ${SERIF};letter-spacing:.5px;color:${gold};display:inline-block;margin-top:4px;">Trading Support Coordinator</span><br><span style="font:600 16px ${SERIF};letter-spacing:1px;color:#ffffff;display:inline-block;margin-top:2px;">${COMPANY}</span><br><span style="font:600 10px ${SANS};letter-spacing:3px;text-transform:uppercase;color:#9ca3af;display:inline-block;margin-top:6px;">${SERVICE}</span></p>`);
@@ -153,6 +156,7 @@ function assemble(parts, T, lang) {
   if (parts.code) L.push(`>>> ${parts.code} <<<`, tr('s_codeNote'), '');
   if (parts.notice) L.push(`${tr('s_security')}: ${typeof parts.notice === 'string' ? tr('notice', parts.notice) : tr('s_neverShare')}`, '');
   if (parts.cta && url) L.push(`${tr('cta', parts.cta.label)}: ${url}`, '');
+  if (parts.cta2 && parts.cta2.url) L.push(`${tr('cta2', parts.cta2.label)}: ${parts.cta2.url}`, '');
   if (parts.dispute) L.push(`${tr('s_disputeLead')} ${tr('s_disputeText')} ${complaints}`, '');
   L.push(tr('s_respectfully'), 'Trading Support Coordinator', COMPANY, SERVICE, '', '-'.repeat(46),
     `${String(tr('s_supportTitle')).toUpperCase()}: ${support}`, tr('s_supportText') + (respTime ? ` ${tr('s_respTime')} ${respTime}.` : ''), '',
@@ -160,4 +164,4 @@ function assemble(parts, T, lang) {
   return { subject: tr('subject', parts.subject), html, text: L.join('\n') };
 }
 
-module.exports = { renderEmail, renderEmailSync, localizeList, BRAND, COMPANY, SERVICE, TAGLINE, ADDRESS, supportEmail, complaintsEmail, appUrl };
+module.exports = { unesc, renderEmail, renderEmailSync, localizeList, BRAND, COMPANY, SERVICE, TAGLINE, ADDRESS, supportEmail, complaintsEmail, appUrl };

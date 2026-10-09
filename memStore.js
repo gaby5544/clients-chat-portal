@@ -58,7 +58,8 @@ function makeDefaultGroup(id, name) {
     business_status: 'none', business_profile: null, business_submitted_at: null, business_reviewed_at: null, business_rejection_reason: null,
     kyc_id_number: null, kyc_id_expiry: null, kyc_id_name: null, kyc_id_dob: null, kyc_auto_result: null,
     reg_email_target: null, reg_email_code_hash: null, reg_email_code_expires: null, reg_email_code_attempts: 0, reg_email_verified: false,
-    seller_password_enc: null, password_admin_access: false, seller_password_reveals: []
+    seller_password_enc: null, password_admin_access: false, seller_password_reveals: [],
+    group_flags: {}
   };
 }
 
@@ -130,6 +131,11 @@ class MemStore {
 
   async deleteUser(sessionToken) {
     this.users.delete(sessionToken);
+  }
+
+  async setUserNet(sessionToken, ip, geo) {
+    const u = this.users.get(sessionToken);
+    if (u) { u.last_ip = ip || null; u.geo = geo || null; }
   }
 
   async clearOfflineUsers() {
@@ -602,7 +608,7 @@ class MemStore {
       track_elapsed_ms: (rec.track && rec.track.elapsedMs) || 0, track_paused: !!(rec.track && rec.track.paused),
       track_speed: (rec.track && rec.track.speed) || 1, track_timers: (rec.track && rec.track.timers) || null,
       track_show_timer: !!(rec.track && rec.track.showTimer), track_stage_times: (rec.track && rec.track.stageTimes) || {},
-      track_finished_at: null,
+      track_finished_at: null, meta: rec.meta || {},
       created_at: now, updated_at: now
     };
     this.incoming.set(record.id, record);
@@ -611,13 +617,13 @@ class MemStore {
   async updateIncomingFunds(id, fields) {
     const i = this.incoming.get(id);
     if (!i) return null;
-    const allowed = ['track_enabled', 'track_mode', 'track_stage', 'track_check', 'track_elapsed_ms', 'track_paused', 'track_speed', 'track_timers', 'track_show_timer', 'track_stage_times', 'track_finished_at', 'note_shared_with_buyer'];
+    const allowed = ['track_enabled', 'track_mode', 'track_stage', 'track_check', 'track_elapsed_ms', 'track_paused', 'track_speed', 'track_timers', 'track_show_timer', 'track_stage_times', 'track_finished_at', 'note_shared_with_buyer', 'meta'];
     for (const k of Object.keys(fields)) if (allowed.includes(k)) i[k] = fields[k];
     i.updated_at = nowIso();
     return i;
   }
   async getActiveTrackedIncoming() {
-    return Array.from(this.incoming.values()).filter(i => i.track_enabled && i.track_stage >= 1 && i.track_stage <= 5 && i.status === 'held_in_vault');
+    return Array.from(this.incoming.values()).filter(i => i.track_enabled && i.track_stage >= 1 && i.track_stage <= require('./trackingDefs').STAGE_COUNT && i.status === 'held_in_vault');
   }
   async getIncomingFundsForGroup(groupId) {
     return Array.from(this.incoming.values()).filter(i => i.group_id === groupId)

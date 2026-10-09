@@ -10,10 +10,12 @@ const { generateTransactionPdf, generateFundsReceiptPdf } = require('./pdfReceip
 const F = require('./finance');
 const { resolveAdminRole, hasMinRole } = require('./roles');
 const { getPublicKey } = require('./webpush');
-const { notifyPasswordResetCode, emailStatus } = require('./email');
+const { notifyPasswordResetCode, notifyRegistrationCode, emailStatus } = require('./email');
 const { translateText, translateMany, translationStatus } = require('./translator');
 const { TERMS_VERSION, TERMS_SECTIONS, TERMS_CHECKBOX_LABEL, COMPLAINTS_EMAIL, SUPPORT_EMAIL } = require('./terms');
 const { recordSellerIp, isIpBlocked } = require('./accountHandlers');
+const LA = require('./loginAlert');
+const Links = require('./links');
 const vault = require('./vault');
 const { v4: uuidv4 } = require('uuid');
 
@@ -164,7 +166,7 @@ function buildRouter() {
     }
     const group = await store.getGroup(rec.group_id);
     if (!group) return res.status(404).json({ error: 'Receipt not found' });
-    const record = kind === 'incoming' ? F.publicIncoming(rec, false, group.seller_account_id) : F.publicWithdrawal(rec);
+    const record = kind === 'incoming' ? F.publicIncoming(rec, false, group.seller_account_id, group.seller_phone) : F.publicWithdrawal(rec);
     generateFundsReceiptPdf(res, { kind, record, group });
   });
 
@@ -219,8 +221,20 @@ function buildRouter() {
   router.post('/api/auth/login', loginLimiter, async (req, res) => {
     const { email, password } = req.body || {};
     if (!isValidEmail(email) || typeof password !== 'string' || !password) return res.status(400).json(BAD_LOGIN);
-    const matches = await store.findGroupsBySellerEmail(email.trim());
-    if (!matches.length) return res.status(401).json(BAD_LOGIN);
+    const all = await store.findGroupsBySellerEmail(email.trim());
+    if (!all.length) {
+      // Not a seller — is it a buyer who created an account in the app?
+      const lower = email.trim().toLowerCase();
+      const buyers = (await store.getAllGroups()).filter((g) => g.email_a && g.email_a.toLowerCase() === lower && Links.flagsOf(g).buyerPwHash && verifyPassword(password, Links.flagsOf(g).buyerPwHash));
+      if (!buyers.length) return res.status(401).json(BAD_LOGIN);
+      const open = buyers.filter((g) => !Links.flagsOf(g).buyerLinkRevoked);
+      if (!open.length) return res.status(410).json({ error: `This link has expired. Please contact us at ${SUPPORT_EMAIL}.`, code: 'link_expired' });
+      const g = open.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))[0];
+      return res.json({ success: true, ok: true, role: 'BUYER', groupId: g.id, sessionToken: require('crypto').randomUUID() });
+    }
+    // Accounts whose seller link was expired by the Desk (user deleted) can no longer sign in.
+    const matches = all.filter((g) => !Links.flagsOf(g).sellerLinkRevoked);
+    if (!matches.length) return res.status(410).json({ error: `This link has expired. Please contact us at ${SUPPORT_EMAIL}.`, code: 'link_expired' });
     const ip = clientIpFrom(req.headers, req.socket && req.socket.remoteAddress);
     const now = new Date();
     const open = matches.filter((g) => !(g.seller_locked_until && new Date(g.seller_locked_until) > now));
@@ -239,7 +253,7 @@ function buildRouter() {
     const allowed = valid.filter((g) => !isIpBlocked(g, ip));
     if (!allowed.length) return res.status(403).json({ error: `Access from this network location has been disabled for this account. Please contact ${COMPLAINTS_EMAIL}.`, code: 'ip_blocked' });
     const sessionToken = uuidv4();
-    for (const g of allowed) { await store.updateGroup(g.id, { seller_failed_logins: 0, seller_locked_until: null }); await recordSellerIp(g.id, ip, 'login'); }
+    for (const g of allowed) { await store.updateGroup(g.id, { seller_failed_logins: 0, seller_locked_until: null }); await recordSellerIp(g.id, ip, 'login'); LA.sendLoginAlert(g, ip, { ua: req.headers['user-agent'], source: 'password', baseUrl: (req.headers && req.headers.host) ? `${req.protocol || 'https'}://${req.headers.host}` : undefined }).catch(() => {}); }
     const shape = (g) => ({ groupId: g.id, groupName: g.name, accountId: g.seller_account_id || null, language: g.seller_language || 'en', disabled: !!g.seller_disabled });
     // A disabled account can still sign in, so the seller sees WHY it is disabled and how to complain.
     if (allowed.length === 1) {
@@ -247,6 +261,80 @@ function buildRouter() {
       return res.json({ success: true, groupId: g.id, sessionToken, groupName: g.name, language: g.seller_language || 'en', disabled: !!g.seller_disabled, complaintsEmail: COMPLAINTS_EMAIL });
     }
     res.json({ success: true, multiple: true, sessionToken, accounts: allowed.map(shape), complaintsEmail: COMPLAINTS_EMAIL });
+  });
+
+  // ---- App "Create account": find the transaction the email belongs to, verify it, set a password (buyers) ----
+  const findParty = async (email, role) => {
+    const lower = String(email || '').trim().toLowerCase(); const field = role === 'BUYER' ? 'email_a' : 'email_b';
+    const hits = (await store.getAllGroups()).filter((g) => g[field] && g[field].toLowerCase() === lower);
+    return hits.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+  };
+  const NO_DEAL = `We could not find a transaction for this email address. Please use the exact email your Desk Officer registered, open your invitation link, or contact ${SUPPORT_EMAIL}.`;
+  router.post('/api/app/lookup', loginLimiter, async (req, res) => {
+    const { email, role } = req.body || {};
+    if (!isValidEmail(email) || !['BUYER', 'SELLER'].includes(role)) return res.status(400).json({ error: 'Enter a valid email address.' });
+    const hits = await findParty(email, role);
+    if (!hits.length) return res.status(404).json({ error: NO_DEAL });
+    const live = hits.filter((g) => !Links.flagsOf(g)[role === 'BUYER' ? 'buyerLinkRevoked' : 'sellerLinkRevoked']);
+    if (!live.length) return res.status(410).json({ error: `This link has expired. Please contact us at ${SUPPORT_EMAIL}.`, code: 'link_expired' });
+    const g = live[0];
+    const exists = role === 'BUYER' ? !!Links.flagsOf(g).buyerPwHash : !!g.seller_registered;
+    res.json({ ok: true, groupId: g.id, exists });
+  });
+  router.post('/api/buyer/request-code', loginLimiter, async (req, res) => {
+    const { email } = req.body || {};
+    if (!isValidEmail(email)) return res.status(400).json({ error: 'Enter a valid email address.' });
+    const hits = (await findParty(email, 'BUYER')).filter((g) => !Links.flagsOf(g).buyerLinkRevoked);
+    if (!hits.length) return res.status(404).json({ error: NO_DEAL });
+    const code = generateSixDigitCode();
+    await store.setSetting('bcode:' + email.trim().toLowerCase(), JSON.stringify({ hash: hashCode(code), exp: Date.now() + 10 * 60 * 1000, tries: 0 }));
+    const nm = hits[0].custom_name_a && !/^(buyer|seller|client)$/i.test(hits[0].custom_name_a) ? hits[0].custom_name_a : undefined;
+    const r = await notifyRegistrationCode(email.trim(), { code, name: nm });
+    if (r && r.ok === false) return res.status(502).json(emailFailBody(r));
+    res.json({ ok: true });
+  });
+  router.post('/api/buyer/register', loginLimiter, async (req, res) => {
+    const { email, code, password } = req.body || {};
+    if (!isValidEmail(email) || typeof code !== 'string' || typeof password !== 'string') return res.status(400).json({ error: 'Please complete every field.' });
+    if (!isStrongEnoughPassword(password)) return res.status(400).json({ error: 'Choose a stronger password: at least 8 characters with letters and numbers.' });
+    const key = 'bcode:' + email.trim().toLowerCase();
+    let rec = null; try { rec = JSON.parse(await store.getSetting(key, 'null')); } catch (e) { rec = null; }
+    if (!rec || Date.now() > rec.exp) return res.status(400).json({ error: 'That code has expired. Please request a new one.' });
+    if (rec.tries >= 5) return res.status(429).json({ error: 'Too many attempts. Please request a new code.' });
+    if (hashCode(String(code).trim()) !== rec.hash) { rec.tries += 1; await store.setSetting(key, JSON.stringify(rec)); return res.status(400).json({ error: 'That code is not correct.' }); }
+    const hits = (await findParty(email, 'BUYER')).filter((g) => !Links.flagsOf(g).buyerLinkRevoked);
+    if (!hits.length) return res.status(404).json({ error: NO_DEAL });
+    for (const g of hits) await store.updateGroup(g.id, { group_flags: { ...Links.flagsOf(g), buyerPwHash: hashPassword(password), buyerAccountAt: new Date().toISOString() } });
+    await store.setSetting(key, 'null');
+    res.json({ ok: true, groupId: hits[0].id, sessionToken: require('crypto').randomUUID() });
+  });
+
+  // Company contact details for the sign-in screen and the "link expired" page.
+  router.get('/api/contact', (req, res) => res.json({ support: SUPPORT_EMAIL, complaints: COMPLAINTS_EMAIL }));
+  router.get('/install', (req, res) => res.set('Cache-Control', 'no-cache').sendFile(path.join(__dirname, 'public', 'install.html')));
+
+  // ---- "Was this you?" links from the new-sign-in email ----
+  const secPage = (title, msg, ok) => `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>${title}</title></head><body style="margin:0;background:#050203;color:#e5e7eb;font-family:Helvetica,Arial,sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:20px"><div style="max-width:480px;background:#140b0d;border:1px solid #3d3218;border-top:3px solid ${ok ? '#34d399' : '#d4af37'};border-radius:6px;padding:34px 28px;text-align:center"><div style="font:400 22px Georgia,serif;letter-spacing:6px;color:#fff;text-transform:uppercase;margin-bottom:18px">Vistra</div><h1 style="font:400 24px Georgia,serif;color:#fffdfa;margin:0 0 12px">${title}</h1><p style="line-height:1.75;font-size:15px;color:#d1d5db;margin:0">${msg}</p><p style="font-size:12px;color:#6b7280;margin-top:22px">Support: ${SUPPORT_EMAIL}</p></div></body></html>`;
+  router.get('/security/login/:token/:decision', async (req, res) => {
+    res.set('Cache-Control', 'no-store').type('html');
+    const d = LA.readToken(req.params.token);
+    const g = d && await store.getGroup(d.g);
+    if (!g) return res.status(410).send(secPage('Link no longer valid', 'This security link has expired or has already been used. If you are concerned about your account, please contact Support.', false));
+    const flags = LA.flagsOf(g); const stamp = new Date().toISOString();
+    if (req.params.decision === 'yes') {
+      const trusted = Array.from(new Set([...(flags.trustedIps || []), d.i])).slice(-25);
+      await store.updateGroup(g.id, { group_flags: { ...flags, trustedIps: trusted } });
+      return res.send(secPage('Thank you — confirmed', 'We have noted that this sign-in was you. No further action is needed and your account remains fully secure.', true));
+    }
+    if (req.params.decision === 'no') {
+      const cur = typeof g.seller_blocked_ips === 'string' ? JSON.parse(g.seller_blocked_ips || '[]') : (g.seller_blocked_ips || []);
+      const blocked = Array.from(new Set([...cur, d.i]));
+      const reports = [...(flags.securityReports || []), { at: stamp, ip: d.i, decision: 'not-me' }].slice(-20);
+      await store.updateGroup(g.id, { seller_blocked_ips: blocked, seller_locked_until: new Date(Date.now() + 24 * 3600 * 1000).toISOString(), group_flags: { ...flags, securityReports: reports } });
+      if (g.email_b) { const code = generateSixDigitCode(); await store.createPasswordReset({ groupId: g.id, codeHash: hashCode(code), expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString() }).catch(() => {}); notifyPasswordResetCode(g.email_b, { code, lang: g.seller_language }).catch(() => {}); }
+      return res.send(secPage('Your account has been secured', 'Thank you for letting us know. We have blocked that network address and paused sign-in for 24 hours. We have also emailed you a code so you can choose a new password. Our team has been alerted and will review your account.', false));
+    }
+    res.status(404).send(secPage('Not found', 'This link is not valid.', false));
   });
 
   function emailFailBody(r) {

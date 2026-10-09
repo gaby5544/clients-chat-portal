@@ -37,11 +37,15 @@ function stageTimesWith(rec, stage) {
 async function pushTrackUpdate(io, rec, group) {
   const g = group || await store.getGroup(rec.group_id);
   if (!g) return;
-  io.to(`seller:${g.id}`).emit('incoming-track-update', { groupId: g.id, id: rec.id, status: rec.status, track: T.publicTrack(rec, { accountId: g.seller_account_id }) });
-  io.to('finance-admins').emit('incoming-track-update-admin', { groupId: g.id, id: rec.id, status: rec.status, track: T.publicTrack(rec, { accountId: g.seller_account_id, forAdmin: true }) });
+  io.to(`seller:${g.id}`).emit('incoming-track-update', { groupId: g.id, id: rec.id, status: rec.status, track: T.publicTrack(rec, { accountId: g.seller_account_id, phone: g.seller_phone }) });
+  io.to('finance-admins').emit('incoming-track-update-admin', { groupId: g.id, id: rec.id, status: rec.status, track: T.publicTrack(rec, { accountId: g.seller_account_id, phone: g.seller_phone, forAdmin: true }) });
 }
 
-/** Release the vault funds once the last stage has passed. */
+/**
+ * All verification stages are done. By default the funds STAY in the seller's vault and wait for the Desk to
+ * release them manually to the main account ("Release from vault"). Only payments recorded with automatic
+ * release are credited here.
+ */
 async function finishTracking(io, rec) {
   if (finishing.has(rec.id)) return;
   finishing.add(rec.id);
@@ -49,9 +53,25 @@ async function finishTracking(io, rec) {
     const group = await store.getGroup(rec.group_id);
     if (!group) return;
     const L = Number(rec.amount_ledger);
+    const meta = (rec.meta && typeof rec.meta === 'object') ? rec.meta : (typeof rec.meta === 'string' ? (() => { try { return JSON.parse(rec.meta); } catch (e) { return {}; } })() : {});
+    const amountText = rec.amount_currency === group.seller_currency ? fmt(rec.amount, rec.amount_currency) : `${fmt(rec.amount, rec.amount_currency)} (≈ ${fmt(L, group.seller_currency)})`;
+    const fh = funds();
+
+    if (!meta.autoRelease) {
+      await store.updateIncomingFunds(rec.id, { track_stage: T.STAGE_COUNT + 1, track_check: 0, track_elapsed_ms: 0, track_finished_at: nowIso(), track_stage_times: stageTimesWith(rec, T.STAGE_COUNT) });
+      const fresh = await store.getIncomingFundsById(rec.id);
+      await pushTrackUpdate(io, fresh);
+      const title = 'Verification complete — funds secured';
+      const body = `${amountText} from ${rec.payer_name} has passed every verification stage and is secured in your vault. It will be released to your main account by the Desk.`;
+      await fh.pushSellerState(io, group.id, { kind: 'incoming', title, body, id: rec.id });
+      await fh.alertSellerOffline(io, group, { title, body });
+      io.to('finance-admins').emit('toast-info', { message: `${F.refFor('incoming', rec.id)} finished verification — ready for you to release from the vault.` });
+      if (group.email_b) await notifyIncomingFunds(group.email_b, { amountText, payerName: rec.payer_name, purpose: rec.purpose, status: 'awaiting_release', accountId: group.seller_account_id });
+      return;
+    }
+
     const moved = await store.adjustBalances(group.id, { held: -L, available: L });
     if (!moved) {
-      // The vault no longer covers it (e.g. reversed elsewhere) — stop the tracker at the last stage and flag it.
       await store.updateIncomingFunds(rec.id, { track_paused: true });
       io.to('finance-admins').emit('error-msg', `Tracker for ${F.refFor('incoming', rec.id)} could not release funds: the seller's vault balance does not cover it. It has been paused.`);
       return;
@@ -59,14 +79,11 @@ async function finishTracking(io, rec) {
     const updated = await store.advanceIncomingFunds(rec.id, { status: 'credited', reason: 'Funds credited to the seller', by: null, expectedStatus: 'held_in_vault' });
     if (!updated) { await store.adjustBalances(group.id, { held: L, available: -L }); return; }
     await store.updateIncomingFunds(rec.id, { track_stage: T.STAGE_COUNT + 1, track_check: 0, track_elapsed_ms: 0, track_finished_at: nowIso(), track_stage_times: stageTimesWith(rec, T.STAGE_COUNT) });
-
-    const amountText = rec.amount_currency === group.seller_currency ? fmt(rec.amount, rec.amount_currency) : `${fmt(rec.amount, rec.amount_currency)} (≈ ${fmt(L, group.seller_currency)})`;
     const title = 'Funds credited to your account';
     const body = `${amountText} from ${rec.payer_name} is now available — Account ${group.seller_account_id || ''}`.trim();
-    const fh = funds();
     await fh.pushSellerState(io, group.id, { kind: 'incoming', title, body, id: rec.id });
     await fh.alertSellerOffline(io, group, { title, body });
-    if (group.email_b) await notifyIncomingFunds(group.email_b, { groupName: group.name, amountText, payerName: rec.payer_name, purpose: rec.purpose, status: 'released' });
+    if (group.email_b) await notifyIncomingFunds(group.email_b, { amountText, payerName: rec.payer_name, purpose: rec.purpose, status: 'released', accountId: group.seller_account_id });
   } catch (err) {
     console.error('[tracking] finish error:', err);
   } finally {
