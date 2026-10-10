@@ -7,8 +7,9 @@ const crypto = require('crypto');
 const { store } = require('./db');
 const {
   sanitizeText, escapeHtml, isValidEmail, hashPassword, isStrongEnoughPassword, generateSixDigitCode, hashCode,
-  RateLimiter, normalizePhone, clientIpFrom, maskEmail
+  RateLimiter, normalizePhone, clientIpFrom, maskEmail, verifyPassword
 } = require('./security');
+const Links = require('./links');
 const F = require('./finance');
 const C = require('./compliance');
 const { TERMS_VERSION, TERMS_SECTIONS, TERMS_CHECKBOX_LABEL, COMPLAINTS_EMAIL } = require('./terms');
@@ -488,6 +489,106 @@ function registerAccountHandlers(io, socket, ctx) {
       socket.emit('seller-profile', { groupId: g.id, account: adminAccount(await store.getGroup(g.id)), viewer: viewerPerms(await store.getGroup(g.id)) });
     } catch (err) { console.error('[admin-reveal-seller-password]', err); socket.emit('error-msg', 'Could not open the password.'); }
   });
+  // ------------------------------------------------------------------
+  // Admin: add a seller manually (no self-registration). The seller signs in with their email, uses "Forgot password"
+  // to receive a code and choose their own password, then completes KYC. Their transaction room starts LOCKED.
+  // ------------------------------------------------------------------
+  socket.on('admin-add-seller', async (p) => {
+    try {
+      if (!metaHasMinRole('ADMIN')) return socket.emit('error-msg', 'Only an Admin can add a seller.');
+      p = p || {};
+      const name = sanitizeText(p.fullName, 200);
+      if (name.length < 3 || !/\s/.test(name)) return socket.emit('error-msg', 'Enter the seller\'s full name (first and last name).');
+      if (!isValidEmail(p.email)) return socket.emit('error-msg', 'Enter a valid email address for the seller.');
+      const email = p.email.trim().toLowerCase();
+      if ((await store.findGroupsBySellerEmail(email)).length) return socket.emit('error-msg', 'A seller account already exists for that email address.');
+      const country = QC.findCountry(p.country); if (!country) return socket.emit('error-msg', 'Choose the seller\'s country.');
+      if (!F.CURRENCIES.has(p.currency)) return socket.emit('error-msg', 'Choose the account currency.');
+      let phone = null; if (p.phoneNumber) { phone = normalizePhone(p.phoneDial || country.dial, p.phoneNumber); if (!phone) return socket.emit('error-msg', 'That phone number does not look valid — include the country code or leave it empty.'); }
+      const language = QL.isSupported(p.language) ? p.language : 'en';
+      const id = `group-${Date.now()}`;
+      await store.createGroupIfMissing(id, escapeHtml(`${name} — Account`));
+      const accountId = await generateAccountId(); const now = new Date().toISOString();
+      await store.updateGroup(id, {
+        custom_name_b: escapeHtml(name), email_b: email, seller_registered: true, seller_full_name: escapeHtml(name), seller_currency: p.currency,
+        seller_country: country.name, seller_country_iso: country.iso, seller_phone: phone, seller_account_id: accountId, seller_account_type: 'standard',
+        seller_language: language, seller_registered_at: now, seller_email_locked: true, seller_email_verified_at: now, currency_locked_at: now,
+        reg_email_target: email, reg_email_verified: true,
+        group_flags: { roomLocked: p.lockRoom !== false, manualSeller: true, addedAt: now }
+      });
+      const created = await store.getGroup(id);
+      socket.emit('admin-seller-added', { groupId: id, accountId, email, name });
+      socket.emit('toast-info', { message: `Seller added — Account ID ${accountId}. A welcome email with sign-in steps was sent to ${email}.` });
+      io.to('finance-admins').emit('seller-account-updated', adminAccount(created));
+      await broadcastGroupsList();
+      E.notifyManualAccount(email, { accountId, fullName: name, currency: p.currency, country: country.name, lang: language, baseUrl: `${(socket.handshake.headers['x-forwarded-proto'] || 'https')}://${socket.handshake.headers.host}` }).catch(() => {});
+    } catch (err) { console.error('[admin-add-seller]', err); socket.emit('error-msg', 'We could not add the seller. Please try again.'); }
+  });
+
+  socket.on('admin-set-room-locked', async ({ groupId, locked }) => {
+    if (!metaHasMinRole('ADMIN')) return;
+    const g = await store.getGroup(String(groupId || '')); if (!g) return;
+    await store.updateGroup(g.id, { group_flags: { ...Links.flagsOf(g), roomLocked: !!locked } });
+    io.to(`seller:${g.id}`).emit('room-lock-state', { locked: !!locked });
+    io.to(g.id).emit('room-lock-state', { locked: !!locked });
+    const fresh = await store.getGroup(g.id);
+    io.to('finance-admins').emit('seller-account-updated', adminAccount(fresh));
+    socket.emit('seller-profile', { groupId: g.id, account: adminAccount(fresh), viewer: viewerPerms(fresh) });
+    socket.emit('toast-info', { message: locked ? 'Transaction room LOCKED — the seller sees "locked" until you unlock it.' : 'Transaction room UNLOCKED.' });
+  });
+
+  // Ban = disable + permanently expire the seller's link and sign-in. Reactivate undoes all of it.
+  socket.on('admin-set-seller-banned', async ({ groupId, banned, reason }) => {
+    try {
+      if (!metaHasMinRole('ADMIN')) return;
+      const g = await store.getGroup(String(groupId || '')); if (!g || !g.seller_registered) return socket.emit('error-msg', 'That seller account was not found.');
+      const on = !!banned, note = sanitizeText(reason, 300);
+      await store.updateGroup(g.id, on ? { seller_disabled: true, seller_disabled_reason: note || 'Account closed', seller_disabled_at: new Date().toISOString() } : { seller_disabled: false, seller_disabled_reason: null, seller_disabled_at: null });
+      await Links.setRevoked(g.id, 'B', on);
+      const g2 = await store.getGroup(g.id);
+      await store.updateGroup(g.id, { group_flags: { ...Links.flagsOf(g2), banned: on, bannedAt: on ? new Date().toISOString() : null } });
+      if (on) { io.to(`seller:${g.id}`).emit('link-expired', { reason: 'revoked' }); const room = io.sockets.adapter.rooms.get(`seller:${g.id}`); for (const sid of room ? Array.from(room) : []) { const s = io.sockets.sockets.get(sid); if (s) s.disconnect(true); } }
+      const fresh = await store.getGroup(g.id);
+      io.to('finance-admins').emit('seller-account-updated', adminAccount(fresh));
+      socket.emit('seller-profile', { groupId: g.id, account: adminAccount(fresh), viewer: viewerPerms(fresh) });
+      socket.emit('toast-info', { message: on ? 'Seller banned — account closed and link expired.' : 'Seller reactivated — account and link restored.' });
+      if (g.email_b && on) E.notifyAccountAccess(g.email_b, { accountId: g.seller_account_id, disabled: true, reason: note || 'Account closed' }).catch(() => {});
+      if (g.email_b && !on) E.notifyAccountAccess(g.email_b, { accountId: g.seller_account_id, disabled: false }).catch(() => {});
+    } catch (err) { console.error('[ban]', err); socket.emit('error-msg', 'Could not update that account.'); }
+  });
+
+  socket.on('admin-list-sellers', async () => {
+    if (!metaHasMinRole('ADMIN')) return;
+    const all = (await store.getAllGroups()).filter((g) => g.seller_registered);
+    const rows = all.map((g) => { const a = adminAccount(g); const ips = jsonOf(g.seller_ip_log, []).slice().sort((x, y) => new Date(y.lastSeen) - new Date(x.lastSeen)); const f = Links.flagsOf(g);
+      return { ...a, manual: !!f.manualSeller, roomLocked: !!f.roomLocked, banned: !!f.banned, lastLoginAt: ips[0] ? ips[0].lastSeen : null, lastIp: ips[0] ? ips[0].ip : null, lastGeo: ips[0] && ips[0].geo ? ips[0].geo.label : null }; });
+    rows.sort((x, y) => new Date(y.registeredAt || 0) - new Date(x.registeredAt || 0));
+    socket.emit('sellers-list', rows);
+  });
+
+  // ------------------------------------------------------------------
+  // Seller: change own password, and see own recent sign-ins
+  // ------------------------------------------------------------------
+  socket.on('change-my-password', async (p) => {
+    try {
+      p = p || {}; const m = meta(); const group = await requireSellerOwnGroup(p.groupId); if (!group) return;
+      if (!limiter.allow(m.sessionToken + ':pw')) return tooFast();
+      if (group.seller_password_hash && !verifyPassword(String(p.currentPassword || ''), group.seller_password_hash)) return socket.emit('password-change-result', { ok: false, error: 'Your current password is not correct.' });
+      if (!isStrongEnoughPassword(p.newPassword)) return socket.emit('password-change-result', { ok: false, error: 'Choose a password of at least 8 characters.' });
+      if (p.currentPassword && p.currentPassword === p.newPassword) return socket.emit('password-change-result', { ok: false, error: 'Your new password must be different from the current one.' });
+      await store.updateGroup(group.id, { seller_password_hash: hashPassword(p.newPassword), seller_password_enc: await vault.encrypt(p.newPassword), seller_password_changed_at: new Date().toISOString(), seller_failed_logins: 0, seller_locked_until: null });
+      socket.emit('password-change-result', { ok: true });
+      io.to('finance-admins').emit('seller-account-updated', adminAccount(await store.getGroup(group.id)));
+      if (group.email_b) E.notifyPasswordChanged(group.email_b, { accountId: group.seller_account_id, name: group.seller_full_name, lang: group.seller_language }).catch(() => {});
+    } catch (err) { console.error('[change-my-password]', err); socket.emit('password-change-result', { ok: false, error: 'We could not change your password. Please try again.' }); }
+  });
+  socket.on('get-my-security', async ({ groupId }) => {
+    const group = await requireSellerOwnGroup(groupId); if (!group) return;
+    const mask = (ip) => String(ip || '').includes(':') ? String(ip).split(':').slice(0, 3).join(':') + ':…' : String(ip || '').split('.').slice(0, 3).join('.') + '.•••';
+    const ips = jsonOf(group.seller_ip_log, []).slice().sort((x, y) => new Date(y.lastSeen) - new Date(x.lastSeen)).slice(0, 8).map((r) => ({ at: r.lastSeen, first: r.firstSeen, count: r.count, where: r.geo && r.geo.label ? r.geo.label : 'Location unavailable', iso: r.geo ? r.geo.countryIso : null, ip: mask(r.ip) }));
+    socket.emit('my-security', { passwordChangedAt: group.seller_password_changed_at || null, alerts: !Links.flagsOf(group).loginAlertsDisabled, recent: ips, kycStatus: group.kyc_status });
+  });
+
   socket.on('admin-set-login-alerts', async ({ groupId, enabled }) => {
     if (!metaHasMinRole('ADMIN')) return;
     const g = await require('./loginAlert').setLoginAlertsEnabled(String(groupId || ''), !!enabled);

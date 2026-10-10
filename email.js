@@ -147,6 +147,23 @@ function notifyWithdrawalReceived(toEmail, { reference, amountText, accountId, d
     notice: `If any detail above is incorrect, or you did not make this request, contact Support at ${SUPPORT_EMAIL} straight away so we can stop it.`, cta: { label: 'Track your withdrawal' }
   }, lang);
 }
+function notifyManualAccount(toEmail, { accountId, fullName, currency, country, lang, baseUrl }) {
+  const url = baseUrl || TPL.appUrl() || '';
+  return sendTemplated(toEmail, {
+    subject: 'Vistra | Your Transaction Account has been created', preheader: 'Choose your password to sign in for the first time.',
+    eyebrow: 'Welcome to Vistra', title: 'Your Transaction Account is ready', name: fullName, badge: { text: 'Account created', tone: 'success' },
+    paragraphs: ['Our team has opened a Transaction Account for you, so there is no form to fill in.', 'To sign in for the first time: open the app or website, choose Sign in, tap “Forgot your password?”, and enter this email address. We will send you a 6-digit code — enter it and choose your own password.', 'After signing in you will complete a short identity verification (KYC). Once our team has verified you, your account is fully active and any payment you receive appears on your dashboard.'],
+    details: [['Account holder', clean(fullName)], ['Account ID', String(accountId)], ['Account currency', currency], ['Country', country]],
+    notice: `Never share your password or any code with anyone. Our team will never ask for them. Need help? Contact ${SUPPORT_EMAIL}.`, cta: { label: 'Sign in', url: url ? url + '/?forgot=1' : undefined }
+  }, lang);
+}
+function notifyPasswordChanged(toEmail, { accountId, name, lang }) {
+  return sendTemplated(toEmail, {
+    subject: 'Vistra | Your password was changed', preheader: 'Your account password has just been changed.', eyebrow: 'Account Security', title: 'Your password was changed', name,
+    badge: { text: 'Security notice', tone: 'warning' }, paragraphs: ['This is a confirmation that the password of your Transaction Account has just been changed.', `If this was you, no action is needed. If it was NOT you, contact Support at ${SUPPORT_EMAIL} immediately so we can secure your account.`],
+    details: [...acct(accountId), ['Changed on', new Date().toLocaleString('en-US', { timeZone: 'America/New_York', dateStyle: 'full', timeStyle: 'short' }) + ' (New York time)']]
+  }, lang);
+}
 function notifyLoginAlert(toEmail, { name, accountId, lang, time, ip, geo, device, source, confirmUrl, denyUrl, appBase }) {
   const when = new Date(time || Date.now());
   const ny = when.toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' });
@@ -252,5 +269,5 @@ module.exports = {
   sendEmail,
   notifyOfflineMessage, notifyTransactionSubmitted, notifyPasswordResetCode, notifyKycStatus, notifyDepositStatus, notifyWithdrawalStatus, notifyIncomingFunds,
   notifyRegistrationCode, notifyWithdrawalCode, notifyAccountAccess, notifyAccountCreated, notifyBusinessStatus, notifyMessageReminder,
-  notifyWithdrawalReceived, notifyLoginAlert, resolveName
+  notifyWithdrawalReceived, notifyLoginAlert, notifyManualAccount, notifyPasswordChanged, resolveName
 };

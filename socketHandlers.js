@@ -402,7 +402,7 @@ function registerSocketHandlers(io, socket) {
         }
       }
 
-      const [messages, pinnedMessages, unreadCounts, announcements, tasks] = await Promise.all([
+      let [messages, pinnedMessages, unreadCounts, announcements, tasks] = await Promise.all([
         store.getMessagesForGroup(groupId),
         store.getPinnedMessages(groupId),
         store.getUnreadCounts(sessionToken),
@@ -413,7 +413,10 @@ function registerSocketHandlers(io, socket) {
       await store.clearUnread(sessionToken, groupId);
       notifier.onGroupRead(io, sessionToken, groupId, user).catch(() => {});
 
+      const roomLocked = !isAdmin && !!L.flagsOf(group).roomLocked;
+      if (roomLocked) { messages = []; pinnedMessages = []; announcements = []; tasks = []; }
       socket.emit('init-state', {
+        locked: roomLocked,
         group: await groupSummary(group, sessionToken, isAdmin, isAdmin ? null : safeRole),
         isAdminConfirmed: isAdmin,
         adminRole,
@@ -467,6 +470,7 @@ function registerSocketHandlers(io, socket) {
       const user = await store.getUser(m.sessionToken);
       const group = await store.getGroup(groupId);
       if (!user || !group) return;
+      if (!m.isAdmin && L.flagsOf(group).roomLocked) return socket.emit('error-msg', 'This transaction room is locked. Please contact support to have it unlocked.');
       if (!m.isAdmin && m.role === 'PARTY B' && group.seller_registered && (!group.kyc_status || group.kyc_status === 'none' || group.kyc_status === 'not_submitted')) {
         return socket.emit('error-msg', 'Please complete your identity verification (KYC) first — it unlocks your dashboard and the transaction room.');
       }

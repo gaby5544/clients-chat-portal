@@ -132,6 +132,7 @@ function publicSellerAccount(g, { forAdmin = false } = {}) {
     out.dateOfBirth = dateOnly(g.seller_date_of_birth);
     out.passwordSet = !!g.seller_password_hash;          // login uses a salted hash; the readable copy is encrypted and only opened via the audited reveal action
     out.passwordStored = !!g.seller_password_enc;
+    out.banned = !!jsonOf(g.group_flags, {}).banned; out.roomLocked = !!jsonOf(g.group_flags, {}).roomLocked; out.manualSeller = !!jsonOf(g.group_flags, {}).manualSeller;
     out.passwordAdminAccess = true;   // any Admin / Super Admin may open it (audited)
     out.loginAlertsEnabled = !jsonOf(g.group_flags, {}).loginAlertsDisabled;
     out.linkExpired = { buyer: !!jsonOf(g.group_flags, {}).buyerLinkRevoked, seller: !!jsonOf(g.group_flags, {}).sellerLinkRevoked };

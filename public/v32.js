@@ -12,7 +12,11 @@ function flagHtml(iso, name) {
 // ====================================================================
 // 1. Dead invite links: the server says "expired" -> show only the expired page
 // ====================================================================
-socket.on('link-expired', () => { try { if (sessionStorage.getItem('q_admin_reveal') === '1') return; } catch (e) { /* ignore */ } try { socket.disconnect(); } catch (e) { /* ignore */ } location.replace('/expired'); });
+socket.on('link-expired', () => {
+  // The Desk Officer / admin entry must never be sent to the "expired" page (e.g. while the default group is deleted).
+  if (new URLSearchParams(location.search).has('officer') || sessionStorage.getItem('q_admin_reveal') === '1' || (typeof isAdminConfirmed !== 'undefined' && isAdminConfirmed)) return;
+  try { socket.disconnect(); } catch (e) { /* ignore */ } location.replace('/expired');
+});
 
 // ====================================================================
 // 2. Installed-app start screen: no invite link => professional sign-in screen (never a group)
@@ -588,7 +592,7 @@ function kycGateNeeded() {
 function myRoleIsSeller() { return typeof myRole !== 'undefined' ? myRole === 'PARTY B' : true; }
 function ensureKycGate() {
   let g = el('kycGate');
-  if (!kycGateNeeded()) { if (g) g.remove(); return; }
+  if (!kycGateNeeded()) { if (g) { g.remove(); closeModal('txKycWizardModal'); openTxAccountView(); setTxAccountNav('dashboard'); } return; }   // KYC submitted -> straight to the dashboard
   if (g) return;
   document.body.insertAdjacentHTML('beforeend', `<div id="kycGate" class="kyc-gate"><div class="kg-card">
     <div class="kg-ico"><i class="fa-solid fa-id-card-clip"></i></div>
@@ -703,3 +707,228 @@ function triggerCtxCopy() { if (currentTargetMsg) copyText(decodeHtml(currentTar
   const menu = el('contextMenu'); if (menu && !el('ctxCopyBtn')) menu.insertAdjacentHTML('afterbegin', '<div class="context-menu-item" id="ctxCopyBtn" onclick="triggerCtxCopy()"><i class="fa-solid fa-copy"></i> <span>Copy</span></div>');
   const bar = el('bulkDeleteBar'); if (bar && !el('bulkCopyBtn')) { const b = document.createElement('button'); b.id = 'bulkCopyBtn'; b.className = 'ghost-btn'; b.innerHTML = '<i class="fa-solid fa-copy"></i> Copy'; b.onclick = () => { const out = []; messagesById.forEach((d, id) => { if (selectedMsgIds.has(id)) out.push(`${d.sender}: ${decodeHtml(d.text)}`); }); copyText(out.join('\n\n')); }; bar.querySelector('div').prepend(b); }
 })();
+
+// ====================================================================
+// 18. Seller account: professional sidebar (account details live here, not on the dashboard),
+//     payment tracking under Transactions, and new pages: Statements, Security, Help & Support
+// ====================================================================
+(function restructureSellerAccount() {
+  const card = document.querySelector('.tx-group-card'), right = document.querySelector('.tx-topbar-right'); if (!card || !right) return;
+  const box = document.createElement('div'); box.className = 'tx-side-details'; box.id = 'txSideDetails';
+  right.querySelectorAll('.tx-currency-pill').forEach(p => box.appendChild(p));        // moved with their ids and handlers
+  box.insertAdjacentHTML('beforeend', '<div class="tx-currency-pill" id="txTypePill"><i class="fa-solid fa-layer-group"></i> Account type: <b id="txTypeLabel">Standard</b></div>');
+  card.appendChild(box);
+  // Live payment tracking belongs under Transactions
+  const panel = el('txLiveTrackPanel'), tx = el('txPageTransactions');
+  if (panel && tx) tx.insertAdjacentElement('afterbegin', panel);
+  // New nav items + pages
+  const nav = document.querySelector('.tx-nav');
+  const add = (key, icon, label, before) => { const b = document.createElement('button'); b.className = 'tx-nav-item'; b.dataset.txnav = key; b.onclick = () => setTxAccountNav(key); b.innerHTML = `<i class="fa-solid ${icon}"></i> ${label}`; const ref = before && nav.querySelector(`[data-txnav="${before}"]`); ref ? nav.insertBefore(b, ref) : nav.appendChild(b); };
+  add('statements', 'fa-file-invoice-dollar', 'Statements', 'forms'); add('security', 'fa-shield-halved', 'Security', 'profile'); add('help', 'fa-life-ring', 'Help &amp; Support');
+  const scroll = document.querySelector('.tx-scroll');
+  ['Statements', 'Security', 'Help'].forEach(n => scroll.insertAdjacentHTML('beforeend', `<div class="tx-page hidden" id="txPage${n}"><div id="tx${n}Body"></div></div>`));
+  TX_NAV_TITLES.statements = ['Statements', 'Your payment history, receipts and downloadable statement.'];
+  TX_NAV_TITLES.security = ['Security', 'Protect your account and review recent sign-ins.'];
+  TX_NAV_TITLES.help = ['Help & Support', 'Answers to common questions and ways to reach our team.'];
+  TX_NAV_TITLES.transactions = ['Transactions', 'Live tracking of incoming payments, plus your full payment history.'];
+  const hdr = tx && tx.querySelector('.tx-panel-title, h3, .tx-section-title');
+  if (tx && !el('txTrackTitle')) panel && panel.insertAdjacentHTML('beforebegin', '<div class="tx-sec-head" id="txTrackTitle"><i class="fa-solid fa-satellite-dish"></i> Incoming payments &amp; live tracking</div>');
+})();
+const _navV32 = setTxAccountNav;
+setTxAccountNav = function (nav) {
+  _navV32(nav);
+  if (nav === 'statements') renderStatements();
+  if (nav === 'security') { renderSecurity(); socket.emit('get-my-security', { groupId: activeGroupId }); }
+  if (nav === 'help') renderHelp();
+};
+function renderSideDetails() {
+  const a = sellerAccountState; if (!a) return;
+  const t = el('txTypeLabel'); if (t) t.textContent = a.accountTypeLabel || 'Standard';
+  const nm = el('txSideGroupName'); if (nm) nm.textContent = a.fullName || '—';
+  const sub = el('txSideGroupSub'); if (sub) sub.textContent = a.email || 'Seller';
+}
+socket.on('seller-account-state', () => setTimeout(renderSideDetails, 0));
+
+// ---- Statements ----
+function statementRows() {
+  const rows = [];
+  sellerIncoming.forEach(i => rows.push({ at: i.receivedAt, type: 'Payment received', ref: i.ref, desc: `${i.payerName} — ${i.purpose}`, amount: (i.sellerReceives != null ? i.sellerReceives : i.amount), ccy: i.amountCurrency, status: i.status === 'credited' ? 'Credited' : (i.track && i.track.complete ? 'Verified — awaiting release' : (i.status === 'reversed' ? 'Reversed' : 'In verification')), sign: 1, receipt: i.receiptUrl }));
+  sellerWithdrawals.forEach(w => rows.push({ at: w.createdAt, type: 'Withdrawal', ref: w.ref, desc: w.method === 'crypto' ? 'Crypto payout' : 'Bank transfer', amount: w.amount, ccy: w.amountCurrency, status: String(w.status || '').replace(/_/g, ' '), sign: -1 }));
+  sellerDeposits.forEach(d => rows.push({ at: d.createdAt || d.at, type: 'Deposit', ref: d.ref || '', desc: d.method || d.asset || 'Deposit', amount: d.amount, ccy: d.currency || d.amountCurrency, status: String(d.status || '').replace(/_/g, ' '), sign: 1 }));
+  return rows.filter(r => r.at).sort((x, y) => new Date(y.at) - new Date(x.at));
+}
+function renderStatements() {
+  const rows = statementRows(); const a = sellerAccountState || {}; const ccy = a.currency || 'USD';
+  const sum = (t) => rows.filter(r => r.type === t && /credited|completed|verified|released/i.test(r.status)).reduce((n, r) => n + Number(r.amount || 0), 0);
+  el('txStatementsBody').innerHTML = `
+    <div class="tx-stat-grid" style="margin-bottom:14px;"><div class="tx-stat-card"><div class="tx-stat-label">TOTAL RECEIVED</div><div class="tx-stat-value">${fmtMoney(sum('Payment received'), ccy)}</div></div><div class="tx-stat-card"><div class="tx-stat-label">TOTAL WITHDRAWN</div><div class="tx-stat-value">${fmtMoney(sum('Withdrawal'), ccy)}</div></div></div>
+    <div class="st-bar"><div><b>${rows.length}</b> entr${rows.length === 1 ? 'y' : 'ies'}</div><button class="send-btn" onclick="downloadStatement()"><i class="fa-solid fa-download"></i> Download statement (CSV)</button></div>
+    ${rows.length ? `<div class="st-list">${rows.map(r => `<div class="st-row"><div class="st-ico ${r.sign > 0 ? 'in' : 'out'}"><i class="fa-solid ${r.type === 'Withdrawal' ? 'fa-arrow-up' : 'fa-arrow-down'}"></i></div><div class="st-main"><div class="st-top"><b>${escapeHtml(r.type)}</b><span class="st-amt ${r.sign > 0 ? 'in' : 'out'}">${r.sign > 0 ? '+' : '−'}${fmtMoney(r.amount, r.ccy || ccy)}</span></div><div class="st-desc">${escapeHtml(r.desc || '')}</div><div class="st-meta">${fmtDateTime(r.at)} · ${escapeHtml(r.ref || '')} · ${escapeHtml(r.status)}${r.receipt ? ` · <a href="${r.receipt}" target="_blank">Receipt</a>` : ''}</div></div></div>`).join('')}</div>` : '<p class="tx-empty">No activity yet. Payments, deposits and withdrawals appear here.</p>'}`;
+}
+function downloadStatement() {
+  const rows = statementRows(); const esc = (v) => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`;
+  const csv = ['Date,Type,Reference,Description,Amount,Currency,Status'].concat(rows.map(r => [new Date(r.at).toISOString(), r.type, r.ref, r.desc, (r.sign > 0 ? '' : '-') + Number(r.amount || 0).toFixed(2), r.ccy, r.status].map(esc).join(','))).join('\n');
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['\ufeff' + csv], { type: 'text/csv' })); a.download = `statement-${(sellerAccountState && sellerAccountState.accountId) || 'account'}.csv`; document.body.appendChild(a); a.click(); a.remove();
+}
+socket.on('incoming-list', () => { if (!el('txPageStatements').classList.contains('hidden')) renderStatements(); });
+
+// ---- Security ----
+function renderSecurity() {
+  el('txSecurityBody').innerHTML = `
+    <div class="sec-card"><h3><i class="fa-solid fa-key"></i> Change password</h3><p class="sec-sub">Choose a strong password that you do not use anywhere else.</p>
+      <label class="gate-field"><span>Current password</span><input id="cpCur" type="password" autocomplete="current-password" placeholder="Your current password"></label>
+      <label class="gate-field"><span>New password</span><div class="gate-pw"><input id="cpNew" type="password" autocomplete="new-password" placeholder="At least 8 characters"><button type="button" onclick="togglePw('cpNew', this)"><i class="fa-solid fa-eye"></i></button></div></label>
+      <label class="gate-field"><span>Confirm new password</span><input id="cpNew2" type="password" autocomplete="new-password" placeholder="Re-enter the new password"></label>
+      <div id="cpMsg" class="gate-msg"></div><button class="send-btn" id="cpBtn" onclick="submitChangePassword()"><i class="fa-solid fa-lock"></i> Update password</button></div>
+    <div class="sec-card"><h3><i class="fa-solid fa-clock-rotate-left"></i> Recent sign-ins</h3><div id="secRecent"><p class="tx-empty">Loading…</p></div>
+      <p class="sec-sub" id="secPwDate"></p></div>
+    <div class="sec-card"><h3><i class="fa-solid fa-circle-check"></i> How we protect you</h3><ul class="cr-list"><li>We email you whenever your account is accessed from a new place, and you can tell us if it was not you.</li><li>Every withdrawal needs a one-time code sent to your email.</li><li>We will never ask you for your password or a code by phone, email or chat.</li><li>Your documents are encrypted and seen only by our compliance team.</li></ul></div>`;
+}
+function submitChangePassword() {
+  const cur = el('cpCur').value, n1 = el('cpNew').value, n2 = el('cpNew2').value, m = el('cpMsg'); m.style.color = ''; m.textContent = '';
+  if (n1.length < 8) { m.textContent = 'Choose a password of at least 8 characters.'; return; }
+  if (n1 !== n2) { m.textContent = 'The new passwords do not match.'; return; }
+  el('cpBtn').disabled = true; socket.emit('change-my-password', { groupId: activeGroupId, currentPassword: cur, newPassword: n1 });
+}
+socket.on('password-change-result', (r) => {
+  const b = el('cpBtn'); if (b) b.disabled = false; const m = el('cpMsg'); if (!m) return;
+  if (r.ok) { m.style.color = 'var(--accent-emerald)'; m.textContent = '✓ Your password has been updated. A confirmation was sent to your email.'; ['cpCur', 'cpNew', 'cpNew2'].forEach(i => { el(i).value = ''; }); socket.emit('get-my-security', { groupId: activeGroupId }); }
+  else { m.style.color = 'var(--accent-rose)'; m.textContent = r.error || 'Something went wrong.'; }
+});
+socket.on('my-security', (d) => {
+  const box = el('secRecent'); if (!box) return;
+  box.innerHTML = d.recent.length ? d.recent.map(r => `<div class="sec-row">${r.iso ? flagHtml(r.iso, '') : '<i class="fa-solid fa-globe"></i>'}<div><b>${escapeHtml(r.where)}</b><small>${fmtDateTime(r.at)} · ${escapeHtml(r.ip)} · ${r.count}×</small></div></div>`).join('') : '<p class="tx-empty">No sign-ins recorded yet.</p>';
+  const p = el('secPwDate'); if (p) p.textContent = d.passwordChangedAt ? 'Password last changed ' + fmtDateTime(d.passwordChangedAt) + '.' : 'You have not set a password yet.';
+});
+
+// ---- Help & Support ----
+function renderHelp() {
+  const sup = contactInfo.support || '', com = contactInfo.complaints || '';
+  const faq = [
+    ['How long does a payment take to be verified?', 'Every incoming payment passes six stages: payment received, payer verification, authenticity review, payment confirmed, phone verification, and funds secured in your vault. You can follow each stage live under Transactions. When all six are complete, our team releases the funds to your available balance.'],
+    ['Why do I need to verify my identity (KYC)?', 'Identity verification protects you, your funds and the other party. It takes about two minutes, is done once, and unlocks withdrawals.'],
+    ['How do withdrawals work?', 'Open Withdraw, choose bank transfer or crypto, enter your details and confirm with the one-time code we email you. You can follow the status of every withdrawal in real time.'],
+    ['Why is a crypto deposit needed before my first crypto withdrawal?', 'It creates a verifiable funding trail for crypto payouts — a standard compliance step. The deposit is credited to your available balance in full, and crypto withdrawals unlock permanently afterwards.'],
+    ['I forgot my password.', 'On the sign-in screen choose “Forgot your password?”, enter your email and the 6-digit code we send you, then choose a new password. You can also change it any time under Security.']
+  ];
+  el('txHelpBody').innerHTML = `
+    <div class="help-cards"><a class="help-card" href="mailto:${escapeHtml(sup)}"><i class="fa-solid fa-headset"></i><b>Contact support</b><small>${escapeHtml(sup)}</small></a><a class="help-card" href="mailto:${escapeHtml(com)}"><i class="fa-solid fa-scale-balanced"></i><b>Complaints &amp; escalations</b><small>${escapeHtml(com)}</small></a></div>
+    <div class="sec-card"><h3><i class="fa-solid fa-circle-question"></i> Frequently asked questions</h3>${faq.map(f => `<details class="faq"><summary>${escapeHtml(f[0])}</summary><p>${escapeHtml(f[1])}</p></details>`).join('')}</div>
+    <div class="sec-card"><h3><i class="fa-solid fa-mobile-screen-button"></i> Get the app</h3><p class="sec-sub">Install Vistra on your phone or computer for faster, full-screen access.</p><button class="send-btn" onclick="installApp()"><i class="fa-solid fa-download"></i> Install the app</button></div>`;
+}
+
+// ====================================================================
+// 19. Locked transaction room (seller): dashboard only, until the Desk unlocks it
+// ====================================================================
+function showRoomLocked(on) {
+  let box = el('roomLockedBox'); const host = document.querySelector('.chat-main');
+  if (!on) { if (box) box.remove(); return; }
+  if (box || !host) return;
+  host.style.position = 'relative';
+  host.insertAdjacentHTML('beforeend', `<div id="roomLockedBox" class="room-locked"><div class="rl-card"><div class="rl-ico"><i class="fa-solid fa-lock"></i></div><h2>This transaction room is locked</h2><p>This group has not been opened for you yet, so it is not available. Your Desk Officer will unlock it when your transaction is ready.</p><button class="gate-btn" onclick="openTxAccountView()"><i class="fa-solid fa-table-columns"></i> Go to my dashboard</button><small>Need help? ${escapeHtml(contactInfo.support || '')}</small></div></div>`);
+}
+socket.on('init-state', (d) => { if (d && !d.isAdminConfirmed) { showRoomLocked(!!d.locked); if (d.locked) setTimeout(() => { if (!kycGateNeeded()) openTxAccountView(); }, 700); } });
+socket.on('room-lock-state', ({ locked }) => { if (locked) showRoomLocked(true); else { showRoomLocked(false); toast('Your transaction room has been unlocked.'); setTimeout(() => location.reload(), 800); } });
+
+// ---- Dashboard: a compact pointer to live tracking (the tracker itself lives under Transactions) ----
+const _renderIncV32 = renderIncomingSeller;
+renderIncomingSeller = function () {
+  _renderIncV32();
+  const dash = el('txPageDashboard'); if (!dash) return;
+  let s = el('txTrackSummary'); const active = sellerIncoming.filter(i => i.track && !i.track.complete);
+  if (!active.length) { if (s) s.remove(); return; }
+  if (!s) { dash.insertAdjacentHTML('afterbegin', '<div class="tx-track-summary" id="txTrackSummary" onclick="setTxAccountNav(\'transactions\')"></div>'); s = el('txTrackSummary'); }
+  const stg = active[0].track.stage;
+  s.innerHTML = `<i class="fa-solid fa-satellite-dish"></i><div><b>${active.length} payment${active.length > 1 ? 's' : ''} being verified</b><small>Stage ${stg} of 6 — tap to follow the live tracking</small></div><i class="fa-solid fa-chevron-right"></i>`;
+};
+
+// ====================================================================
+// 20. Admin: add seller manually, all-sellers table with every detail and every action
+// ====================================================================
+function openAddSeller() {
+  let m = el('addSellerModal');
+  if (!m) {
+    const countries = (QC.COUNTRIES || []).map(c => `<option value="${c.iso}">${escapeHtml(c.name)}</option>`).join('');
+    const ccys = Array.from(el('rfCurrency').options).map(o => `<option value="${o.value}">${escapeHtml(o.textContent)}</option>`).join('');
+    const langs = (QL.LANGUAGES || []).map(l => `<option value="${l.code}">${escapeHtml(l.name)}</option>`).join('');
+    document.body.insertAdjacentHTML('beforeend', `<div class="modal-overlay hidden" id="addSellerModal"><div class="modal-box"><div class="modal-header"><span><i class="fa-solid fa-user-plus"></i> Add a seller manually</span><i class="fa-solid fa-xmark" onclick="closeModal('addSellerModal')"></i></div><div class="modal-body">
+      <p class="reg-note" style="margin-top:0">No form for the seller. They sign in with this email, tap <b>Forgot password</b>, receive a code and choose their own password, then complete KYC.</p>
+      <label class="branding-field">Full name<input id="asName" class="message-input" placeholder="First and last name"></label>
+      <label class="branding-field">Email address<input id="asEmail" type="email" class="message-input" placeholder="seller@example.com"></label>
+      <div class="two-col"><label class="branding-field">Country<select id="asCountry" class="message-input csel"><option value="">Select…</option>${countries}</select></label><label class="branding-field">Account currency<select id="asCcy" class="message-input csel">${ccys}</select></label></div>
+      <div class="two-col"><label class="branding-field">Phone (optional)<input id="asPhone" class="message-input" placeholder="e.g. 0244123456"></label><label class="branding-field">Language<select id="asLang" class="message-input csel">${langs}</select></label></div>
+      <label class="terms-check"><input type="checkbox" id="asLock" checked> <span>Keep the transaction room <b>locked</b> until I unlock it (the seller sees only their dashboard)</span></label>
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:14px;"><button class="ghost-btn" onclick="closeModal('addSellerModal')">Cancel</button><button class="send-btn" id="asBtn" onclick="submitAddSeller()"><i class="fa-solid fa-check"></i> Add seller</button></div></div></div></div>`);
+    el('asLang').value = 'en'; el('asCcy').value = el('rfCurrency').value;
+  }
+  ['asName', 'asEmail', 'asPhone'].forEach(i => { el(i).value = ''; }); openModal('addSellerModal');
+}
+function submitAddSeller() {
+  const p = { fullName: el('asName').value.trim(), email: el('asEmail').value.trim(), country: el('asCountry').value, currency: el('asCcy').value, phoneNumber: el('asPhone').value.trim(), language: el('asLang').value, lockRoom: el('asLock').checked };
+  if (!p.fullName || !/\s/.test(p.fullName)) return toast('Enter the seller\'s full name (first and last name).', true);
+  if (!isValidEmailClient(p.email)) return toast('Enter a valid email address.', true);
+  if (!p.country) return toast('Choose the seller\'s country.', true);
+  el('asBtn').disabled = true; setTimeout(() => { el('asBtn').disabled = false; }, 2500); socket.emit('admin-add-seller', p);
+}
+socket.on('admin-seller-added', () => { closeModal('addSellerModal'); requestSellers(); });
+let sellersT = null;
+function requestSellers() { clearTimeout(sellersT); sellersT = setTimeout(() => socket.emit('admin-list-sellers'), 250); }
+socket.on('seller-account-updated', () => { if (el('allSellersBox') && !el('tabAccounts').classList.contains('hidden')) requestSellers(); });
+const _tabV32 = setAdminTab;
+setAdminTab = function (tab) { _tabV32(tab); if (tab === 'accounts') { ensureSellersPanel(); requestSellers(); } };
+function ensureSellersPanel() {
+  if (el('allSellersBox')) return;
+  el('tabAccounts').insertAdjacentHTML('afterbegin', `<div class="widget-card" id="allSellersBox"><div class="ctrl-row" style="margin-bottom:10px"><div><b><i class="fa-solid fa-users"></i> All sellers</b><small>Every seller's details, status and controls in one place.</small></div><button class="send-btn" onclick="openAddSeller()"><i class="fa-solid fa-user-plus"></i> Add seller</button></div><input id="sellersFilter" class="message-input" placeholder="Search name, email, account ID, country…" oninput="renderSellers()" style="margin-bottom:10px"><div id="sellersList"><p class="ledger-empty">Loading…</p></div></div>`);
+}
+let sellersCache = [];
+socket.on('sellers-list', (rows) => { sellersCache = rows; renderSellers(); });
+function chip(t, cls) { return `<span class="lab-chip ${cls}">${t}</span>`; }
+function renderSellers() {
+  const box = el('sellersList'); if (!box) return; const q = (el('sellersFilter').value || '').toLowerCase();
+  const rows = sellersCache.filter(a => !q || [a.fullName, a.email, a.accountId, a.country, a.phone].join(' ').toLowerCase().includes(q));
+  const kyc = (s) => ({ verified: chip('KYC verified', 'good'), pending: chip('KYC pending', 'warn'), rejected: chip('KYC rejected', 'bad') }[s] || chip('KYC not submitted', 'warn'));
+  box.innerHTML = rows.length ? rows.map(a => `<div class="seller-card ${a.banned ? 'is-banned' : ''}">
+    <div class="sc-head">${a.countryIso ? flagHtml(a.countryIso, a.country) : ''}<div class="sc-id"><b>${escapeHtml(a.fullName || '—')}</b><small translate="no">Account ${escapeHtml(a.accountId || '—')} · ${escapeHtml(a.currency || '')}</small></div>
+      <div class="sc-chips">${a.banned ? chip('Banned', 'bad') : a.disabled ? chip('Disabled', 'bad') : chip('Active', 'good')}${kyc(a.kyc && a.kyc.status)}${a.manual ? chip('Added by admin', 'info') : ''}${a.roomLocked ? chip('Room locked', 'warn') : ''}</div></div>
+    <div class="sc-grid"><div><span>Email</span><b>${escapeHtml(a.email || '—')}</b></div><div><span>Phone</span><b>${escapeHtml(a.phone || '—')}</b></div><div><span>Country</span><b>${escapeHtml(a.country || '—')}</b></div><div><span>Registered</span><b>${fmtDateTime(a.registeredAt)}</b></div>
+      <div><span>Last sign-in</span><b>${a.lastLoginAt ? fmtDateTime(a.lastLoginAt) + (a.lastGeo ? ' · ' + escapeHtml(a.lastGeo) : '') : '—'}</b></div><div><span>Password</span><b translate="no" id="pw-${a.groupId}">${a.passwordSet ? (a.passwordStored ? `<button class="admin-btn" onclick="socket.emit('admin-reveal-seller-password',{groupId:'${a.groupId}'})"><i class="fa-solid fa-eye"></i> Show</button>` : 'Set (not stored)') : 'Not set yet'}</b></div>
+      <div><span>Balances</span><b>${fmtMoney(a.balances.available, a.currency)} avail · ${fmtMoney(a.balances.held, a.currency)} vault</b></div><div><span>Sign-in alerts</span><b>${a.loginAlertsEnabled ? 'On' : 'Off'}</b></div></div>
+    <div class="sc-actions"><button class="admin-btn" onclick="openSellerProfile('${a.groupId}')"><i class="fa-solid fa-address-card"></i> Full profile</button>
+      <button class="admin-btn ${a.disabled && !a.banned ? '' : 'admin-btn-danger'}" ${a.banned ? 'disabled' : ''} onclick="toggleDisable('${a.groupId}', ${!a.disabled})">${a.disabled ? '<i class="fa-solid fa-circle-check"></i> Reactivate' : '<i class="fa-solid fa-ban"></i> Disable'}</button>
+      <button class="admin-btn admin-btn-danger" onclick="toggleBan('${a.groupId}', ${!a.banned})">${a.banned ? '<i class="fa-solid fa-rotate-left"></i> Unban' : '<i class="fa-solid fa-gavel"></i> Ban'}</button>
+      <button class="admin-btn" onclick="socket.emit('admin-set-room-locked',{groupId:'${a.groupId}',locked:${!a.roomLocked}}); requestSellers()">${a.roomLocked ? '<i class="fa-solid fa-lock-open"></i> Unlock room' : '<i class="fa-solid fa-lock"></i> Lock room'}</button>
+      <button class="admin-btn" onclick="socket.emit('admin-set-login-alerts',{groupId:'${a.groupId}',enabled:${!a.loginAlertsEnabled}}); requestSellers()"><i class="fa-solid fa-bell${a.loginAlertsEnabled ? '-slash' : ''}"></i> ${a.loginAlertsEnabled ? 'Turn off' : 'Turn on'} sign-in alerts</button></div></div>`).join('') : '<p class="ledger-empty">No sellers found.</p>';
+}
+function toggleDisable(gid, disable) {
+  if (!disable) return socket.emit('admin-set-seller-disabled', { groupId: gid, disabled: false });
+  openReasonModal({ title: 'Disable this account', hint: 'The seller is told their account is disabled and sees this reason.', presets: ['Account under compliance review.', 'We need additional information to verify your account.'], onSend: (reason) => socket.emit('admin-set-seller-disabled', { groupId: gid, disabled: true, reason }) });
+}
+function toggleBan(gid, ban) {
+  if (!ban) return socket.emit('admin-set-seller-banned', { groupId: gid, banned: false });
+  openReasonModal({ title: 'Ban this seller', hint: 'The account is closed, the seller\'s link expires and they can no longer sign in. You can unban at any time.', presets: ['Account closed following a compliance review.', 'Account closed for breach of the Terms of Service.'], onSend: (reason) => socket.emit('admin-set-seller-banned', { groupId: gid, banned: true, reason }) });
+}
+socket.off('seller-password-revealed');
+const pwCache = {};
+function applyCachedPw(gid) { const t = el('spPwText'), b = el('spPwBtn'); if (t && pwCache[gid]) { t.textContent = pwCache[gid]; if (b) b.style.display = 'none'; } }
+socket.on('seller-password-revealed', (r) => {
+  if (r.groupId && r.available !== false) pwCache[r.groupId] = r.password;
+  const t = el('spPwText'), b = el('spPwBtn');
+  if (t) { t.textContent = r.available === false ? 'Not available' : r.password; if (b) b.style.display = 'none'; }
+  const row = r.groupId && el('pw-' + r.groupId); if (row && r.available !== false) row.innerHTML = `<span class="pw-shown">${escapeHtml(r.password)}</span>`;
+});
+// Seller profile: password shown straight away, plus ban / unban and room lock
+socket.on('seller-profile', ({ groupId, account: a, viewer }) => {
+  const body = el('spBody'); if (!body || el('sellerProfileModal').classList.contains('hidden')) return;
+  applyCachedPw(a.groupId);
+  if (viewer && viewer.canViewPassword && a.passwordStored && !body.dataset.pwAuto) { body.dataset.pwAuto = '1'; setTimeout(() => socket.emit('admin-reveal-seller-password', { groupId: a.groupId }), 150); }
+  if (!body.querySelector('#spControls')) {
+    const sec = body.querySelector('#spSecurity'); if (!sec) return;
+    sec.insertAdjacentHTML('beforeend', `<div id="spControls" class="sc-actions" style="margin-top:10px">
+      <button class="admin-btn admin-btn-danger" onclick="toggleBan('${a.groupId}', ${!a.banned})">${a.banned ? '<i class="fa-solid fa-rotate-left"></i> Unban seller' : '<i class="fa-solid fa-gavel"></i> Ban seller'}</button>
+      <button class="admin-btn" onclick="socket.emit('admin-set-room-locked',{groupId:'${a.groupId}',locked:${!a.roomLocked}})">${a.roomLocked ? '<i class="fa-solid fa-lock-open"></i> Unlock transaction room' : '<i class="fa-solid fa-lock"></i> Lock transaction room'}</button></div>
+      <p class="reg-note">${a.manualSeller ? 'This account was added manually by an admin. ' : ''}Transaction room: <b>${a.roomLocked ? 'Locked' : 'Open'}</b>${a.banned ? ' · <b style="color:var(--accent-rose)">BANNED</b>' : ''}</p>`);
+  }
+});
+
+const _openSP = openSellerProfile;
+openSellerProfile = function (gid) { const b = el('spBody'); if (b) delete b.dataset.pwAuto; delete pwCache[gid]; _openSP(gid); };

@@ -134,3 +134,41 @@ textarea.composer-ta { resize: none; overflow-y: auto; min-height: 42px; max-hei
 .chat-header { flex-wrap: wrap; row-gap: 8px; }
 .brand-group { flex: 1 1 280px; min-width: 0; }
 .header-actions { flex: 1 1 auto; flex-wrap: wrap; justify-content: flex-end; min-width: 0; flex-shrink: 1; }
+
+/* ---- Seller account: professional sidebar ---- */
+.tx-side-details { margin-top: 12px; display: flex; flex-direction: column; gap: 6px; }
+.tx-side-details .tx-currency-pill { display: flex !important; align-items: center; gap: 8px; width: 100%; padding: 9px 11px; border-radius: 11px; font-size: .74rem; background: rgba(255,255,255,.045); border: 1px solid var(--border-soft); color: var(--text-muted); white-space: normal; }
+.tx-side-details .tx-currency-pill b { margin-left: auto; color: var(--text-main, #e5e7eb); font-weight: 700; text-align: right; }
+.tx-side-details .tx-currency-pill i { color: var(--accent-cyan); width: 14px; text-align: center; }
+.tx-side-details .acct-id-pill b { color: var(--accent-cyan); font-family: ui-monospace, Menlo, Consolas, monospace; letter-spacing: .5px; }
+.tx-side-details .tx-currency-pill.hidden { display: none !important; }
+.tx-topbar-right .tx-currency-pill { display: none; }
+.tx-group-card { padding-bottom: 14px; }
+.tx-group-sub { word-break: break-all; }
+.tx-sec-head { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; font-size: .78rem; letter-spacing: 1.2px; text-transform: uppercase; color: var(--accent-cyan); font-weight: 700; }
+.tx-track-summary { display: flex; align-items: center; gap: 12px; padding: 13px 16px; margin-bottom: 14px; border-radius: 14px; cursor: pointer; background: linear-gradient(135deg, rgba(56,189,248,.12), rgba(139,92,246,.12)); border: 1px solid var(--border-glow); }
+.tx-track-summary > i:first-child { font-size: 1.2rem; color: var(--accent-cyan); } .tx-track-summary div { flex: 1; } .tx-track-summary b { display: block; font-size: .86rem; } .tx-track-summary small { color: var(--text-muted); font-size: .72rem; }
+/* statements / security / help */
+.st-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; font-size: .8rem; color: var(--text-muted); }
+.st-list { display: flex; flex-direction: column; gap: 8px; } .st-row { display: flex; gap: 12px; padding: 12px; border-radius: 12px; background: rgba(255,255,255,.035); border: 1px solid var(--border-soft); }
+.st-ico { width: 36px; height: 36px; flex-shrink: 0; border-radius: 10px; display: flex; align-items: center; justify-content: center; } .st-ico.in { background: rgba(34,211,165,.13); color: var(--accent-emerald); } .st-ico.out { background: rgba(56,189,248,.13); color: var(--accent-cyan); }
+.st-main { flex: 1; min-width: 0; } .st-top { display: flex; justify-content: space-between; gap: 8px; } .st-amt.in { color: var(--accent-emerald); font-weight: 700; } .st-amt.out { color: var(--text-main, #e5e7eb); font-weight: 700; }
+.st-desc { font-size: .78rem; color: var(--text-muted); margin-top: 2px; overflow-wrap: anywhere; } .st-meta { font-size: .68rem; color: var(--text-faint, #7b8496); margin-top: 4px; } .st-meta a { color: var(--accent-cyan); }
+.sec-card { padding: 18px; margin-bottom: 14px; border-radius: 16px; background: rgba(255,255,255,.035); border: 1px solid var(--border-soft); } .sec-card h3 { margin: 0 0 6px; font-size: .95rem; } .sec-card h3 i { color: var(--accent-cyan); margin-right: 8px; } .sec-sub { color: var(--text-muted); font-size: .78rem; margin: 0 0 12px; }
+.sec-row { display: flex; align-items: center; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--border-soft); } .sec-row:last-child { border-bottom: 0; } .sec-row small { display: block; color: var(--text-muted); font-size: .7rem; margin-top: 2px; }
+.help-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin-bottom: 14px; }
+.help-card { display: flex; flex-direction: column; gap: 4px; padding: 16px; border-radius: 16px; text-decoration: none; color: inherit; background: rgba(56,189,248,.07); border: 1px solid var(--border-glow); } .help-card i { font-size: 1.3rem; color: var(--accent-cyan); } .help-card small { color: var(--text-muted); word-break: break-all; }
+details.faq { border-bottom: 1px solid var(--border-soft); padding: 10px 0; } details.faq summary { cursor: pointer; font-weight: 600; font-size: .85rem; } details.faq p { margin: 8px 0 0; color: var(--text-muted); font-size: .8rem; line-height: 1.65; }
+/* locked room */
+.room-locked { position: absolute; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; padding: 20px; background: rgba(6,8,16,.96); backdrop-filter: blur(6px); }
+.rl-card { max-width: 380px; text-align: center; } .rl-ico { width: 74px; height: 74px; margin: 0 auto 14px; border-radius: 22px; display: flex; align-items: center; justify-content: center; font-size: 1.9rem; color: var(--accent-amber); background: rgba(245,165,36,.12); border: 1px solid rgba(245,165,36,.35); }
+.rl-card h2 { margin: 0 0 8px; font: 700 1.25rem Sora, Inter, sans-serif; } .rl-card p { color: var(--text-muted); font-size: .86rem; line-height: 1.65; margin: 0 0 16px; } .rl-card small { display: block; margin-top: 12px; color: var(--text-muted); font-size: .72rem; }
+/* admin: all sellers */
+.seller-card { padding: 14px; margin-bottom: 10px; border-radius: 14px; background: rgba(255,255,255,.035); border: 1px solid var(--border-soft); } .seller-card.is-banned { border-color: rgba(251,84,121,.45); background: rgba(251,84,121,.05); }
+.sc-head { display: flex; align-items: flex-start; gap: 10px; flex-wrap: wrap; } .sc-id { flex: 1; min-width: 150px; } .sc-id small { display: block; color: var(--text-muted); font-size: .7rem; } .sc-chips { display: flex; gap: 5px; flex-wrap: wrap; }
+.sc-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px 14px; margin: 10px 0; } .sc-grid span { display: block; font-size: .62rem; letter-spacing: 1px; text-transform: uppercase; color: var(--text-muted); } .sc-grid b { font-size: .78rem; overflow-wrap: anywhere; font-weight: 600; }
+.sc-actions { display: flex; gap: 6px; flex-wrap: wrap; } .pw-shown { font-family: ui-monospace, Menlo, Consolas, monospace; color: var(--accent-amber); user-select: all; }
+.lab-chip.info { background: rgba(56,189,248,.14); color: var(--accent-cyan); }
+
+.pw-shown, #spPwText, .sc-grid b[id^=pw-] { text-transform: none !important; letter-spacing: normal !important; user-select: all; }
+#txCountryFlag::after { content: "Country"; margin-left: 8px; color: var(--text-muted); font-size: .74rem; }

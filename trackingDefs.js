@@ -18,7 +18,7 @@ const STAGES = [
   { n: 5, title: 'Phone verification', team: 'Security desk',
     checks: ['Phone number {PHONE} on file matched to the account holder', 'Verification call placed to the account holder', 'Account holder\u2019s confirmation recorded'] },
   { n: 6, title: 'Funds in seller\u2019s vault account', team: 'Settlement',
-    checks: ['Funds secured in the seller\u2019s vault account', 'Awaiting final release by the Desk to the main account'] }
+    checks: ['Funds secured in the seller\u2019s vault account'] }
 ];
 const STAGE_COUNT = STAGES.length;
 const WEIGHTS = [8, 20, 30, 10, 17, 15];           // share of the total time per stage (%)
