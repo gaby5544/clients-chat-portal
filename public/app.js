@@ -1205,7 +1205,7 @@ function renderTxAccountUI() {
 }
 
 function mergedActivity() {
-  const deps = sellerDeposits.map(d => ({ date: d.notifiedAt, type: `Deposit${d.method === 'crypto' ? ` · ${d.asset}` : ''}`, amount: fmtMoney(d.amount, sellerAccountState ? sellerAccountState.currency : ''), status: d.status, note: d.rejectionReason || '' }));
+  const deps = sellerDeposits.map(d => ({ date: d.notifiedAt, type: `Deposit${d.method === 'crypto' ? ` · ${d.asset}` : ''}`, amount: fmtMoney(d.amount, sellerAccountState ? sellerAccountState.currency : ''), status: d.status === 'held_in_vault' ? 'awaiting confirmation' : d.status, note: d.rejectionReason || '' }));
   const wds = sellerWithdrawals.map(w => ({ date: w.createdAt, type: `Withdrawal${w.method === 'crypto' ? ` · ${w.asset}` : ' · Bank'}`, amount: fmtMoney(w.amount, w.amountCurrency), status: w.status, note: w.statusReason || '' }));
   // Full purpose text is shown in the dedicated Incoming Payments panel above
   // this table; keep this row's note short so the NOTE column doesn't get

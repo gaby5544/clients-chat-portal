@@ -13,6 +13,7 @@ const { uidOf, tokenForUid } = require('./identity');
 const QC = require('./public/countries');
 const { COMPLAINTS_EMAIL } = require('./terms');
 const L = require('./links');
+const W = require('./wallets');
 const geoip = require('./geoip');
 const { sendLoginAlert, setLoginAlertsEnabled } = require('./loginAlert');
 // Missed-message emails now go out automatically (set AUTO_SEND_OFFLINE_EMAILS=false to bring back the approval queue).
@@ -848,7 +849,20 @@ function registerSocketHandlers(io, socket) {
   });
 
   // ---- Deposits ("Record a deposit" — a notification, never proof of funds) ----
-  socket.on('notify-deposit', async ({ groupId, asset, network, amount }) => {
+  socket.on('get-deposit-wallets', async () => {
+    const m = meta(); if (!m) return;
+    const all = await W.getWallets(store);
+    socket.emit('deposit-wallets', { wallets: m.isAdmin ? all : all.filter((w) => w.enabled).map(({ id, asset, network, label, sub, address }) => ({ id, asset, network, label, sub, address })), admin: !!m.isAdmin });
+  });
+  socket.on('admin-set-deposit-wallets', async ({ wallets }) => {
+    if (!metaHasMinRole('ADMIN')) return;
+    const r = await W.setWallets(store, wallets);
+    if (!r.ok) return socket.emit('error-msg', r.error);
+    io.to('admins').emit('deposit-wallets', { wallets: r.wallets, admin: true });
+    socket.emit('toast-info', { message: 'Deposit wallets saved. Sellers see the new addresses immediately.' });
+  });
+
+  socket.on('notify-deposit', async ({ groupId, asset, network, amount, txHash }) => {
     const group = await requireSellerOwnGroup(groupId);
     if (!group) return;
     if (!group.seller_registered) return socket.emit('error-msg', 'Please create your Transaction Account first.');
@@ -859,12 +873,17 @@ function registerSocketHandlers(io, socket) {
     if (!Number.isFinite(amt) || amt <= 0 || amt > 999999999.99) return socket.emit('error-msg', 'Please enter a valid amount.');
     // Deposits are crypto-only — bank deposit was intentionally removed.
     if (!CRYPTO_ASSETS.has(asset)) return socket.emit('error-msg', 'Please choose a valid asset.');
+    const wallet = (await W.getWallets(store)).find((w) => w.enabled && w.asset === asset && w.network === network);
+    if (!wallet) return socket.emit('error-msg', 'That deposit option is not available. Please choose one of the listed wallets.');
+    const hash = String(txHash || '').trim();
+    if (hash && !/^[A-Za-z0-9]{16,100}$/.test(hash)) return socket.emit('error-msg', 'That transaction ID does not look valid. Copy it exactly from your wallet, or leave it empty.');
 
     const depAmt = F.round2(amt);
-    const dep = await store.createDeposit({ groupId, method: 'crypto', asset, network: network || null, amount: depAmt });
-    // Recorded immediately as "Held in Vault" — total_deposited moves now,
-    // available balance never moves until an admin confirms the funds arrived.
-    await store.adjustBalances(groupId, { held: depAmt, total: depAmt });
+    const dep = await store.createDeposit({ groupId, method: 'crypto', asset, network: network || null, amount: depAmt, referenceCode: hash || null });
+    // Recorded as "awaiting confirmation" (held in vault). Neither the available balance NOR Total Deposited moves
+    // until the Desk confirms the funds arrived on-chain — only then is it credited.
+    await store.adjustBalances(groupId, { held: depAmt });
+    if (group.email_b) require('./email').notifyDepositRecorded(group.email_b, { amountText: `${depAmt.toLocaleString('en-US', { minimumFractionDigits: 2 })} ${asset}`, network: wallet.sub, address: wallet.address, txHash: hash, ref: publicDeposit(dep).ref, accountId: group.seller_account_id, name: group.seller_full_name, lang: group.seller_language }).catch(() => {});
     await pushSellerState(io, groupId, null);
     socket.emit('deposit-created', publicDeposit(dep));
     io.to('finance-admins').emit('deposit-created', publicDeposit(dep));
@@ -886,9 +905,8 @@ function registerSocketHandlers(io, socket) {
     if (!group) return;
     const m = meta();
     const amt = F.round2(dep.amount);
-    // Verified: held -> available. Rejected: release the hold and back out the
-    // Total Deposited bump — it never became available.
-    const moved = await store.adjustBalances(dep.group_id, decision === 'verified' ? { held: -amt, available: amt } : { held: -amt, total: -amt });
+    // Verified: held -> available (and Total Deposited goes up). Rejected: the hold is simply released.
+    const moved = await store.adjustBalances(dep.group_id, decision === 'verified' ? { held: -amt, available: amt, total: amt } : { held: -amt });
     if (!moved) return socket.emit('error-msg', 'The seller\'s held balance does not cover this deposit — please check the ledger.');
     const resolved = await store.resolveDeposit(depositId, { status: decision, verifiedBy: m.sessionToken, rejectionReason: decision === 'rejected' ? (sanitizeText(reason, 500) || 'Not specified') : null });
     // Crypto prior-deposit requirement: once verified crypto deposits cover what this seller was asked for, unlock crypto withdrawals for good.

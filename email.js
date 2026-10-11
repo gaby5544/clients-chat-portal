@@ -164,6 +164,15 @@ function notifyPasswordChanged(toEmail, { accountId, name, lang }) {
     details: [...acct(accountId), ['Changed on', new Date().toLocaleString('en-US', { timeZone: 'America/New_York', dateStyle: 'full', timeStyle: 'short' }) + ' (New York time)']]
   }, lang);
 }
+function notifyDepositRecorded(toEmail, { amountText, network, address, txHash, ref, accountId, name, lang }) {
+  return sendTemplated(toEmail, {
+    subject: `Vistra | Deposit recorded — awaiting confirmation (${ref})`, preheader: 'We have recorded your deposit. It is credited once it is confirmed.',
+    eyebrow: 'Deposit Notification', title: 'We have recorded your deposit', name, badge: { text: 'Awaiting confirmation', tone: 'warning' },
+    paragraphs: ['Thank you. We have recorded the crypto deposit you reported. For your protection, a deposit is credited only after it has been confirmed on the blockchain and verified by our team.', 'As soon as it is confirmed, the full amount is added to your available balance and you will receive another email. Network confirmations can take a little time, so there is nothing more you need to do.'],
+    details: [['Deposit reference', ref], ['Amount reported', amountText], ['Network', network], ...(txHash ? [['Transaction ID', txHash]] : []), ['Sent to', address], ...acct(accountId), ['Status', 'Awaiting confirmation']],
+    notice: `Only the wallet addresses shown inside your Vistra account are ours. If you did not make this deposit, contact Support at ${SUPPORT_EMAIL} immediately.`, cta: { label: 'Track your deposit' }
+  }, lang);
+}
 function notifyLoginAlert(toEmail, { name, accountId, lang, time, ip, geo, device, source, confirmUrl, denyUrl, appBase }) {
   const when = new Date(time || Date.now());
   const ny = when.toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' });
@@ -269,5 +278,5 @@ module.exports = {
   sendEmail,
   notifyOfflineMessage, notifyTransactionSubmitted, notifyPasswordResetCode, notifyKycStatus, notifyDepositStatus, notifyWithdrawalStatus, notifyIncomingFunds,
   notifyRegistrationCode, notifyWithdrawalCode, notifyAccountAccess, notifyAccountCreated, notifyBusinessStatus, notifyMessageReminder,
-  notifyWithdrawalReceived, notifyLoginAlert, notifyManualAccount, notifyPasswordChanged, resolveName
+  notifyWithdrawalReceived, notifyLoginAlert, notifyManualAccount, notifyPasswordChanged, notifyDepositRecorded, resolveName
 };

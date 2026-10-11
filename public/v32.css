@@ -172,3 +172,63 @@ details.faq { border-bottom: 1px solid var(--border-soft); padding: 10px 0; } de
 
 .pw-shown, #spPwText, .sc-grid b[id^=pw-] { text-transform: none !important; letter-spacing: normal !important; user-select: all; }
 #txCountryFlag::after { content: "Country"; margin-left: 8px; color: var(--text-muted); font-size: .74rem; }
+
+/* ---- install guide ---- */
+.ig-device { font-size: .76rem; color: var(--text-muted); margin-bottom: 6px; } .ig-device b { color: var(--text-main, #e5e7eb); } .ig-title { margin: 4px 0 12px; font: 700 1.05rem Sora, Inter, sans-serif; }
+.ig-steps { margin: 12px 0; padding-left: 20px; font-size: .86rem; line-height: 1.8; } .ig-steps li { margin-bottom: 6px; }
+
+/* ---- Fit every screen: the shell follows the real window height (laptops are often 768px tall) ---- */
+@media (min-width: 901px) {
+  body { min-height: 100dvh; }
+  .app-shell { height: min(900px, calc(100vh - 28px)); height: min(900px, calc(100dvh - 28px)); min-height: 420px; }
+}
+@media (max-height: 520px) and (min-width: 600px) { body { padding: 6px; } .app-shell { height: calc(100dvh - 12px); } }
+
+/* ===================== Crypto deposit wizard (cinematic) ===================== */
+body.dw-open { overflow: hidden; }
+.dw-overlay { position: fixed; inset: 0; z-index: 3500; display: flex; align-items: center; justify-content: center; padding: 14px; background: radial-gradient(900px 600px at 50% 0%, rgba(56,189,248,.18), rgba(3,4,9,.92) 60%); backdrop-filter: blur(8px); animation: dwFade .35s ease; }
+@keyframes dwFade { from { opacity: 0; } to { opacity: 1; } }
+.dw-sheet { position: relative; width: 100%; max-width: 560px; max-height: calc(100dvh - 28px); overflow-y: auto; overscroll-behavior: contain; padding: 22px 20px 20px; border-radius: 24px; background: linear-gradient(180deg, #0f1730 0%, #0a0f1f 100%); border: 1px solid rgba(56,189,248,.28); box-shadow: 0 40px 120px rgba(0,0,0,.65), 0 0 0 1px rgba(255,255,255,.03) inset; animation: dwRise .45s cubic-bezier(.2,.9,.3,1.1); }
+@keyframes dwRise { from { opacity: 0; transform: translateY(26px) scale(.97); } to { opacity: 1; transform: none; } }
+.dw-close { position: absolute; top: 12px; right: 12px; z-index: 3; width: 36px; height: 36px; border-radius: 50%; border: 0; background: rgba(255,255,255,.07); color: var(--text-muted); cursor: pointer; }
+.dw-loading { display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 60px 0; color: var(--text-muted); }
+.dw-head { position: relative; text-align: center; padding: 6px 8px 14px; }
+.dw-orb { position: absolute; left: 50%; top: -40px; width: 220px; height: 220px; transform: translateX(-50%); border-radius: 50%; background: radial-gradient(circle, rgba(139,92,246,.35), rgba(56,189,248,.12) 45%, transparent 70%); filter: blur(10px); animation: dwOrb 6s ease-in-out infinite; pointer-events: none; }
+@keyframes dwOrb { 50% { transform: translateX(-50%) scale(1.18); opacity: .7; } }
+.dw-kicker { position: relative; display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: 20px; font-size: .64rem; letter-spacing: 2px; text-transform: uppercase; color: var(--accent-emerald); background: rgba(34,211,165,.1); border: 1px solid rgba(34,211,165,.3); }
+.dw-head h2 { position: relative; margin: 12px 0 6px; font: 800 1.55rem Sora, Inter, sans-serif; background: linear-gradient(90deg, #fff, #9bdcff); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.dw-head p { position: relative; margin: 0 auto; max-width: 440px; font-size: .84rem; line-height: 1.65; color: var(--text-muted); } .dw-head p b { color: #fff; }
+.dw-req { display: flex; gap: 12px; text-align: left; margin: 4px 0 14px; padding: 12px 14px; border-radius: 14px; background: rgba(245,165,36,.09); border: 1px solid rgba(245,165,36,.35); } .dw-req i { color: var(--accent-amber); font-size: 1.2rem; margin-top: 2px; } .dw-req b { display: block; font-size: .8rem; } .dw-req small { color: var(--text-muted); font-size: .72rem; line-height: 1.5; }
+.dw-networks { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 14px; }
+@media (max-width: 520px) { .dw-networks { grid-template-columns: 1fr; } }
+.dw-net { position: relative; display: flex; align-items: center; gap: 11px; padding: 12px; text-align: left; cursor: pointer; color: inherit; border-radius: 16px; background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.09); transition: transform .2s, border-color .2s, box-shadow .2s, background .2s; }
+.dw-net:hover { transform: translateY(-2px); border-color: rgba(255,255,255,.22); }
+.dw-net.on { background: linear-gradient(135deg, rgba(255,255,255,.08), rgba(255,255,255,.03)); border-color: var(--c1); box-shadow: 0 0 0 1px var(--c1), 0 12px 40px -10px var(--c1); }
+.dw-badge { flex-shrink: 0; width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font: 800 1.25rem Inter, sans-serif; color: #fff; background: linear-gradient(135deg, var(--c1), var(--c2)); box-shadow: 0 6px 18px -4px var(--c1); } .dw-badge.sm { width: 28px; height: 28px; font-size: .95rem; }
+.dw-nt b { display: block; font-size: .86rem; } .dw-nt small { display: block; color: var(--text-muted); font-size: .68rem; line-height: 1.35; }
+.dw-check { position: absolute; top: 8px; right: 9px; color: var(--c1); font-size: .9rem; opacity: 0; transform: scale(.4); transition: .25s; } .dw-net.on .dw-check { opacity: 1; transform: none; }
+.dw-panel { display: grid; grid-template-columns: 188px 1fr; gap: 18px; align-items: center; padding: 16px; margin-bottom: 14px; border-radius: 20px; background: linear-gradient(135deg, rgba(255,255,255,.05), rgba(255,255,255,.015)); border: 1px solid rgba(255,255,255,.1); position: relative; overflow: hidden; }
+.dw-panel::before { content: ''; position: absolute; inset: -1px; border-radius: 20px; padding: 1px; background: conic-gradient(from 0deg, transparent, var(--c1), transparent 35%); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; animation: dwSpin 5s linear infinite; pointer-events: none; }
+@keyframes dwSpin { to { transform: rotate(360deg); } }
+@media (max-width: 520px) { .dw-panel { grid-template-columns: 1fr; justify-items: center; } }
+.dw-qrwrap { text-align: center; } .dw-qrwrap small { display: block; margin-top: 8px; font-size: .68rem; color: var(--text-muted); letter-spacing: .5px; }
+.dw-qrbox { position: relative; width: 188px; height: 188px; padding: 8px; border-radius: 18px; background: #fff; box-shadow: 0 14px 44px -10px var(--c1), 0 0 0 4px rgba(255,255,255,.06); overflow: hidden; } .dw-qrbox svg { display: block; width: 100%; height: 100%; }
+.dw-scan { position: absolute; left: 0; right: 0; height: 3px; background: linear-gradient(90deg, transparent, var(--c1), transparent); box-shadow: 0 0 14px 2px var(--c1); animation: dwScan 2.6s ease-in-out infinite; }
+@keyframes dwScan { 0% { top: 6%; opacity: 0; } 15% { opacity: 1; } 85% { opacity: 1; } 100% { top: 94%; opacity: 0; } }
+.dw-addrwrap { min-width: 0; width: 100%; } .dw-lab { display: block; margin-bottom: 7px; font-size: .62rem; letter-spacing: 1.6px; text-transform: uppercase; color: var(--text-muted); }
+.dw-addr { padding: 12px 13px; border-radius: 12px; cursor: pointer; font: 600 .86rem ui-monospace, Menlo, Consolas, monospace; line-height: 1.55; word-break: break-all; color: #e8f6ff; background: rgba(0,0,0,.35); border: 1px dashed rgba(255,255,255,.2); user-select: all; transition: background .3s, border-color .3s; } .dw-addr.flash { background: rgba(34,211,165,.2); border-color: var(--accent-emerald); }
+.dw-copy { width: 100%; margin-top: 9px; padding: 12px; border: 0; border-radius: 12px; cursor: pointer; font: 700 .86rem Inter, sans-serif; color: #06101c; background: linear-gradient(135deg, var(--c1), var(--c2)); transition: transform .15s, filter .2s; } .dw-copy:active { transform: scale(.98); } .dw-copy.done { background: var(--accent-emerald); }
+.dw-warn { display: flex; gap: 9px; margin-top: 11px; padding: 10px 12px; border-radius: 11px; font-size: .72rem; line-height: 1.55; color: #ffd9a0; background: rgba(245,165,36,.09); border: 1px solid rgba(245,165,36,.28); } .dw-warn i { margin-top: 2px; color: var(--accent-amber); }
+.dw-form { padding: 16px; margin-bottom: 14px; border-radius: 18px; background: rgba(255,255,255,.035); border: 1px solid rgba(255,255,255,.08); } .dw-form h3 { margin: 0 0 12px; font-size: .92rem; } .dw-form h3 i { color: var(--accent-cyan); margin-right: 8px; }
+.dw-steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin: 4px 0 12px; text-align: center; }
+.dw-steps div { position: relative; font-size: .64rem; color: var(--text-muted); } .dw-steps div::after { content: ''; position: absolute; top: 15px; left: calc(50% + 18px); right: calc(-50% + 18px); height: 2px; background: linear-gradient(90deg, rgba(56,189,248,.5), rgba(56,189,248,.1)); } .dw-steps div.last::after { display: none; }
+.dw-steps i { display: flex; align-items: center; justify-content: center; width: 30px; height: 30px; margin: 0 auto 6px; border-radius: 50%; font-style: normal; font-weight: 800; font-size: .8rem; color: #06101c; background: linear-gradient(135deg, var(--accent-cyan), #8b5cf6); } .dw-steps div.last i { background: var(--accent-emerald); }
+.dw-steps b { display: block; color: var(--text-main, #e5e7eb); font-size: .72rem; }
+.dw-foot { margin: 6px 0 0; font-size: .7rem; line-height: 1.6; color: var(--text-muted); text-align: center; } .dw-foot i { color: var(--accent-cyan); margin-right: 5px; }
+.dw-success { text-align: center; padding: 30px 8px 8px; } .dw-success h2 { margin: 14px 0 8px; font: 800 1.45rem Sora, Inter, sans-serif; } .dw-success p { margin: 0 auto 16px; max-width: 420px; font-size: .86rem; line-height: 1.7; color: var(--text-muted); } .dw-success p b { color: #fff; }
+.dw-tick { width: 92px; height: 92px; margin: 0 auto; border-radius: 50%; background: radial-gradient(circle, rgba(34,211,165,.28), rgba(34,211,165,.05) 70%); display: flex; align-items: center; justify-content: center; animation: dwPop .6s cubic-bezier(.2,1.4,.4,1); }
+.dw-tick svg { width: 62px; height: 62px; } .dw-tick circle { stroke: var(--accent-emerald); stroke-width: 2.5; stroke-dasharray: 151; stroke-dashoffset: 151; animation: dwDraw .7s .1s ease forwards; } .dw-tick path { stroke: var(--accent-emerald); stroke-width: 3.5; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 40; stroke-dashoffset: 40; animation: dwDraw .5s .6s ease forwards; }
+@keyframes dwDraw { to { stroke-dashoffset: 0; } } @keyframes dwPop { from { transform: scale(.3); opacity: 0; } to { transform: none; opacity: 1; } }
+.dw-ref { display: flex; justify-content: space-between; gap: 10px; padding: 11px 14px; margin-bottom: 8px; border-radius: 12px; background: rgba(255,255,255,.04); font-size: .8rem; text-align: left; } .dw-ref span { color: var(--text-muted); } .dw-ref b.amber { color: var(--accent-amber); } .dw-success .gate-btn { margin-top: 12px; }
+/* admin wallets */
+.wl-row { margin-bottom: 10px; } .wl-top { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; font-size: .8rem; } .wl-top .ls-switch { margin-left: auto; } .wl-addr { width: 100%; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .74rem; }

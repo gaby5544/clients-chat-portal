@@ -27,7 +27,12 @@ app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
 // Global light rate limit on all HTTP traffic (Socket.IO handshake included,
 // since it rides over HTTP first).
-app.use(rateLimit({ windowMs: 60 * 1000, max: 300, standardHeaders: true, legacyHeaders: false }));
+// Abuse protection for pages and the API only. Static files (flags, fonts, scripts, icons) and the live Socket.IO
+// connection are NOT counted — a normal session loads hundreds of them, and offices share one IP address.
+app.use(rateLimit({
+  windowMs: 60 * 1000, max: 300, standardHeaders: true, legacyHeaders: false,
+  skip: (req) => req.path.startsWith('/vendor/') || req.path.startsWith('/socket.io') || req.path.startsWith('/uploads/') || /\.(?:js|css|png|jpe?g|svg|ico|woff2?|webmanifest|bin|json|html|map)$/i.test(req.path)
+}));
 
 // Dead invite links never receive the app — only the "link expired" page (HTTP 410). Checked on the server, so
 // nothing of the workspace is ever downloaded, cached or flashed on screen.
@@ -42,6 +47,9 @@ app.get(['/', '/index.html'], async (req, res, next) => {
     res.status(410).set('Cache-Control', 'no-store').type('html').send(expiredPageHtml());
   } catch (e) { next(); }
 });
+
+// /.well-known/ (Android assetlinks.json from PWABuilder) — express.static skips dot-folders unless told otherwise.
+app.use('/.well-known', express.static(path.join(__dirname, 'public', '.well-known'), { dotfiles: 'allow' }));
 
 app.use(express.static(path.join(__dirname, 'public'), {
   setHeaders: (res, filePath) => {

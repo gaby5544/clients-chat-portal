@@ -93,7 +93,7 @@ function buildGate() {
   </div>`);
   ['gateEmail', 'gatePassword'].forEach(id => el(id).addEventListener('keydown', e => { if (e.key === 'Enter') gateLogin(); }));
   el('gcEmail').addEventListener('keydown', e => { if (e.key === 'Enter') gateCreateNext(); });
-  if (deferredInstall || (isIos && !isStandaloneApp())) el('gateInstall').classList.remove('hidden');
+  if (!isStandaloneApp()) el('gateInstall').classList.remove('hidden');
   runSplash(seenSplash);
 }
 function gateShow(v) {
@@ -172,11 +172,11 @@ function maybeShowInstallBanner() {
   if (isStandaloneApp() || window.__holdJoin || el('installBanner')) return;
   const until = Number(localStorage.getItem('q_install_snooze') || 0);
   if (Date.now() < until) return;
-  if (!deferredInstall && !(isIos)) return;
-  document.body.insertAdjacentHTML('beforeend', `<div id="installBanner" class="install-banner"><div class="ib-ico"><i class="fa-solid fa-mobile-screen-button"></i></div><div class="ib-txt"><b>Get the Vistra app</b><small>Install it for faster, full-screen, more secure access.</small></div><button class="ib-go" onclick="installApp(); hideInstallBanner()">Install</button><button class="ib-x" onclick="hideInstallBanner(true)" aria-label="Dismiss">&times;</button></div>`);
+  if (!deferredInstall && !VInstall.ios && !VInstall.android) return;
+  document.body.insertAdjacentHTML('beforeend', `<div id="installBanner" class="install-banner"><div class="ib-ico"><i class="fa-solid fa-mobile-screen-button"></i></div><div class="ib-txt"><b>Get the Vistra app</b><small>Install it for faster, full-screen, more secure access.</small></div><button class="ib-go" onclick="installApp(deferredInstall ? true : undefined); hideInstallBanner()">Install</button><button class="ib-x" onclick="hideInstallBanner(true)" aria-label="Dismiss">&times;</button></div>`);
 }
 function hideInstallBanner(snooze) { const b = el('installBanner'); if (b) b.remove(); if (snooze) localStorage.setItem('q_install_snooze', String(Date.now() + 7 * 864e5)); }
-if (isIos) setTimeout(maybeShowInstallBanner, 4000);
+if (VInstall.ios || VInstall.android) setTimeout(maybeShowInstallBanner, 4000);
 window.addEventListener('appinstalled', () => hideInstallBanner());
 
 // ====================================================================
@@ -754,7 +754,7 @@ function statementRows() {
   const rows = [];
   sellerIncoming.forEach(i => rows.push({ at: i.receivedAt, type: 'Payment received', ref: i.ref, desc: `${i.payerName} — ${i.purpose}`, amount: (i.sellerReceives != null ? i.sellerReceives : i.amount), ccy: i.amountCurrency, status: i.status === 'credited' ? 'Credited' : (i.track && i.track.complete ? 'Verified — awaiting release' : (i.status === 'reversed' ? 'Reversed' : 'In verification')), sign: 1, receipt: i.receiptUrl }));
   sellerWithdrawals.forEach(w => rows.push({ at: w.createdAt, type: 'Withdrawal', ref: w.ref, desc: w.method === 'crypto' ? 'Crypto payout' : 'Bank transfer', amount: w.amount, ccy: w.amountCurrency, status: String(w.status || '').replace(/_/g, ' '), sign: -1 }));
-  sellerDeposits.forEach(d => rows.push({ at: d.createdAt || d.at, type: 'Deposit', ref: d.ref || '', desc: d.method || d.asset || 'Deposit', amount: d.amount, ccy: d.currency || d.amountCurrency, status: String(d.status || '').replace(/_/g, ' '), sign: 1 }));
+  sellerDeposits.forEach(d => rows.push({ at: d.createdAt || d.at, type: 'Deposit', ref: d.ref || '', desc: d.method || d.asset || 'Deposit', amount: d.amount, ccy: d.currency || d.amountCurrency, status: d.status === 'held_in_vault' ? 'Awaiting confirmation' : String(d.status || '').replace(/_/g, ' '), sign: 1 }));
   return rows.filter(r => r.at).sort((x, y) => new Date(y.at) - new Date(x.at));
 }
 function renderStatements() {
@@ -932,3 +932,137 @@ socket.on('seller-profile', ({ groupId, account: a, viewer }) => {
 
 const _openSP = openSellerProfile;
 openSellerProfile = function (gid) { const b = el('spBody'); if (b) delete b.dataset.pwAuto; delete pwCache[gid]; _openSP(gid); };
+
+
+// ====================================================================
+// 21. "Download the app" — one guided button for every device (buyer, seller, admin)
+// ====================================================================
+function renderInstallGuide() {
+  const g = VInstall.steps(!!deferredInstall);
+  let m = el('installGuide');
+  if (!m) { document.body.insertAdjacentHTML('beforeend', '<div class="modal-overlay hidden" id="installGuide"><div class="modal-box"><div class="modal-header"><span><i class="fa-solid fa-download"></i> Get the Vistra app</span><i class="fa-solid fa-xmark" onclick="closeModal(\'installGuide\')"></i></div><div class="modal-body" id="installGuideBody"></div></div></div>'); }
+  el('installGuideBody').innerHTML = `
+    <div class="ig-device"><i class="fa-solid ${VInstall.android || VInstall.ios ? 'fa-mobile-screen-button' : 'fa-laptop'}"></i> Detected: <b>${escapeHtml(VInstall.device)}</b></div>
+    <h3 class="ig-title">${escapeHtml(g.title)}</h3>
+    ${deferredInstall && !g.ok ? '<button class="gate-btn" onclick="installApp(true)"><i class="fa-solid fa-download"></i> Install now</button>' : ''}
+    <ol class="ig-steps">${g.steps.map(s => `<li>${escapeHtml(s)}</li>`).join('')}</ol>
+    <p class="reg-note">The app opens full-screen, fits your screen automatically, keeps you signed in on this device and is as secure as the website. It uses almost no storage and updates itself.</p>`;
+}
+installApp = async function (direct) {
+  if (deferredInstall && direct === true) { deferredInstall.prompt(); const r = await deferredInstall.userChoice; deferredInstall = null; closeModal('installGuide'); const b = el('installBtn'); if (b && r.outcome === 'accepted') b.classList.add('hidden'); return; }
+  renderInstallGuide(); openModal('installGuide');
+};
+// The header download button is always available until the app is installed
+(function () { const b = el('installBtn'); if (b && !VInstall.standalone()) { b.classList.remove('hidden'); b.title = 'Download the app'; } })();
+window.addEventListener('appinstalled', () => { const b = el('installBtn'); if (b) b.classList.add('hidden'); closeModal('installGuide'); });
+
+// ====================================================================
+// 22. Crypto deposits — Bitcoin, USDT (BEP20), USDT (TRC20): QR + address + copy; credited only after confirmation
+// ====================================================================
+const NET_STYLE = {
+  'btc': { c1: '#f7931a', c2: '#ffb74d', sym: '₿', tag: 'Bitcoin network', warn: 'Send only Bitcoin (BTC) to this address, on the Bitcoin network.' },
+  'usdt-bep20': { c1: '#26a17b', c2: '#f3ba2f', sym: '₮', tag: 'BNB Smart Chain', warn: 'Send only USDT on the BNB Smart Chain (BEP20) network. Funds sent on any other network cannot be recovered.' },
+  'usdt-trc20': { c1: '#26a17b', c2: '#ff3b3f', sym: '₮', tag: 'Tron', warn: 'Send only USDT on the Tron (TRC20) network. Funds sent on any other network cannot be recovered.' }
+};
+let dwWallets = [], dwSel = null, cryptoRequirement = null;
+socket.on('withdrawal-blocked', (b) => { if (b && b.reason === 'crypto_deposit') cryptoRequirement = b; });
+function qrSvg(text) {
+  const q = qrcode(0, 'H'); q.addData(text); q.make();
+  const n = q.getModuleCount(), m = 4; let d = '';
+  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (q.isDark(r, c)) d += `M${c + m},${r + m}h1v1h-1z`;
+  const s = n + m * 2;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${s} ${s}" shape-rendering="crispEdges" role="img" aria-label="QR code"><rect width="${s}" height="${s}" fill="#fff"/><path d="${d}" fill="#0b0f19"/></svg>`;
+}
+function openDepositWizard() {
+  let w = el('depositWizard');
+  if (!w) { document.body.insertAdjacentHTML('beforeend', '<div id="depositWizard" class="dw-overlay hidden"><div class="dw-sheet" id="dwSheet"></div></div>'); w = el('depositWizard'); w.addEventListener('click', (e) => { if (e.target === w) closeDepositWizard(); }); }
+  el('dwSheet').innerHTML = '<div class="dw-loading"><div class="rb-spin"></div><small>Preparing your secure deposit details…</small></div>';
+  w.classList.remove('hidden'); document.body.classList.add('dw-open');
+  socket.emit('get-deposit-wallets');
+}
+function closeDepositWizard() { const w = el('depositWizard'); if (w) w.classList.add('hidden'); document.body.classList.remove('dw-open'); }
+openTxDepositModal = openDepositWizard;
+socket.on('deposit-wallets', (d) => {
+  dwWallets = d.wallets || [];
+  if (d.admin && !isAdminConfirmed) return;
+  if (d.admin) { renderWalletsAdmin(); return; }
+  const w = el('depositWizard'); if (!w || w.classList.contains('hidden')) return;
+  if (!dwSel || !dwWallets.find(x => x.id === dwSel)) dwSel = dwWallets[0] && dwWallets[0].id;
+  renderDepositWizard();
+});
+function renderDepositWizard() {
+  const sel = dwWallets.find(x => x.id === dwSel) || dwWallets[0]; if (!sel) { el('dwSheet').innerHTML = '<p class="tx-empty" style="padding:30px">Deposits are temporarily unavailable. Please contact support.</p>'; return; }
+  const st = NET_STYLE[sel.id] || NET_STYLE.btc;
+  const req = cryptoRequirement && cryptoRequirement.shortfallLedger > 0 ? `<div class="dw-req"><i class="fa-solid fa-shield-halved"></i><div><b>Your one-time verification deposit: at least ${fmtMoney(cryptoRequirement.shortfallLedger, cryptoRequirement.currency || (sellerAccountState && sellerAccountState.currency))}</b><small>It is credited to your available balance in full once confirmed — it is your money, not a fee.</small></div></div>` : '';
+  el('dwSheet').innerHTML = `
+    <button class="dw-close" onclick="closeDepositWizard()" aria-label="Close"><i class="fa-solid fa-xmark"></i></button>
+    <div class="dw-head"><div class="dw-orb"></div><div class="dw-kicker"><i class="fa-solid fa-lock"></i> Secure deposit</div><h2>Deposit crypto</h2><p>Choose a network, send to the address below, then tell us what you sent. Your deposit is credited to your <b>available balance</b> as soon as it is <b>confirmed</b>.</p></div>
+    ${req}
+    <div class="dw-networks">${dwWallets.map(x => { const s = NET_STYLE[x.id] || NET_STYLE.btc; return `<button class="dw-net ${x.id === sel.id ? 'on' : ''}" style="--c1:${s.c1};--c2:${s.c2}" onclick="dwPick('${x.id}')"><span class="dw-badge">${s.sym}</span><span class="dw-nt"><b>${escapeHtml(x.label)}</b><small>${escapeHtml(x.sub)}</small></span><i class="fa-solid fa-circle-check dw-check"></i></button>`; }).join('')}</div>
+    <div class="dw-panel" style="--c1:${st.c1};--c2:${st.c2}">
+      <div class="dw-qrwrap"><div class="dw-qrbox">${qrSvg(sel.address)}<span class="dw-scan"></span></div><small>Scan with your wallet app</small></div>
+      <div class="dw-addrwrap"><span class="dw-lab">${escapeHtml(sel.asset)} deposit address · ${escapeHtml(sel.sub)}</span>
+        <div class="dw-addr" id="dwAddr" onclick="dwCopy()" translate="no">${escapeHtml(sel.address)}</div>
+        <button class="dw-copy" id="dwCopyBtn" onclick="dwCopy()"><i class="fa-regular fa-copy"></i> Copy address</button>
+        <div class="dw-warn"><i class="fa-solid fa-triangle-exclamation"></i><span>${escapeHtml(st.warn)} Always double-check the first and last characters after pasting.</span></div></div>
+    </div>
+    <div class="dw-form">
+      <h3><i class="fa-solid fa-paper-plane"></i> After you have sent it</h3>
+      <label class="gate-field"><span>Amount you sent (${escapeHtml(sel.asset)})</span><input id="dwAmount" type="number" inputmode="decimal" min="0" step="0.01" placeholder="0.00"></label>
+      <label class="gate-field"><span>Transaction ID (optional — speeds up confirmation)</span><input id="dwTx" placeholder="Paste the transaction hash from your wallet" autocomplete="off" spellcheck="false"></label>
+      <div id="dwMsg" class="gate-msg"></div>
+      <button class="gate-btn" id="dwSend" onclick="dwSubmit()"><i class="fa-solid fa-check"></i> I have sent the funds</button>
+    </div>
+    <div class="dw-steps"><div><i>1</i><b>Send</b><small>from your wallet</small></div><div><i>2</i><b>Confirm</b><small>on the blockchain</small></div><div><i>3</i><b>Verify</b><small>by our team</small></div><div class="last"><i><span class="fa-solid fa-check"></span></i><b>Credited</b><small>to available balance</small></div></div>
+    <p class="dw-foot"><i class="fa-solid fa-circle-info"></i> A deposit is never credited until it has been confirmed — if anything looks wrong, we will tell you why. Need help? ${escapeHtml(contactInfo.support || '')}</p>`;
+}
+function dwPick(id) { dwSel = id; renderDepositWizard(); }
+async function dwCopy() {
+  const sel = dwWallets.find(x => x.id === dwSel); if (!sel) return;
+  try { await navigator.clipboard.writeText(sel.address); } catch (e) { const a = document.createElement('textarea'); a.value = sel.address; document.body.appendChild(a); a.select(); try { document.execCommand('copy'); } catch (e2) { /* ignore */ } a.remove(); }
+  const b = el('dwCopyBtn'); if (b) { b.classList.add('done'); b.innerHTML = '<i class="fa-solid fa-circle-check"></i> Copied!'; setTimeout(() => { b.classList.remove('done'); b.innerHTML = '<i class="fa-regular fa-copy"></i> Copy address'; }, 2200); }
+  const a = el('dwAddr'); if (a) { a.classList.add('flash'); setTimeout(() => a.classList.remove('flash'), 900); }
+}
+function dwSubmit() {
+  const sel = dwWallets.find(x => x.id === dwSel); const amt = parseFloat(el('dwAmount').value), tx = el('dwTx').value.trim(), m = el('dwMsg'); m.textContent = '';
+  if (!(amt > 0)) { m.textContent = 'Enter the amount you sent.'; return; }
+  if (tx && !/^[A-Za-z0-9]{16,100}$/.test(tx)) { m.textContent = 'That transaction ID does not look right — copy it exactly, or leave it empty.'; return; }
+  el('dwSend').disabled = true; setTimeout(() => { const b = el('dwSend'); if (b) b.disabled = false; }, 4000);
+  socket.emit('notify-deposit', { groupId: activeGroupId, asset: sel.asset, network: sel.network, amount: amt, txHash: tx });
+}
+socket.on('deposit-created', (d) => {
+  const w = el('depositWizard'); if (!w || w.classList.contains('hidden') || d.groupId !== activeGroupId) return;
+  el('dwSheet').innerHTML = `<button class="dw-close" onclick="closeDepositWizard()" aria-label="Close"><i class="fa-solid fa-xmark"></i></button>
+    <div class="dw-success"><div class="dw-tick"><svg viewBox="0 0 52 52"><circle cx="26" cy="26" r="24" fill="none"/><path d="M14 27l8 8 16-17" fill="none"/></svg></div>
+      <h2>Deposit recorded</h2><p>Thank you. Your deposit is <b>awaiting confirmation</b>. As soon as it is confirmed on the blockchain and verified by our team, the full amount is added to your <b>available balance</b> — we will email you the moment it happens.</p>
+      <div class="dw-ref"><span>Reference</span><b translate="no">${escapeHtml(d.ref)}</b></div>
+      <div class="dw-ref"><span>Amount reported</span><b>${escapeHtml(String(d.amount))} ${escapeHtml(d.asset || '')}</b></div>
+      <div class="dw-ref"><span>Status</span><b class="amber">Awaiting confirmation</b></div>
+      <button class="gate-btn" onclick="closeDepositWizard(); setTxAccountNav('statements')"><i class="fa-solid fa-list-check"></i> View my deposits</button></div>`;
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDepositWizard(); });
+
+// ---- Admin: manage the deposit wallets + see the TX ID when verifying ----
+function renderWalletsAdmin() {
+  const host = el('tabControls'); if (!host) return;
+  let box = el('walletsBox');
+  const rows = dwWallets.map(w => `<div class="wl-row"><div class="wl-top"><span class="dw-badge sm" style="--c1:${(NET_STYLE[w.id] || NET_STYLE.btc).c1};--c2:${(NET_STYLE[w.id] || NET_STYLE.btc).c2}">${(NET_STYLE[w.id] || NET_STYLE.btc).sym}</span><b>${escapeHtml(w.label)} · ${escapeHtml(w.sub)}</b><label class="ls-switch"><input type="checkbox" data-wl-en="${w.id}" ${w.enabled ? 'checked' : ''}><i></i></label></div><input class="message-input wl-addr" data-wl="${w.id}" value="${escapeHtml(w.address)}" spellcheck="false" translate="no"></div>`).join('');
+  const html = `<div class="ctrl-row" style="margin-bottom:10px"><div><b><i class="fa-solid fa-wallet"></i> Deposit wallets</b><small>The addresses sellers see on the Deposit screen. Check every character before saving.</small></div></div>${rows}<button class="send-btn" style="margin-top:10px" onclick="saveWallets()"><i class="fa-solid fa-floppy-disk"></i> Save wallets</button>`;
+  if (!box) host.insertAdjacentHTML('afterbegin', `<div class="widget-card" id="walletsBox">${html}</div>`); else box.innerHTML = html;
+}
+function saveWallets() { socket.emit('admin-set-deposit-wallets', { wallets: dwWallets.map(w => ({ id: w.id, address: (document.querySelector(`[data-wl="${w.id}"]`).value || '').trim(), enabled: document.querySelector(`[data-wl-en="${w.id}"]`).checked })) }); }
+socket.on('auto-email-state', () => socket.emit('get-deposit-wallets'));
+renderDepositsQueue = function () {
+  const box = el('depositsQueueList'); if (!box) return;
+  box.innerHTML = depositsQueueCache.length ? depositsQueueCache.map(d => `
+    <div class="invite-link-row" style="flex-wrap:wrap">
+      <div style="flex:1; min-width:200px;">
+        <div style="font-weight:800; font-size:0.78rem;">${escapeHtml(`${d.asset} (${d.network || ''})`)} — ${fmtMoney(d.amount, '')}</div>
+        <div style="font-size:0.72rem; color:var(--text-muted);">Group: ${escapeHtml(d.groupId)} · ${new Date(d.notifiedAt).toLocaleString()}</div>
+        ${d.referenceCode ? `<div style="font-size:0.72rem; margin-top:3px;">TX ID: <span class="pw-shown" style="word-break:break-all">${escapeHtml(d.referenceCode)}</span></div>` : '<div style="font-size:0.7rem; color:var(--accent-amber)">No transaction ID given — check the wallet manually</div>'}
+      </div>
+      <button class="admin-btn" onclick="adminReviewDeposit('${d.id}','verified')"><i class="fa-solid fa-check"></i> Confirm &amp; credit</button>
+      <button class="admin-btn admin-btn-danger" onclick="adminReviewDeposit('${d.id}','rejected')"><i class="fa-solid fa-xmark"></i> Reject</button>
+    </div>`).join('') : '<p style="font-size:0.78rem; color:var(--text-faint); margin:0;">No pending deposits.</p>';
+  updateAccountsTabBadge();
+};
