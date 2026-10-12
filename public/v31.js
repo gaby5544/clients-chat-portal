@@ -1350,7 +1350,7 @@ txKycWizardNext = function () {
 // ====================================================================
 let deferredInstall = null;
 if ('serviceWorker' in navigator) window.addEventListener('load', () => { navigator.serviceWorker.register('/sw.js').catch(() => {}); });
-const standalone = () => window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+const standalone = () => /VistraApp\//.test(navigator.userAgent) || window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
 window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferredInstall = e; if (!standalone()) el('installBtn').classList.remove('hidden'); });
 window.addEventListener('appinstalled', () => { deferredInstall = null; el('installBtn').classList.add('hidden'); toast('App installed.'); });
 const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent) && !window.MSStream;

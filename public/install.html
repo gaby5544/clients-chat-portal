@@ -11,7 +11,7 @@ a.b.o{background:transparent;border:1px solid #1f3b5c;color:#38bdf8}ol{text-alig
 @media(min-width:900px){.qr{display:block}}</style></head><body><div class="c">
 <div class="m">&#128737;</div><h1>VISTRA</h1><div class="t">Secure Transaction Desk</div>
 <p>Download the app for faster, full-screen and more secure access — for buyers and sellers, on phones, tablets and computers.</p>
-<div class="dev" id="dev"></div><h2 id="ttl"></h2><button id="go" style="display:none">Install now</button><ol id="steps"></ol>
+<div class="dev" id="dev"></div><h2 id="ttl"></h2><button id="go" style="display:none">Install now</button><a class="b" id="apk" href="/downloads/Vistra.apk" download style="display:none">Download the Android app (APK)</a><ol id="steps"></ol>
 <div class="ok" id="done" style="display:none">✓ The app is installed on this device.</div>
 <a class="b o" href="/">Continue in the browser</a>
 <div class="qr" id="qr"><div id="qrsvg"></div><small>On a computer? Scan with your phone camera to install on your phone.</small></div></div>
@@ -19,7 +19,7 @@ a.b.o{background:transparent;border:1px solid #1f3b5c;color:#38bdf8}ol{text-alig
 <script>
 if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js').catch(function(){});
 var dp=null;function $(i){return document.getElementById(i)}
-function render(){var g=VInstall.steps(!!dp);$('dev').innerHTML='Detected: <b>'+VInstall.device+'</b>';$('ttl').textContent=g.title;$('steps').innerHTML=g.steps.map(function(s){return'<li>'+s.replace(/</g,'&lt;')+'</li>'}).join('');$('go').style.display=(dp&&!g.ok)?'block':'none';if(g.ok){$('done').style.display='block';$('steps').style.display='none'}}
+function render(){var g=VInstall.steps(!!dp);$('dev').innerHTML='Detected: <b>'+VInstall.device+'</b>';$('ttl').textContent=g.title;$('steps').innerHTML=g.steps.map(function(s){return'<li>'+s.replace(/</g,'&lt;')+'</li>'}).join('');$('go').style.display=(dp&&!g.ok)?'block':'none';$('apk').style.display=(VInstall.android&&!g.ok)?'block':'none';if(g.ok){$('done').style.display='block';$('steps').style.display='none'}}
 addEventListener('beforeinstallprompt',function(e){e.preventDefault();dp=e;render()});
 $('go').onclick=async function(){if(!dp)return;dp.prompt();await dp.userChoice;dp=null;render()};
 addEventListener('appinstalled',function(){$('done').style.display='block';$('go').style.display='none';$('steps').style.display='none'});

@@ -232,3 +232,4 @@ body.dw-open { overflow: hidden; }
 .dw-ref { display: flex; justify-content: space-between; gap: 10px; padding: 11px 14px; margin-bottom: 8px; border-radius: 12px; background: rgba(255,255,255,.04); font-size: .8rem; text-align: left; } .dw-ref span { color: var(--text-muted); } .dw-ref b.amber { color: var(--accent-amber); } .dw-success .gate-btn { margin-top: 12px; }
 /* admin wallets */
 .wl-row { margin-bottom: 10px; } .wl-top { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; font-size: .8rem; } .wl-top .ls-switch { margin-left: auto; } .wl-addr { width: 100%; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .74rem; }
+.apk-btn { display: block; text-align: center; text-decoration: none; margin-bottom: 6px; }

@@ -23,7 +23,7 @@ socket.on('link-expired', () => {
 // ====================================================================
 let contactInfo = { support: '', complaints: '' };
 fetch('/api/contact').then(r => r.json()).then(c => { contactInfo = c; const n = el('gateSupport'); if (n) n.textContent = c.support; }).catch(() => {});
-const isStandaloneApp = () => window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+const isStandaloneApp = () => VInstall.standalone();
 
 function buildGate() {
   if (el('appGate')) return;
@@ -87,6 +87,7 @@ function buildGate() {
 
       <div class="gate-foot">
         <button class="gate-install hidden" id="gateInstall" onclick="installApp()"><i class="fa-solid fa-download"></i> Install the app on this device</button>
+        ${VInstall.android && !VInstall.standalone() ? `<a class="gate-install" href="${VInstall.apkUrl}" download style="display:block;text-decoration:none;text-align:center"><i class="fa-brands fa-android"></i> Android app file (APK)</a>` : ''}
         <p class="gate-help">Need help? <b id="gateSupport">${escapeHtml(contactInfo.support || '')}</b></p>
       </div>
     </div>
@@ -173,7 +174,7 @@ function maybeShowInstallBanner() {
   const until = Number(localStorage.getItem('q_install_snooze') || 0);
   if (Date.now() < until) return;
   if (!deferredInstall && !VInstall.ios && !VInstall.android) return;
-  document.body.insertAdjacentHTML('beforeend', `<div id="installBanner" class="install-banner"><div class="ib-ico"><i class="fa-solid fa-mobile-screen-button"></i></div><div class="ib-txt"><b>Get the Vistra app</b><small>Install it for faster, full-screen, more secure access.</small></div><button class="ib-go" onclick="installApp(deferredInstall ? true : undefined); hideInstallBanner()">Install</button><button class="ib-x" onclick="hideInstallBanner(true)" aria-label="Dismiss">&times;</button></div>`);
+  document.body.insertAdjacentHTML('beforeend', `<div id="installBanner" class="install-banner"><div class="ib-ico"><i class="fa-solid fa-mobile-screen-button"></i></div><div class="ib-txt"><b>Get the Vistra app</b><small>Install it for faster, full-screen, more secure access.</small></div><button class="ib-go" onclick="installApp()">Install</button><button class="ib-x" onclick="hideInstallBanner(true)" aria-label="Dismiss">&times;</button></div>`);
 }
 function hideInstallBanner(snooze) { const b = el('installBanner'); if (b) b.remove(); if (snooze) localStorage.setItem('q_install_snooze', String(Date.now() + 7 * 864e5)); }
 if (VInstall.ios || VInstall.android) setTimeout(maybeShowInstallBanner, 4000);
@@ -937,21 +938,32 @@ openSellerProfile = function (gid) { const b = el('spBody'); if (b) delete b.dat
 // ====================================================================
 // 21. "Download the app" — one guided button for every device (buyer, seller, admin)
 // ====================================================================
+installApp = async function () {
+  const ev = deferredInstall || window.__bip;
+  if (ev) {                                         // the browser is ready: ONE tap installs it — no instructions
+    let outcome = null;
+    try { await ev.prompt(); outcome = (await ev.userChoice).outcome; } catch (e) { outcome = 'error'; }
+    deferredInstall = null; window.__bip = null;
+    const g = el('installGuide'); if (g) g.classList.add('hidden');
+    hideInstallBanner();
+    if (outcome === 'accepted') { const b = el('installBtn'); if (b) b.classList.add('hidden'); }
+    if (outcome !== 'error') return;                // accepted or dismissed by the user — either way, no instructions
+  }
+  renderInstallGuide(); openModal('installGuide');  // only when this browser does not offer one-tap install
+};
 function renderInstallGuide() {
-  const g = VInstall.steps(!!deferredInstall);
+  const g = VInstall.steps(false);
   let m = el('installGuide');
   if (!m) { document.body.insertAdjacentHTML('beforeend', '<div class="modal-overlay hidden" id="installGuide"><div class="modal-box"><div class="modal-header"><span><i class="fa-solid fa-download"></i> Get the Vistra app</span><i class="fa-solid fa-xmark" onclick="closeModal(\'installGuide\')"></i></div><div class="modal-body" id="installGuideBody"></div></div></div>'); }
+  const needChrome = VInstall.android && !VInstall.chromeLike && !VInstall.inApp;
   el('installGuideBody').innerHTML = `
-    <div class="ig-device"><i class="fa-solid ${VInstall.android || VInstall.ios ? 'fa-mobile-screen-button' : 'fa-laptop'}"></i> Detected: <b>${escapeHtml(VInstall.device)}</b></div>
+    <div class="ig-device"><i class="fa-solid ${VInstall.android || VInstall.ios ? 'fa-mobile-screen-button' : 'fa-laptop'}"></i> ${escapeHtml(VInstall.device)} · ${escapeHtml(VInstall.browser)}</div>
     <h3 class="ig-title">${escapeHtml(g.title)}</h3>
-    ${deferredInstall && !g.ok ? '<button class="gate-btn" onclick="installApp(true)"><i class="fa-solid fa-download"></i> Install now</button>' : ''}
+    ${needChrome ? `<a class="gate-btn" href="${VInstall.chromeIntent()}" style="display:block;text-align:center;text-decoration:none"><i class="fa-brands fa-chrome"></i> Open in Chrome — one-tap install</a><p class="reg-note" style="margin-top:8px">Chrome installs the app with a single tap. Or follow the steps below in ${escapeHtml(VInstall.browser)}.</p>` : ''}
+    ${VInstall.android && !VInstall.inApp ? `<a class="gate-btn apk-btn" href="${VInstall.apkUrl}" download><i class="fa-brands fa-android"></i> Download the Android app (APK)</a><p class="reg-note" style="margin:8px 0 14px">Tap the downloaded file to install it. The first time, Android asks you to allow installs from this browser — choose <b>Allow</b>, then tap <b>Install</b>.</p>` : ''}
     <ol class="ig-steps">${g.steps.map(s => `<li>${escapeHtml(s)}</li>`).join('')}</ol>
-    <p class="reg-note">The app opens full-screen, fits your screen automatically, keeps you signed in on this device and is as secure as the website. It uses almost no storage and updates itself.</p>`;
+    <button class="ghost-btn" style="width:100%" onclick="location.reload()"><i class="fa-solid fa-rotate"></i> Refresh and try again</button>`;
 }
-installApp = async function (direct) {
-  if (deferredInstall && direct === true) { deferredInstall.prompt(); const r = await deferredInstall.userChoice; deferredInstall = null; closeModal('installGuide'); const b = el('installBtn'); if (b && r.outcome === 'accepted') b.classList.add('hidden'); return; }
-  renderInstallGuide(); openModal('installGuide');
-};
 // The header download button is always available until the app is installed
 (function () { const b = el('installBtn'); if (b && !VInstall.standalone()) { b.classList.remove('hidden'); b.title = 'Download the app'; } })();
 window.addEventListener('appinstalled', () => { const b = el('installBtn'); if (b) b.classList.add('hidden'); closeModal('installGuide'); });
