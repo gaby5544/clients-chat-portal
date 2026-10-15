@@ -86,15 +86,15 @@ function buildGate() {
       <div class="gv hidden" id="gvPick"><h1>Choose your account</h1><p class="gate-sub">This email has more than one Transaction Account.</p><div id="gatePickList"></div></div>
 
       <div class="gate-foot">
-        <button class="gate-install hidden" id="gateInstall" onclick="installApp()"><i class="fa-solid fa-download"></i> Install the app on this device</button>
-        ${VInstall.android && !VInstall.standalone() ? `<a class="gate-install" href="${VInstall.apkUrl}" download style="display:block;text-decoration:none;text-align:center"><i class="fa-brands fa-android"></i> Android app file (APK)</a>` : ''}
+        <button class="gate-install hidden" id="gateInstall" onclick="installApp()"><i class="fa-solid fa-download"></i> Download the app</button>
+        <button class="gate-link" onclick="showIntro()" style="margin:0 auto 8px"><i class="fa-solid fa-circle-play"></i> Take the tour</button>
         <p class="gate-help">Need help? <b id="gateSupport">${escapeHtml(contactInfo.support || '')}</b></p>
       </div>
     </div>
   </div>`);
   ['gateEmail', 'gatePassword'].forEach(id => el(id).addEventListener('keydown', e => { if (e.key === 'Enter') gateLogin(); }));
   el('gcEmail').addEventListener('keydown', e => { if (e.key === 'Enter') gateCreateNext(); });
-  if (!isStandaloneApp()) el('gateInstall').classList.remove('hidden');
+  if (!isStandaloneApp() && VInstall.platform !== 'other') el('gateInstall').classList.remove('hidden');
   runSplash(seenSplash);
 }
 function gateShow(v) {
@@ -104,10 +104,10 @@ function gateShow(v) {
 }
 function runSplash(skip) {
   const sp = el('appSplash'); if (!sp) return;
-  if (skip) { sp.remove(); return; }
+  if (skip) { sp.remove(); setTimeout(maybeIntro, 0); return; }   // after the whole script has loaded
   const msgs = ['Establishing secure connection…', 'Verifying device integrity…', 'Preparing your transaction desk…'];
   let i = 0; const m = el('spMsg'); const t = setInterval(() => { i = Math.min(i + 1, msgs.length - 1); if (m) m.textContent = msgs[i]; }, 950);
-  setTimeout(() => { clearInterval(t); sp.classList.add('out'); sessionStorage.setItem('q_splash_done', '1'); setTimeout(() => sp.remove(), 700); }, 3100);
+  setTimeout(() => { clearInterval(t); sp.classList.add('out'); sessionStorage.setItem('q_splash_done', '1'); maybeIntro(); setTimeout(() => sp.remove(), 700); }, 3100);
 }
 let gcRole = 'BUYER', gcEmailVal = '';
 function gateStartCreate(role) {
@@ -173,11 +173,11 @@ function maybeShowInstallBanner() {
   if (isStandaloneApp() || window.__holdJoin || el('installBanner')) return;
   const until = Number(localStorage.getItem('q_install_snooze') || 0);
   if (Date.now() < until) return;
-  if (!deferredInstall && !VInstall.ios && !VInstall.android) return;
-  document.body.insertAdjacentHTML('beforeend', `<div id="installBanner" class="install-banner"><div class="ib-ico"><i class="fa-solid fa-mobile-screen-button"></i></div><div class="ib-txt"><b>Get the Vistra app</b><small>Install it for faster, full-screen, more secure access.</small></div><button class="ib-go" onclick="installApp()">Install</button><button class="ib-x" onclick="hideInstallBanner(true)" aria-label="Dismiss">&times;</button></div>`);
+  if (!VInstall.file() && !VInstall.ios) return;
+  document.body.insertAdjacentHTML('beforeend', `<div id="installBanner" class="install-banner"><div class="ib-ico"><i class="fa-solid fa-mobile-screen-button"></i></div><div class="ib-txt"><b>Get the Vistra app</b><small>Faster, full-screen and more secure.</small></div><button class="ib-go" onclick="installApp()">Download</button><button class="ib-x" onclick="hideInstallBanner(true)" aria-label="Dismiss">&times;</button></div>`);
 }
 function hideInstallBanner(snooze) { const b = el('installBanner'); if (b) b.remove(); if (snooze) localStorage.setItem('q_install_snooze', String(Date.now() + 7 * 864e5)); }
-if (VInstall.ios || VInstall.android) setTimeout(maybeShowInstallBanner, 4000);
+if (VInstall.file() || VInstall.ios) setTimeout(maybeShowInstallBanner, 4000);
 window.addEventListener('appinstalled', () => hideInstallBanner());
 
 // ====================================================================
@@ -936,37 +936,30 @@ openSellerProfile = function (gid) { const b = el('spBody'); if (b) delete b.dat
 
 
 // ====================================================================
-// 21. "Download the app" — one guided button for every device (buyer, seller, admin)
+// 21. "Download the app" — a real file where the platform allows it (Android APK, Windows installer).
+//     No "Add to Chrome" / "Install app" prompts anywhere.
 // ====================================================================
-installApp = async function () {
-  const ev = deferredInstall || window.__bip;
-  if (ev) {                                         // the browser is ready: ONE tap installs it — no instructions
-    let outcome = null;
-    try { await ev.prompt(); outcome = (await ev.userChoice).outcome; } catch (e) { outcome = 'error'; }
-    deferredInstall = null; window.__bip = null;
-    const g = el('installGuide'); if (g) g.classList.add('hidden');
-    hideInstallBanner();
-    if (outcome === 'accepted') { const b = el('installBtn'); if (b) b.classList.add('hidden'); }
-    if (outcome !== 'error') return;                // accepted or dismissed by the user — either way, no instructions
-  }
-  renderInstallGuide(); openModal('installGuide');  // only when this browser does not offer one-tap install
-};
-function renderInstallGuide() {
-  const g = VInstall.steps(false);
-  let m = el('installGuide');
-  if (!m) { document.body.insertAdjacentHTML('beforeend', '<div class="modal-overlay hidden" id="installGuide"><div class="modal-box"><div class="modal-header"><span><i class="fa-solid fa-download"></i> Get the Vistra app</span><i class="fa-solid fa-xmark" onclick="closeModal(\'installGuide\')"></i></div><div class="modal-body" id="installGuideBody"></div></div></div>'); }
-  const needChrome = VInstall.android && !VInstall.chromeLike && !VInstall.inApp;
+function triggerDownload(f) { const a = document.createElement('a'); a.href = f.url; a.download = f.name; document.body.appendChild(a); a.click(); a.remove(); }
+function renderInstallGuide(started) {
+  const f = VInstall.file(), p = VInstall.platform;
+  if (!el('installGuide')) document.body.insertAdjacentHTML('beforeend', '<div class="modal-overlay hidden" id="installGuide"><div class="modal-box"><div class="modal-header"><span><i class="fa-solid fa-download"></i> Get the Vistra app</span><i class="fa-solid fa-xmark" onclick="closeModal(\'installGuide\')"></i></div><div class="modal-body" id="installGuideBody"></div></div></div>');
+  const icon = { android: 'fa-android', windows: 'fa-windows', ios: 'fa-apple', mac: 'fa-apple' }[p] || 'fa-laptop';
   el('installGuideBody').innerHTML = `
-    <div class="ig-device"><i class="fa-solid ${VInstall.android || VInstall.ios ? 'fa-mobile-screen-button' : 'fa-laptop'}"></i> ${escapeHtml(VInstall.device)} · ${escapeHtml(VInstall.browser)}</div>
-    <h3 class="ig-title">${escapeHtml(g.title)}</h3>
-    ${needChrome ? `<a class="gate-btn" href="${VInstall.chromeIntent()}" style="display:block;text-align:center;text-decoration:none"><i class="fa-brands fa-chrome"></i> Open in Chrome — one-tap install</a><p class="reg-note" style="margin-top:8px">Chrome installs the app with a single tap. Or follow the steps below in ${escapeHtml(VInstall.browser)}.</p>` : ''}
-    ${VInstall.android && !VInstall.inApp ? `<a class="gate-btn apk-btn" href="${VInstall.apkUrl}" download><i class="fa-brands fa-android"></i> Download the Android app (APK)</a><p class="reg-note" style="margin:8px 0 14px">Tap the downloaded file to install it. The first time, Android asks you to allow installs from this browser — choose <b>Allow</b>, then tap <b>Install</b>.</p>` : ''}
-    <ol class="ig-steps">${g.steps.map(s => `<li>${escapeHtml(s)}</li>`).join('')}</ol>
-    <button class="ghost-btn" style="width:100%" onclick="location.reload()"><i class="fa-solid fa-rotate"></i> Refresh and try again</button>`;
+    <div class="ig-hero"><div class="ig-appicon"><img src="/icon-192.png" alt="Vistra"></div><div><b>Vistra</b><small>Secure Transaction Desk</small></div></div>
+    ${f ? `<div class="ig-started"><i class="fa-solid fa-circle-check"></i><div><b>${started ? 'Your download has started' : 'Download ready'}</b><small>${escapeHtml(f.name)} · for ${escapeHtml(f.os)}</small></div></div>
+      <a class="gate-btn" href="${f.url}" download="${f.name}" style="display:block;text-align:center;text-decoration:none"><i class="fa-brands ${icon}"></i> ${started ? 'Download again' : f.label}</a>` : ''}
+    <h3 class="ig-title">${f ? 'Then install it in 3 steps' : (p === 'ios' ? 'Add Vistra to your iPhone / iPad' : 'Vistra on this device')}</h3>
+    <ol class="ig-steps">${VInstall.after().map(s => `<li>${escapeHtml(s)}</li>`).join('')}</ol>
+    ${f ? '<p class="reg-note">The app opens full-screen with its own icon, fits any screen, and is protected exactly like the website.</p>' : ''}`;
 }
-// The header download button is always available until the app is installed
-(function () { const b = el('installBtn'); if (b && !VInstall.standalone()) { b.classList.remove('hidden'); b.title = 'Download the app'; } })();
-window.addEventListener('appinstalled', () => { const b = el('installBtn'); if (b) b.classList.add('hidden'); closeModal('installGuide'); });
+installApp = function () {
+  if (VInstall.standalone()) return;
+  const f = VInstall.file();
+  if (f) triggerDownload(f);                         // the file starts downloading immediately
+  renderInstallGuide(!!f); openModal('installGuide');
+};
+// The download button is always available until the app is installed
+(function () { const b = el('installBtn'); if (b && !VInstall.standalone() && VInstall.platform !== 'other') { b.classList.remove('hidden'); b.title = 'Download the app'; } })();
 
 // ====================================================================
 // 22. Crypto deposits — Bitcoin, USDT (BEP20), USDT (TRC20): QR + address + copy; credited only after confirmation
@@ -1078,3 +1071,52 @@ renderDepositsQueue = function () {
     </div>`).join('') : '<p style="font-size:0.78rem; color:var(--text-faint); margin:0;">No pending deposits.</p>';
   updateAccountsTabBadge();
 };
+
+
+// ====================================================================
+// 23. Cinematic intro: four swipeable slides (skip any time). Shown the first time the app is opened.
+// ====================================================================
+const INTRO = [
+  { img: '/intro/intro-1.webp', c1: '#38bdf8', c2: '#8b5cf6', kicker: 'Welcome to Vistra', title: 'Trade with the world, securely', text: 'Buy and sell across borders with a trusted Desk guarding every step of your deal.' },
+  { img: '/intro/intro-2.webp', c1: '#f59e0b', c2: '#fb7185', kicker: 'Live tracking', title: 'Every payment, verified step by step', text: 'Follow six live verification stages and always know exactly where your money is.' },
+  { img: '/intro/intro-3.webp', c1: '#fb923c', c2: '#8b5cf6', kicker: 'Protected deals', title: 'Your deal, protected to the end', text: 'Goods and funds stay safe until both sides are satisfied — no surprises, no risk.' },
+  { img: '/intro/intro-4.webp', c1: '#fbbf24', c2: '#22d3a5', kicker: 'Your vault', title: 'Your money, in your own vault', text: 'Funds are secured in your personal vault, then released to your account. Withdraw to your bank or crypto whenever you need.' }
+];
+function maybeIntro() { if (localStorage.getItem('q_intro_done') !== '1') showIntro(); }
+function closeIntro(markDone) {
+  const o = el('appIntro'); if (!o) return;
+  if (markDone) localStorage.setItem('q_intro_done', '1');
+  o.classList.add('out'); document.removeEventListener('keydown', introKeys); setTimeout(() => o.remove(), 650);
+}
+function introKeys(e) { const t = el('introTrack'); if (!t) return; if (e.key === 'ArrowRight') introGo(1); else if (e.key === 'ArrowLeft') introGo(-1); else if (e.key === 'Escape') closeIntro(true); }
+function introIndex() { const t = el('introTrack'); return Math.max(0, Math.min(INTRO.length - 1, Math.round(t.scrollLeft / t.clientWidth))); }
+function introGo(d) { const t = el('introTrack'), i = introIndex() + d; if (i >= INTRO.length) return closeIntro(true); if (i < 0) return; t.scrollTo({ left: i * t.clientWidth, behavior: 'smooth' }); }
+function introSync() {
+  const i = introIndex(), last = i === INTRO.length - 1, s = INTRO[i];
+  document.querySelectorAll('.intro-slide').forEach((n, k) => n.classList.toggle('is-active', k === i));
+  document.querySelectorAll('.intro-dots i').forEach((n, k) => n.classList.toggle('on', k === i));
+  const o = el('appIntro'); o.style.setProperty('--c1', s.c1); o.style.setProperty('--c2', s.c2); o.classList.toggle('is-last', last);
+  el('introNext').innerHTML = last ? '<span>Get started</span><i class="fa-solid fa-arrow-right"></i>' : '<span>Next</span><i class="fa-solid fa-arrow-right"></i>';
+}
+function showIntro() {
+  if (el('appIntro')) return;
+  document.body.insertAdjacentHTML('beforeend', `
+  <div id="appIntro" class="intro" role="dialog" aria-label="Welcome tour">
+    <div class="intro-bg"><span class="ib-orb o1"></span><span class="ib-orb o2"></span><span class="ib-orb o3"></span><div class="ib-stars"></div></div>
+    <button class="intro-skip" onclick="closeIntro(true)">Skip <i class="fa-solid fa-angles-right"></i></button>
+    <div class="intro-track" id="introTrack">${INTRO.map((s, k) => `
+      <section class="intro-slide ${k === 0 ? 'is-active' : ''}" style="--c1:${s.c1};--c2:${s.c2}">
+        <div class="intro-art"><div class="intro-glow"></div><div class="intro-ring"></div><img src="${s.img}" alt="" draggable="false"></div>
+        <div class="intro-copy"><span class="intro-kicker">${s.kicker}</span><h2>${s.title}</h2><p>${s.text}</p></div>
+      </section>`).join('')}</div>
+    <div class="intro-bottom">
+      <div class="intro-dots">${INTRO.map((_, k) => `<i class="${k === 0 ? 'on' : ''}" onclick="el('introTrack').scrollTo({left:${k}*el('introTrack').clientWidth,behavior:'smooth'})"></i>`).join('')}</div>
+      <button class="intro-next" id="introNext" onclick="introGo(1)"></button>
+      <p class="intro-terms">By continuing you agree to our <a href="#" onclick="event.preventDefault(); openTermsModal()">Terms of Service</a> and Transaction Policy.</p>
+    </div>
+  </div>`);
+  const t = el('introTrack'); let raf = 0;
+  t.addEventListener('scroll', () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(introSync); }, { passive: true });
+  window.addEventListener('resize', () => { const tr = el('introTrack'); if (tr) tr.scrollTo({ left: introIndex() * tr.clientWidth }); });
+  document.addEventListener('keydown', introKeys); introSync();
+}
