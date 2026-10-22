@@ -9,7 +9,8 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
-    "test:offline": "node test/scenario.js && node test/recovery.js && node test/pg_check.js && node test/pdf_stub.js"
+    "test:offline": "node test/scenario.js && node test/recovery.js && node test/pg_check.js && node test/pdf_stub.js",
+    "test:v39": "node test/v39_check.js"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

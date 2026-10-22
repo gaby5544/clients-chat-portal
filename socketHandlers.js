@@ -14,7 +14,6 @@ const QC = require('./public/countries');
 const { COMPLAINTS_EMAIL } = require('./terms');
 const L = require('./links');
 const W = require('./wallets');
-const BD = require('./bankDetails');
 const geoip = require('./geoip');
 const { sendLoginAlert, setLoginAlertsEnabled } = require('./loginAlert');
 // Missed-message emails now go out automatically (set AUTO_SEND_OFFLINE_EMAILS=false to bring back the approval queue).
@@ -843,7 +842,7 @@ function registerSocketHandlers(io, socket) {
     await pushSellerState(io, groupId, {
       kind: 'kyc',
       title: decision === 'verified' ? 'Identity verified' : 'Identity verification not approved',
-      body: decision === 'verified' ? 'You can now request withdrawals at any time.' : (updated.kyc_rejection_reason || 'Please resubmit your documents.')
+      body: decision === 'verified' ? 'You can now request withdrawals at any time, and your account details are ready under Accounts.' : (updated.kyc_rejection_reason || 'Please resubmit your documents.')
     });
     io.to('finance-admins').emit('kyc-resolved', publicSellerAccount(updated, { forAdmin: true }));
     if (updated.email_b) await notifyKycStatus(updated.email_b, { groupName: updated.name, status: decision, reason: updated.kyc_rejection_reason, lang: updated.seller_language });
@@ -950,44 +949,6 @@ function registerSocketHandlers(io, socket) {
   // The Seller's own on-demand refresh — fired every time they open their
   // Transaction Account view, so what they see is pulled fresh from the
   // store rather than trusted to whatever the socket has cached client-side.
-  // ---- Receiving account details (USD / EUR / GBP) — only an identity-verified seller, only their own group ----
-  socket.on('get-receiving-details', async ({ groupId }) => {
-    const group = await requireSellerOwnGroup(groupId);
-    if (!group) return;
-    try { socket.emit('receiving-details', await BD.getForGroup(store, group)); } catch (e) { socket.emit('receiving-details', { approved: false, status: group.kyc_status || 'not_submitted', error: true }); }
-  });
-  // Desk: edit the bank profile that new accounts are issued under (Controls -> Receiving bank details)
-  socket.on('get-bank-profiles', async () => {
-    if (!metaHasMinRole('ADMIN')) return;
-    socket.emit('bank-profiles', { profiles: await BD.getProfiles(store) });
-  });
-  socket.on('admin-set-bank-profiles', async ({ profiles }) => {
-    if (!metaHasMinRole('ADMIN')) return;
-    const r = await BD.setProfiles(store, profiles || {});
-    if (!r.ok) return socket.emit('error-msg', r.error);
-    socket.emit('bank-profiles', { profiles: r.profiles });
-    socket.emit('toast-info', { message: 'Receiving bank details saved. They apply to accounts approved from now on; accounts already issued keep their details.' });
-  });
-  socket.on('admin-reissue-receiving-details', async ({ groupId }) => {
-    if (!metaHasMinRole('ADMIN')) return;
-    const group = await store.getGroup(groupId); if (!group) return;
-    const r = await BD.getForGroup(store, group, { reissue: true });
-    socket.emit('toast-info', { message: r.approved ? 'Receiving details re-issued for this seller.' : 'This seller is not identity-verified yet.' });
-  });
-
-  // ---- Seller's chosen style (wallpaper) — saved per seller so it follows them to any device ----
-  socket.on('get-my-style', async ({ groupId }) => {
-    const group = await requireSellerOwnGroup(groupId); if (!group) return;
-    const v = await store.getSetting(`style:${group.id}`, null);
-    socket.emit('my-style', { style: /^[1-6]$/.test(String(v)) ? String(v) : '1' });
-  });
-  socket.on('set-my-style', async ({ groupId, style }) => {
-    const group = await requireSellerOwnGroup(groupId); if (!group) return;
-    if (!/^[1-6]$/.test(String(style))) return;
-    await store.setSetting(`style:${group.id}`, String(style));
-    socket.emit('my-style', { style: String(style), saved: true });
-  });
-
   socket.on('get-my-seller-account', async ({ groupId }) => {
     const group = await requireSellerOwnGroup(groupId);
     if (!group) return;

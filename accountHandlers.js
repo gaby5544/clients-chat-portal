@@ -11,6 +11,7 @@ const {
 } = require('./security');
 const Links = require('./links');
 const F = require('./finance');
+const AD = require('./accountDetails');
 const C = require('./compliance');
 const { TERMS_VERSION, TERMS_SECTIONS, TERMS_CHECKBOX_LABEL, COMPLAINTS_EMAIL } = require('./terms');
 const QC = require('./public/countries');
@@ -127,6 +128,7 @@ function registerAccountHandlers(io, socket, ctx) {
   }
   const lang = (g) => g.seller_language || 'en';
   const adminAccount = (g) => F.publicSellerAccount(g, { forAdmin: true });
+  const adminAccountFull = (g) => F.publicSellerAccount(g, { forAdmin: true, withDetails: true });   // seller profile screen (includes the receiving-details editor data)
 
   // ------------------------------------------------------------------
   // Terms & languages (public reference data)
@@ -152,6 +154,55 @@ function registerAccountHandlers(io, socket, ctx) {
       }
       socket.emit('language-saved', { language });
     } catch (err) { console.error('[set-my-language]', err); }
+  });
+
+  // ------------------------------------------------------------------
+  // Seller wallpaper (home page + chat wall). One of 6; #1 is the default. Saved on the account, so it follows the
+  // seller to every device. Only the seller can change their own.
+  // ------------------------------------------------------------------
+  socket.on('set-my-wallpaper', async ({ groupId, wallpaper }) => {
+    try {
+      const n = Number(wallpaper);
+      if (!Number.isInteger(n) || n < 1 || n > 6) return socket.emit('error-msg', 'That wallpaper is not available.');
+      const group = await requireSellerOwnGroup(groupId);
+      if (!group || !group.seller_registered) return;
+      if (!limiter.allow(meta().sessionToken)) return tooFast();
+      await store.updateGroup(group.id, { seller_wallpaper: n });
+      const fresh = await store.getGroup(group.id);
+      socket.emit('seller-account-state', F.publicSellerAccount(fresh));
+      socket.emit('wallpaper-saved', { wallpaper: n });
+    } catch (err) { console.error('[set-my-wallpaper]', err); socket.emit('error-msg', 'We could not save your wallpaper. Please try again.'); }
+  });
+
+  // ------------------------------------------------------------------
+  // Receiving account details (admin side). The seller sees them only after identity approval (see finance.js).
+  // ------------------------------------------------------------------
+  socket.on('admin-set-account-details', async ({ groupId, details }) => {
+    try {
+      if (!metaHasMinRole('ADMIN')) return;
+      if (!limiter.allow(meta().sessionToken)) return tooFast();
+      const g = await store.getGroup(String(groupId || ''));
+      if (!g || !g.seller_registered) return socket.emit('error-msg', 'This seller has no registered account yet.');
+      const clean = AD.sanitizeOverride(details);
+      await store.updateGroup(g.id, { seller_account_details: Object.keys(clean).length ? clean : null });
+      const fresh = await store.getGroup(g.id);
+      socket.emit('seller-profile', { groupId: fresh.id, account: adminAccountFull(fresh), viewer: viewerPerms(fresh) });
+      socket.emit('toast-info', { message: 'Receiving account details saved.' });
+      if (fresh.kyc_status === 'verified') await pushSellerState(io, fresh.id, { kind: 'account', title: 'Account details updated', body: 'Your receiving account details were updated. Open Accounts to view them.' });
+    } catch (err) { console.error('[admin-set-account-details]', err); socket.emit('error-msg', 'Could not save the account details.'); }
+  });
+  socket.on('admin-reset-account-details', async ({ groupId }) => {
+    try {
+      if (!metaHasMinRole('ADMIN')) return;
+      if (!limiter.allow(meta().sessionToken)) return tooFast();
+      const g = await store.getGroup(String(groupId || ''));
+      if (!g) return;
+      await store.updateGroup(g.id, { seller_account_details: null });
+      const fresh = await store.getGroup(g.id);
+      socket.emit('seller-profile', { groupId: fresh.id, account: adminAccountFull(fresh), viewer: viewerPerms(fresh) });
+      socket.emit('toast-info', { message: 'Account details reset to the generated set.' });
+      if (fresh.kyc_status === 'verified') await pushSellerState(io, fresh.id, null);
+    } catch (err) { console.error('[admin-reset-account-details]', err); socket.emit('error-msg', 'Could not reset the account details.'); }
   });
 
   // ------------------------------------------------------------------
@@ -312,7 +363,7 @@ function registerAccountHandlers(io, socket, ctx) {
       await store.updateGroup(group.id, { ...docFields, kyc_status: KYC_AUTO_APPROVE ? 'verified' : 'pending', kyc_rejection_reason: null, ...(KYC_AUTO_APPROVE ? { kyc_reviewed_at: new Date().toISOString() } : {}) });
       const updated = await store.getGroup(group.id);
       socket.emit('kyc-auto-result', { passed: true, checks: result.checks, autoApproved: KYC_AUTO_APPROVE });
-      await pushSellerState(io, group.id, { kind: 'kyc', title: KYC_AUTO_APPROVE ? 'Identity verified' : 'Documents received', body: KYC_AUTO_APPROVE ? 'You can now request withdrawals.' : 'Your documents passed our checks and are now with the Desk for final review.' });
+      await pushSellerState(io, group.id, { kind: 'kyc', title: KYC_AUTO_APPROVE ? 'Identity verified' : 'Documents received', body: KYC_AUTO_APPROVE ? 'You can now request withdrawals, and your account details are ready under Accounts.' : 'Your documents passed our checks and are now with the Desk for final review.' });
       io.to('finance-admins').emit('kyc-submitted', adminAccount(updated));
       io.to('finance-admins').emit('alert', { kind: 'kyc', groupId: group.id, groupName: group.name, title: 'KYC submitted', body: `${updated.seller_full_name || group.name} has submitted identity documents.` });
     } catch (err) { console.error('[submit-kyc]', err); socket.emit('error-msg', 'We could not process your documents. Please try again.'); }
@@ -442,7 +493,7 @@ function registerAccountHandlers(io, socket, ctx) {
         }
       }
       await pushAdminLedger(io, group.id);
-      socket.emit('seller-profile', { groupId: group.id, account: adminAccount(await store.getGroup(group.id)) });
+      socket.emit('seller-profile', { groupId: group.id, account: adminAccountFull(await store.getGroup(group.id)) });
     } catch (err) { console.error('[admin-set-ip-block]', err); }
   });
 
@@ -450,7 +501,7 @@ function registerAccountHandlers(io, socket, ctx) {
   socket.on('admin-get-seller-profile', async ({ groupId }) => {
     if (!metaHasMinRole('ADMIN')) return;
     const g = await store.getGroup(String(groupId || ''));
-    if (g) socket.emit('seller-profile', { groupId: g.id, account: adminAccount(g), viewer: viewerPerms(g) });
+    if (g) socket.emit('seller-profile', { groupId: g.id, account: adminAccountFull(g), viewer: viewerPerms(g) });
   });
 
   // The password is stored only as a salted hash and can never be read back — by anyone.
@@ -486,7 +537,7 @@ function registerAccountHandlers(io, socket, ctx) {
       log.push({ at: new Date().toISOString(), role: meta().adminRole || (metaHasMinRole('SUPER_ADMIN') ? 'SUPER_ADMIN' : 'ADMIN') });
       await store.updateGroup(g.id, { seller_password_reveals: log });
       socket.emit('seller-password-revealed', { groupId: g.id, available: true, password: plain, hideAfterSec: 30 });
-      socket.emit('seller-profile', { groupId: g.id, account: adminAccount(await store.getGroup(g.id)), viewer: viewerPerms(await store.getGroup(g.id)) });
+      socket.emit('seller-profile', { groupId: g.id, account: adminAccountFull(await store.getGroup(g.id)), viewer: viewerPerms(await store.getGroup(g.id)) });
     } catch (err) { console.error('[admin-reveal-seller-password]', err); socket.emit('error-msg', 'Could not open the password.'); }
   });
   // ------------------------------------------------------------------

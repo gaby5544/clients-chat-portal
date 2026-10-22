@@ -419,3 +419,7 @@ ALTER TABLE groups ADD COLUMN IF NOT EXISTS group_flags JSONB NOT NULL DEFAULT '
 ALTER TABLE users  ADD COLUMN IF NOT EXISTS last_ip TEXT;
 ALTER TABLE users  ADD COLUMN IF NOT EXISTS geo JSONB;
 ALTER TABLE incoming_funds ADD COLUMN IF NOT EXISTS meta JSONB NOT NULL DEFAULT '{}';
+
+-- v3.9: per-seller wallpaper (1–6, default 1) and admin-edited receiving account details (USD/EUR/GBP)
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_wallpaper        INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS seller_account_details  JSONB;

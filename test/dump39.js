@@ -1,0 +1,31 @@
+// Fixtures for the v3.9 UI test: real server logic -> exact events a seller's browser receives.
+process.env.ACCOUNT_RATE_MAX = '1000';
+const fs = require('fs');
+const { FakeIO } = require('./harness');
+const logs = []; const origLog = console.log; console.log = (...a) => { logs.push(a.join(' ')); };
+const code = (re) => { for (let i = logs.length - 1; i >= 0; i--) { const m = logs[i].match(re); if (m) return m[1]; } return null; };
+(async () => {
+  const { initStore, store } = require('../db'); await initStore();
+  const { registerSocketHandlers } = require('../socketHandlers');
+  const io = new FakeIO(); const out = {};
+  const admin = io.add('9.9.9.9'); registerSocketHandlers(io, admin);
+  const seller = io.add('1.1.1.1'); registerSocketHandlers(io, seller);
+  const buyer = io.add('2.2.2.2'); registerSocketHandlers(io, buyer);
+  let mark = 0; const cut = (n) => { out[n] = seller.emitted.slice(mark); mark = seller.emitted.length; };
+  await admin.fire('join-room', { groupId: 'default-group', role: 'PARTY A', adminKey: 'SUPERADMIN123', sessionToken: 'admin-token' });
+  await admin.fire('create-group', { groupName: 'Gold Deal', emailB: 'seller@example.com', emailA: 'buyer@example.com' });
+  const gid = admin.last('group-created-and-switch').newGroupId; out.gid = gid;
+  await buyer.fire('join-room', { groupId: gid, role: 'BUYER', sessionToken: 'buyer-token' });
+  await seller.fire('join-room', { groupId: gid, role: 'SELLER', sessionToken: 'seller-token' }); cut('join');
+  await seller.fire('request-registration-email-code', { groupId: gid, email: 'seller@example.com' });
+  await seller.fire('verify-registration-email', { groupId: gid, email: 'seller@example.com', code: code(/>>> (\d{6}) <<</) });
+  await seller.fire('register-transaction-account', { groupId: gid, fullName: 'Ada Obi', password: 'Sup3rSecret!', currency: 'GBP', dateOfBirth: '1991-02-03', country: 'Nigeria', phoneDial: '234', phoneNumber: '08031234567', language: 'en', acceptTerms: true, accountType: 'standard', email: 'seller@example.com' }); cut('registered');
+  await seller.fire('get-my-seller-account', { groupId: gid }); cut('unsubmitted');
+  await store.updateGroup(gid, { kyc_status: 'pending' }); await seller.fire('get-my-seller-account', { groupId: gid }); cut('pending');
+  await admin.fire('admin-review-kyc', { groupId: gid, decision: 'verified' }); cut('approved');
+  await admin.fire('admin-get-seller-profile', { groupId: gid }); out.adminProfile = admin.last('seller-profile');
+  await seller.fire('set-my-wallpaper', { groupId: gid, wallpaper: 3 }); cut('wall3');
+  fs.writeFileSync('/tmp/fixtures39.json', JSON.stringify(out));
+  origLog('fixtures39 written:', Object.keys(out).join(', '));
+  process.exit(0);
+})().catch((e) => { origLog('FATAL', e); process.exit(2); });

@@ -1,7 +1,7 @@
 // Service worker: push notifications + a fast, safe asset cache.
 // HTML pages are NEVER cached (so an expired invite link can never be served from the cache); static assets
 // (icons, flags, fonts, scripts) are cached after first use so the installed app opens quickly.
-const CACHE = 'vistra-assets-v35';
+const CACHE = 'vistra-assets-v39';
 self.addEventListener('install', (event) => event.waitUntil(caches.open(CACHE).then((c) => c.addAll(['/offline.html', '/icon-192.png', '/icon-512.png'])).then(() => self.skipWaiting())));
 self.addEventListener('activate', (event) => event.waitUntil((async () => {
   const keys = await caches.keys(); await Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)));
