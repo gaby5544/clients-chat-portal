@@ -1,0 +1,23 @@
+1 ICON "vistra.ico"
+1 VERSIONINFO
+FILEVERSION 1,0,0,0
+PRODUCTVERSION 1,0,0,0
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "CompanyName", "Vistra"
+      VALUE "FileDescription", "Vistra Secure Transaction Desk"
+      VALUE "FileVersion", "1.0.0.0"
+      VALUE "InternalName", "Vistra"
+      VALUE "OriginalFilename", "Vistra.exe"
+      VALUE "ProductName", "Vistra Transaction Desk"
+      VALUE "ProductVersion", "1.0.0.0"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x0409, 1200
+  END
+END

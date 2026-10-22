@@ -1,0 +1,26 @@
+{
+  "name": "quantum-secure-desk",
+  "version": "3.11.0",
+  "description": "Quantum Secure Transaction Desk - Enterprise Chat Portal",
+  "main": "server.js",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "test:offline": "node test/scenario.js && node test/recovery.js && node test/pg_check.js && node test/pdf_stub.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-rate-limit": "^7.2.0",
+    "multer": "^2.0.1",
+    "nodemailer": "^6.9.13",
+    "pdfkit": "^0.19.1",
+    "pg": "^8.11.5",
+    "socket.io": "^4.7.5",
+    "uuid": "^9.0.1",
+    "web-push": "^3.6.7"
+  }
+}
