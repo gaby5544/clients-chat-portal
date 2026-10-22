@@ -1,6 +1,6 @@
 {
   "name": "quantum-secure-desk",
-  "version": "3.9.0",
+  "version": "3.10.0",
   "description": "Quantum Secure Transaction Desk - Enterprise Chat Portal",
   "main": "server.js",
   "engines": {
@@ -9,8 +9,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
-    "test:offline": "node test/scenario.js && node test/recovery.js && node test/pg_check.js && node test/pdf_stub.js",
-    "test:v39": "node test/v39_check.js"
+    "test:offline": "node test/scenario.js && node test/recovery.js && node test/pg_check.js && node test/pdf_stub.js"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

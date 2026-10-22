@@ -1,7 +1,7 @@
 // Tiny static server + fake socket.io + stub translation so the REAL front-end files can run in headless Chromium.
 const http = require('http'), fs = require('fs'), path = require('path');
 const PUB = path.join(__dirname, '..', 'public');
-const MIME = { '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css', '.png': 'image/png', '.jpg': 'image/jpeg', '.webp': 'image/webp', '.json': 'application/json' };
+const MIME = { '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css', '.png': 'image/png', '.webp': 'image/webp', '.woff2': 'font/woff2', '.svg': 'image/svg+xml', '.json': 'application/json' };
 const FAKE_IO = `window.io=function(){var h={};var s={id:'sock1',connected:true,
  on:function(e,f){(h[e]=h[e]||[]).push(f);return s},off:function(e){delete h[e];return s},
  emit:function(e,d){(window.__sent=window.__sent||[]).push([e,d])},connect:function(){},disconnect:function(){}};
@@ -18,7 +18,6 @@ http.createServer((req, res) => {
   if (u.pathname === '/api/translate' && req.method === 'POST') {
     let b = ''; req.on('data', c => b += c); req.on('end', () => { const j = JSON.parse(b); res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ text: '«' + j.target + '» ' + j.text, detected: 'zh', ok: true })); }); return;
   }
-  if (u.pathname === '/api/contact') { res.setHeader('Content-Type', 'application/json'); return res.end('{}'); }
   if (u.pathname === '/api/branding') { res.setHeader('Content-Type', 'application/json'); return res.end('{}'); }
   let p = u.pathname === '/' ? '/index.html' : u.pathname; const f = path.join(PUB, p);
   if (!f.startsWith(PUB) || !fs.existsSync(f)) { res.statusCode = 404; return res.end('nf'); }

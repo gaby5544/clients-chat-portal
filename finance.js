@@ -61,9 +61,6 @@ function safeHistory(history) {
 
 // ---- Seller account state (sensitive: only the seller + finance admins) ----
 const COMPLAINTS_EMAIL = process.env.COMPLAINTS_EMAIL || 'complaints@usvistra.com';
-const AD = require('./accountDetails');
-const WALLPAPER_COUNT = 6;
-const AD_WALLPAPER = (g) => { const n = Number(g && g.seller_wallpaper); return Number.isInteger(n) && n >= 1 && n <= WALLPAPER_COUNT ? n : 1; };   // #1 is the default
 const ACCOUNT_TYPE_LABEL = { standard: 'Standard account', business: 'Business account' };
 
 function dateOnly(v) {
@@ -76,7 +73,7 @@ function jsonOf(v, fallback) {
   return v;
 }
 
-function publicSellerAccount(g, { forAdmin = false, withDetails = false } = {}) {
+function publicSellerAccount(g, { forAdmin = false } = {}) {
   const business = jsonOf(g.business_profile, null);
   const out = {
     groupId: g.id,
@@ -112,9 +109,6 @@ function publicSellerAccount(g, { forAdmin = false, withDetails = false } = {}) 
       reviewedAt: g.business_reviewed_at || null,
       rejectionReason: g.business_rejection_reason || null
     },
-    wallpaper: AD_WALLPAPER(g),
-    // Receiving account details: only ever sent once the identity has been approved.
-    accountDetails: g.kyc_status === 'verified' ? AD.publicDetails(g) : null,
     kyc: {
       status: g.kyc_status,
       docType: g.kyc_doc_type || null,
@@ -155,7 +149,6 @@ function publicSellerAccount(g, { forAdmin = false, withDetails = false } = {}) 
     out.kyc.idName = g.kyc_id_name || null;
     out.kyc.idDob = dateOnly(g.kyc_id_dob);
     out.kyc.autoResult = jsonOf(g.kyc_auto_result, null);
-    if (withDetails) out.accountDetailsAdmin = AD.publicDetails(g, { admin: true });
     out.cryptoDepositRequiredUsd = g.crypto_deposit_required_usd === null || g.crypto_deposit_required_usd === undefined ? null : Number(g.crypto_deposit_required_usd);
   }
   return out;

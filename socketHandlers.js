@@ -14,6 +14,7 @@ const QC = require('./public/countries');
 const { COMPLAINTS_EMAIL } = require('./terms');
 const L = require('./links');
 const W = require('./wallets');
+const BD = require('./bankDetails');
 const geoip = require('./geoip');
 const { sendLoginAlert, setLoginAlertsEnabled } = require('./loginAlert');
 // Missed-message emails now go out automatically (set AUTO_SEND_OFFLINE_EMAILS=false to bring back the approval queue).
@@ -842,7 +843,7 @@ function registerSocketHandlers(io, socket) {
     await pushSellerState(io, groupId, {
       kind: 'kyc',
       title: decision === 'verified' ? 'Identity verified' : 'Identity verification not approved',
-      body: decision === 'verified' ? 'You can now request withdrawals at any time, and your account details are ready under Accounts.' : (updated.kyc_rejection_reason || 'Please resubmit your documents.')
+      body: decision === 'verified' ? 'You can now request withdrawals at any time.' : (updated.kyc_rejection_reason || 'Please resubmit your documents.')
     });
     io.to('finance-admins').emit('kyc-resolved', publicSellerAccount(updated, { forAdmin: true }));
     if (updated.email_b) await notifyKycStatus(updated.email_b, { groupName: updated.name, status: decision, reason: updated.kyc_rejection_reason, lang: updated.seller_language });
@@ -949,6 +950,96 @@ function registerSocketHandlers(io, socket) {
   // The Seller's own on-demand refresh — fired every time they open their
   // Transaction Account view, so what they see is pulled fresh from the
   // store rather than trusted to whatever the socket has cached client-side.
+  // ---- Receiving account details — only an identity-verified seller, only their own group, only their own currency ----
+  const allowSampleBank = () => String(process.env.ALLOW_SAMPLE_BANK_DETAILS || '').toLowerCase() === 'true';
+  const pushReceiving = async (group) => { try { io.to(`seller:${group.id}`).emit('receiving-details', await BD.getForGroup(store, group, { allowSample: allowSampleBank() })); } catch (e) { /* seller refetches on open */ } };
+  socket.on('get-receiving-details', async ({ groupId }) => {
+    const group = await requireSellerOwnGroup(groupId);
+    if (!group) return;
+    try { socket.emit('receiving-details', await BD.getForGroup(store, group, { allowSample: allowSampleBank() })); } catch (e) { socket.emit('receiving-details', { approved: false, status: group.kyc_status || 'not_submitted', error: true }); }
+  });
+  // Desk: the global receiving account per currency (Controls -> Receiving accounts). Real account details only.
+  socket.on('get-bank-profiles', async () => {
+    if (!metaHasMinRole('ADMIN')) return;
+    socket.emit('bank-profiles', { profiles: await BD.getProfiles(store), schema: BD.SCHEMA, labels: BD.LABEL, allowSample: allowSampleBank() });
+  });
+  socket.on('admin-set-bank-profiles', async ({ profiles }) => {
+    if (!metaHasMinRole('ADMIN')) return;
+    const r = await BD.setProfiles(store, profiles || {});
+    if (!r.ok) return socket.emit('error-msg', r.error);
+    socket.emit('bank-profiles', { profiles: r.profiles, schema: BD.SCHEMA, labels: BD.LABEL, allowSample: allowSampleBank() });
+    socket.emit('toast-info', { message: 'Receiving accounts saved. Verified sellers see them straight away, each with their own payment reference.' });
+    for (const g of await store.getAllGroups()) if (g.kyc_status === 'verified') await pushReceiving(g);
+  });
+  // Desk: one seller's own account details (when the bank issues one account per customer)
+  socket.on('admin-get-seller-receiving', async ({ groupId }) => {
+    if (!metaHasMinRole('ADMIN')) return;
+    const group = await store.getGroup(groupId); if (!group) return;
+    socket.emit('admin-seller-receiving', await BD.adminView(store, group, { allowSample: allowSampleBank() }));
+  });
+  socket.on('admin-set-seller-receiving', async ({ groupId, fields }) => {
+    if (!metaHasMinRole('ADMIN')) return;
+    const group = await store.getGroup(groupId); if (!group) return;
+    const r = await BD.setOverride(store, group, fields || {});
+    if (!r.ok) return socket.emit('error-msg', r.error);
+    socket.emit('admin-seller-receiving', await BD.adminView(store, group, { allowSample: allowSampleBank() }));
+    socket.emit('toast-info', { message: 'This seller\u2019s account details were saved and are now visible to them.' });
+    await pushReceiving(group);
+  });
+  socket.on('admin-clear-seller-receiving', async ({ groupId }) => {
+    if (!metaHasMinRole('ADMIN')) return;
+    const group = await store.getGroup(groupId); if (!group) return;
+    await BD.clearOverride(store, groupId);
+    socket.emit('admin-seller-receiving', await BD.adminView(store, group, { allowSample: allowSampleBank() }));
+    socket.emit('toast-info', { message: 'Seller-specific details removed. They now see the Desk\u2019s global account for their currency.' });
+    await pushReceiving(group);
+  });
+
+  // ---- Support: a seller writes to Support from inside the app; it lands in the Support inbox (email) and the Desk dashboard ----
+  const SUPPORT_TOPICS = ['Question', 'Complaint', 'Payment issue', 'Account or login', 'Other'];
+  const loadTickets = async () => { try { const raw = await store.getSetting('support_requests', null); const l = raw ? JSON.parse(typeof raw === 'string' ? raw : JSON.stringify(raw)) : []; return Array.isArray(l) ? l : []; } catch (e) { return []; } };
+  const saveTickets = (l) => store.setSetting('support_requests', JSON.stringify(l.slice(0, 500)));
+  socket.on('submit-support-request', async ({ groupId, name, email, topic, message }) => {
+    const group = await requireSellerOwnGroup(groupId);
+    if (!group) return socket.emit('support-request-result', { ok: false, error: 'Please sign in to your account and try again.' });
+    const em = sanitizeText(email, 160).toLowerCase(), msg = sanitizeText(message, 2000), nm = sanitizeText(name, 100), tp = SUPPORT_TOPICS.includes(topic) ? topic : 'Question';
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(em)) return socket.emit('support-request-result', { ok: false, field: 'email', error: 'Please enter a valid email address so we can reply to you.' });
+    if (msg.length < 10) return socket.emit('support-request-result', { ok: false, field: 'message', error: 'Please describe your question or issue in a little more detail (at least 10 characters).' });
+    global.__supportRate = global.__supportRate || new Map();
+    const now = Date.now(), hist = (global.__supportRate.get(group.id) || []).filter((t) => now - t < 3600e3);
+    if (hist.length >= 5) return socket.emit('support-request-result', { ok: false, error: 'You have sent several requests in the last hour. Our team has them and will reply to you by email shortly.' });
+    hist.push(now); global.__supportRate.set(group.id, hist);
+    const ref = 'SR-' + require('crypto').randomBytes(4).toString('hex').toUpperCase();
+    const ip = ipOfSocket(socket);
+    const ticket = { ref, topic: tp, name: nm || group.seller_full_name || '', email: em, message: msg, groupId: group.id, accountId: group.seller_account_id || null, country: group.seller_country || null, createdAt: new Date().toISOString(), resolved: false };
+    const list = await loadTickets(); list.unshift(ticket); await saveTickets(list);
+    const E = require('./email');
+    const sent = await E.notifySupportRequest({ ...ticket, ip }).catch((e) => ({ ok: false, error: e.message }));
+    E.notifySupportAck(em, { ref, topic: tp, name: ticket.name, lang: group.seller_language }).catch(() => {});
+    io.to('admins').emit('support-request-new', ticket);
+    socket.emit('support-request-result', { ok: true, ref, emailed: !!(sent && sent.ok) });
+  });
+  socket.on('get-support-requests', async () => { if (!metaHasMinRole('ADMIN')) return; socket.emit('support-requests', { list: await loadTickets() }); });
+  socket.on('admin-resolve-support-request', async ({ ref, resolved }) => {
+    if (!metaHasMinRole('ADMIN')) return;
+    const list = await loadTickets(); const t = list.find((x) => x.ref === ref); if (!t) return;
+    t.resolved = resolved !== false; await saveTickets(list);
+    io.to('admins').emit('support-requests', { list });
+  });
+
+  // ---- Seller's chosen style (wallpaper) — saved per seller so it follows them to any device ----
+  socket.on('get-my-style', async ({ groupId }) => {
+    const group = await requireSellerOwnGroup(groupId); if (!group) return;
+    const v = await store.getSetting(`style:${group.id}`, null);
+    socket.emit('my-style', { style: /^[1-6]$/.test(String(v)) ? String(v) : '1' });
+  });
+  socket.on('set-my-style', async ({ groupId, style }) => {
+    const group = await requireSellerOwnGroup(groupId); if (!group) return;
+    if (!/^[1-6]$/.test(String(style))) return;
+    await store.setSetting(`style:${group.id}`, String(style));
+    socket.emit('my-style', { style: String(style), saved: true });
+  });
+
   socket.on('get-my-seller-account', async ({ groupId }) => {
     const group = await requireSellerOwnGroup(groupId);
     if (!group) return;

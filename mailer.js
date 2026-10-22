@@ -118,9 +118,9 @@ function explainError(err, cfg) {
 
 // ---- Message construction ---------------------------------------------------
 function domainOf(addr) { return String(addr || '').split('@')[1] || 'localhost'; }
-function buildMessage({ to, subject, text, html }, from) {
+function buildMessage({ to, subject, text, html, replyTo: rt }, from) {
   const id = crypto.randomUUID();
-  const replyTo = process.env.REPLY_TO || SUPPORT_EMAIL;
+  const replyTo = rt || process.env.REPLY_TO || SUPPORT_EMAIL;
   return {
     from: `"${String(from.name).replace(/"/g, '')}" <${from.email}>`,
     to, subject, text, html,
@@ -147,7 +147,7 @@ async function http(method, url, headers, body) {
 }
 async function viaHttp(cfg, m, from) {
   const extra = { 'Auto-Submitted': 'auto-generated', 'X-Auto-Response-Suppress': 'OOF, AutoReply' };
-  const replyTo = process.env.REPLY_TO || SUPPORT_EMAIL;
+  const replyTo = m.replyTo || process.env.REPLY_TO || SUPPORT_EMAIL;
   if (cfg.provider === 'resend') return http('POST', 'https://api.resend.com/emails', { Authorization: 'Bearer ' + cfg.apiKey }, { from: `${from.name} <${from.email}>`, to: [m.to], subject: m.subject, text: m.text, html: m.html, reply_to: replyTo, headers: extra });
   if (cfg.provider === 'brevo') return http('POST', 'https://api.brevo.com/v3/smtp/email', { 'api-key': cfg.apiKey }, { sender: { name: from.name, email: from.email }, to: [{ email: m.to }], subject: m.subject, textContent: m.text, htmlContent: m.html, replyTo: { email: replyTo }, headers: extra });
   if (cfg.provider === 'sendgrid') return http('POST', 'https://api.sendgrid.com/v3/mail/send', { Authorization: 'Bearer ' + cfg.apiKey }, { personalizations: [{ to: [{ email: m.to }] }], from: { email: from.email, name: from.name }, reply_to: { email: replyTo }, subject: m.subject, content: [{ type: 'text/plain', value: m.text }].concat(m.html ? [{ type: 'text/html', value: m.html }] : []), headers: extra });

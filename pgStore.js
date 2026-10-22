@@ -136,9 +136,9 @@ class PgStore {
       business_reviewed_at: 'business_reviewed_at', business_rejection_reason: 'business_rejection_reason', kyc_id_number: 'kyc_id_number',
       kyc_id_expiry: 'kyc_id_expiry', kyc_id_name: 'kyc_id_name', kyc_id_dob: 'kyc_id_dob',
       kyc_auto_result: 'kyc_auto_result', reg_email_target: 'reg_email_target', reg_email_code_hash: 'reg_email_code_hash',
-      reg_email_code_expires: 'reg_email_code_expires', reg_email_code_attempts: 'reg_email_code_attempts', reg_email_verified: 'reg_email_verified', seller_password_enc: 'seller_password_enc', seller_wallpaper: 'seller_wallpaper', seller_account_details: 'seller_account_details', password_admin_access: 'password_admin_access', seller_password_reveals: 'seller_password_reveals', group_flags: 'group_flags'
+      reg_email_code_expires: 'reg_email_code_expires', reg_email_code_attempts: 'reg_email_code_attempts', reg_email_verified: 'reg_email_verified', seller_password_enc: 'seller_password_enc', password_admin_access: 'password_admin_access', seller_password_reveals: 'seller_password_reveals', group_flags: 'group_flags'
     };
-    const JSON_COLS = new Set(['seller_account_details', 'seller_ip_log', 'seller_blocked_ips', 'business_profile', 'kyc_auto_result', 'seller_password_reveals', 'group_flags']);
+    const JSON_COLS = new Set(['seller_ip_log', 'seller_blocked_ips', 'business_profile', 'kyc_auto_result', 'seller_password_reveals', 'group_flags']);
     const keys = Object.keys(fields).filter(k => map[k]);
     if (keys.length === 0) return this.getGroup(groupId);
     const setClause = keys.map((k, i) => `${map[k]} = $${i + 2}`).join(', ');

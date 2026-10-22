@@ -1,8 +1,4 @@
-# Quantum Secure Transaction Desk — v3.9
-
-v3.9: receiving account details after approval, per-seller wallpapers (home page + chat wall) and the new bottom-navigation seller design — see **CHANGES-v3.9.md**.
-
-(Original v3.0 overview follows.)
+# Quantum Secure Transaction Desk — v3.0
 
 Enterprise chat portal: dark-glass UI, PostgreSQL persistence (with
 in-memory dev fallback), transaction board with PDF receipts, multi-admin
@@ -138,6 +134,12 @@ online, start with `DEPLOY.md` (works on any host) or `DEPLOY_NORTHFLANK.md`
 (step-by-step for a free, always-on host with a custom name). Render
 instructions are still in `DEPLOY_RENDER.md` if you want them.
 
+
+## v3.10
+See **CHANGES-v3.10.md** (real receiving accounts, own-currency view, greeting, Support popup).
+
+## v3.9
+See **CHANGES-v3.9.md** (account details card, wallpapers/styles, seller bottom bar).
 
 ## v3.1
 See **CHANGES-v3.1.md** for the full item-by-item report, new environment variables and test instructions.

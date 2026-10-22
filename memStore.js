@@ -59,7 +59,6 @@ function makeDefaultGroup(id, name) {
     kyc_id_number: null, kyc_id_expiry: null, kyc_id_name: null, kyc_id_dob: null, kyc_auto_result: null,
     reg_email_target: null, reg_email_code_hash: null, reg_email_code_expires: null, reg_email_code_attempts: 0, reg_email_verified: false,
     seller_password_enc: null, password_admin_access: false, seller_password_reveals: [],
-    seller_wallpaper: 1, seller_account_details: null,
     group_flags: {}
   };
 }

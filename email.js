@@ -272,11 +272,34 @@ function notifyWithdrawalStatus(toEmail, { amount, currency, status, reason, lan
   }, lang);
 }
 
+// ---- Support requests (seller -> Support inbox, plus an acknowledgement to the seller) ----
+async function notifySupportRequest({ ref, topic, name, email, accountId, country, message, createdAt, ip }) {
+  const to = SUPPORT_EMAIL; if (!to) return { ok: false, error: 'No support address.' };
+  const parts = {
+    subject: `Support request ${ref} \u2014 ${topic}`, eyebrow: 'Support Inbox', title: `New ${topic.toLowerCase()} from ${name || 'a seller'}`, noGreeting: true,
+    paragraphs: ['A seller has submitted a request from their Transaction Account. Reply to this email to answer them directly.'],
+    details: [['Reference', ref], ['Topic', topic], ['Name', name || '\u2014'], ['Email', email], ...acct(accountId), ...(country ? [['Country', country]] : []), ['Received', new Date(createdAt).toUTCString()], ...(ip ? [['IP address', ip]] : [])],
+    quote: message
+  };
+  const mail = await TPL.renderEmail(parts, 'en');
+  if (!M.isEmailConfigured()) { if (ALLOW_MOCK()) { console.log(`[email:mock] to=${to} subject="${mail.subject}" body="${mail.text.replace(/\n+/g, ' | ').slice(0, 1500)}"`); return { ok: true, provider: 'mock' }; } return { ok: false, error: 'not_configured' }; }
+  const r = await M.send({ to, subject: mail.subject, text: mail.text, html: mail.html, replyTo: email });
+  if (r.ok) console.log(`[email] support request ${ref} delivered to ${to}`); return r;
+}
+function notifySupportAck(toEmail, { ref, topic, name, lang }) {
+  return sendTemplated(toEmail, {
+    subject: `Vistra | We have received your request \u2014 ${ref}`, eyebrow: 'Support', title: 'We have received your request', name,
+    badge: { text: 'Received', tone: 'success' },
+    paragraphs: ['Thank you for contacting us. Your message has reached our Support team and a member of the team will reply to this email address as soon as possible.', 'Please keep your reference number if you write to us again about the same matter.'],
+    details: [['Reference', ref], ['Topic', topic]]
+  }, lang);
+}
+
 module.exports = {
   wrapHtml, codeBlock,
   setRuntimeConfig, activeConfig, emailStatus, isEmailConfigured, checkDeliverability, verifyConnection, sendRaw, compose, sendTemplated, BRAND, COMPANY, SERVICE, SUPPORT_EMAIL,
   sendEmail,
   notifyOfflineMessage, notifyTransactionSubmitted, notifyPasswordResetCode, notifyKycStatus, notifyDepositStatus, notifyWithdrawalStatus, notifyIncomingFunds,
   notifyRegistrationCode, notifyWithdrawalCode, notifyAccountAccess, notifyAccountCreated, notifyBusinessStatus, notifyMessageReminder,
-  notifyWithdrawalReceived, notifyLoginAlert, notifyManualAccount, notifyPasswordChanged, notifyDepositRecorded, resolveName
+  notifyWithdrawalReceived, notifySupportRequest, notifySupportAck, notifyLoginAlert, notifyManualAccount, notifyPasswordChanged, notifyDepositRecorded, resolveName
 };
