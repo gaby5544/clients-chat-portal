@@ -135,5 +135,8 @@ online, start with `DEPLOY.md` (works on any host) or `DEPLOY_NORTHFLANK.md`
 instructions are still in `DEPLOY_RENDER.md` if you want them.
 
 
+## v3.9
+See **CHANGES-v3.9.md** (account details card, wallpapers/styles, seller bottom bar).
+
 ## v3.1
 See **CHANGES-v3.1.md** for the full item-by-item report, new environment variables and test instructions.

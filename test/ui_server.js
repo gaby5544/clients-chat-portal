@@ -1,7 +1,7 @@
 // Tiny static server + fake socket.io + stub translation so the REAL front-end files can run in headless Chromium.
 const http = require('http'), fs = require('fs'), path = require('path');
 const PUB = path.join(__dirname, '..', 'public');
-const MIME = { '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css', '.png': 'image/png', '.json': 'application/json' };
+const MIME = { '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css', '.png': 'image/png', '.webp': 'image/webp', '.woff2': 'font/woff2', '.svg': 'image/svg+xml', '.json': 'application/json' };
 const FAKE_IO = `window.io=function(){var h={};var s={id:'sock1',connected:true,
  on:function(e,f){(h[e]=h[e]||[]).push(f);return s},off:function(e){delete h[e];return s},
  emit:function(e,d){(window.__sent=window.__sent||[]).push([e,d])},connect:function(){},disconnect:function(){}};
