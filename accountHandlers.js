@@ -14,6 +14,7 @@ const F = require('./finance');
 const C = require('./compliance');
 const { TERMS_VERSION, TERMS_SECTIONS, TERMS_CHECKBOX_LABEL, COMPLAINTS_EMAIL } = require('./terms');
 const QC = require('./public/countries');
+const QP = require('./public/phoneRules');
 const QL = require('./public/languages');
 const E = require('./email');
 const { pushSellerState, pushAdminLedger, emitSnapshotTo, alertSellerOffline } = require('./fundsHandlers');
@@ -236,9 +237,10 @@ function registerAccountHandlers(io, socket, ctx) {
 
       const country = QC.findCountry(p.country);
       if (!country) return socket.emit('error-msg', 'Please select your country from the list.');
-      const dialOk = QC.findCountry(p.phoneIso || country.iso);
-      const phone = normalizePhone(p.phoneDial || (dialOk && dialOk.dial), p.phoneNumber);
-      if (!phone) return socket.emit('error-msg', 'Please enter a valid phone number, including the country code.');
+      // v3.12: the number must be a real number for the SELECTED country (right country code, right length, right first digits)
+      const pv = QP.validatePhone(country.iso, p.phoneDial || country.dial, p.phoneNumber);
+      if (!pv.ok) return socket.emit('error-msg', pv.error);
+      const phone = pv.e164;
 
       const dob = new Date(p.dateOfBirth);
       if (!p.dateOfBirth || Number.isNaN(dob.getTime()) || dob.getFullYear() < 1900 || dob.getTime() > Date.now()) return socket.emit('error-msg', 'Please enter a valid date of birth.');
@@ -493,6 +495,36 @@ function registerAccountHandlers(io, socket, ctx) {
   // Admin: add a seller manually (no self-registration). The seller signs in with their email, uses "Forgot password"
   // to receive a code and choose their own password, then completes KYC. Their transaction room starts LOCKED.
   // ------------------------------------------------------------------
+  // ------------------------------------------------------------------
+  // v3.12 Admin: change a seller's email address SILENTLY - nothing is sent to the seller (no email to the old or new
+  // address, no push, no in-app notice, no toast in their session). The change is written to an audit trail on the account.
+  // ------------------------------------------------------------------
+  socket.on('admin-change-seller-email', async (p) => {
+    try {
+      if (!metaHasMinRole('ADMIN')) return socket.emit('error-msg', 'Only an Admin can change a seller\u2019s email address.');
+      p = p || {};
+      const g = await store.getGroup(String(p.groupId || ''));
+      if (!g || !g.seller_registered) return socket.emit('error-msg', 'That seller account was not found.');
+      if (!isValidEmail(p.email)) return socket.emit('error-msg', 'Please enter a valid email address.');
+      const email = String(p.email).trim().toLowerCase();
+      const oldEmail = g.email_b || '';
+      if (email === String(oldEmail).toLowerCase()) return socket.emit('error-msg', 'That is already this seller\u2019s email address.');
+      const clash = (await store.findGroupsBySellerEmail(email)).filter((x) => x.id !== g.id);
+      if (clash.length) return socket.emit('error-msg', 'Another seller account already uses that email address.');
+      const flags = Object.assign({}, jsonOf(g.group_flags, {}));
+      const log = Array.isArray(flags.emailChanges) ? flags.emailChanges.slice(-19) : [];
+      log.push({ at: new Date().toISOString(), role: meta().adminRole || (metaHasMinRole('SUPER_ADMIN') ? 'SUPER_ADMIN' : 'ADMIN'), from: oldEmail, to: email, silent: true });
+      flags.emailChanges = log;
+      await store.updateGroup(g.id, { email_b: email, reg_email_target: email, reg_email_verified: true, group_flags: flags });
+      const fresh = await store.getGroup(g.id);
+      // Admins only. The seller's own room is deliberately NOT told.
+      socket.emit('seller-email-changed', { groupId: g.id, email });
+      socket.emit('toast-info', { message: 'Email updated to ' + email + '. The seller was not notified.' });
+      socket.emit('seller-profile', { groupId: g.id, account: adminAccount(fresh), viewer: viewerPerms(fresh) });
+      io.to('finance-admins').emit('seller-account-updated', adminAccount(fresh));
+    } catch (err) { console.error('[admin-change-seller-email]', err); socket.emit('error-msg', 'We could not change the email address. Please try again.'); }
+  });
+
   socket.on('admin-add-seller', async (p) => {
     try {
       if (!metaHasMinRole('ADMIN')) return socket.emit('error-msg', 'Only an Admin can add a seller.');
@@ -504,7 +536,7 @@ function registerAccountHandlers(io, socket, ctx) {
       if ((await store.findGroupsBySellerEmail(email)).length) return socket.emit('error-msg', 'A seller account already exists for that email address.');
       const country = QC.findCountry(p.country); if (!country) return socket.emit('error-msg', 'Choose the seller\'s country.');
       if (!F.CURRENCIES.has(p.currency)) return socket.emit('error-msg', 'Choose the account currency.');
-      let phone = null; if (p.phoneNumber) { phone = normalizePhone(p.phoneDial || country.dial, p.phoneNumber); if (!phone) return socket.emit('error-msg', 'That phone number does not look valid — include the country code or leave it empty.'); }
+      let phone = null; if (String(p.phoneNumber || '').trim()) { const pv = QP.validatePhone(country.iso, p.phoneDial || country.dial, p.phoneNumber); if (!pv.ok) return socket.emit('error-msg', pv.error); phone = pv.e164; }
       const language = QL.isSupported(p.language) ? p.language : 'en';
       const id = `group-${Date.now()}`;
       await store.createGroupIfMissing(id, escapeHtml(`${name} — Account`));
@@ -547,7 +579,7 @@ function registerAccountHandlers(io, socket, ctx) {
       await Links.setRevoked(g.id, 'B', on);
       const g2 = await store.getGroup(g.id);
       await store.updateGroup(g.id, { group_flags: { ...Links.flagsOf(g2), banned: on, bannedAt: on ? new Date().toISOString() : null } });
-      if (on) { io.to(`seller:${g.id}`).emit('link-expired', { reason: 'revoked' }); const room = io.sockets.adapter.rooms.get(`seller:${g.id}`); for (const sid of room ? Array.from(room) : []) { const s = io.sockets.sockets.get(sid); if (s) s.disconnect(true); } }
+      if (on) { io.to(`seller:${g.id}`).emit('room-closed', { reason: 'banned', hasAccount: false }); const room = io.sockets.adapter.rooms.get(`seller:${g.id}`); for (const sid of room ? Array.from(room) : []) { const s = io.sockets.sockets.get(sid); if (s) s.disconnect(true); } }
       const fresh = await store.getGroup(g.id);
       io.to('finance-admins').emit('seller-account-updated', adminAccount(fresh));
       socket.emit('seller-profile', { groupId: g.id, account: adminAccount(fresh), viewer: viewerPerms(fresh) });

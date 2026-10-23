@@ -13,6 +13,7 @@ const { uidOf, tokenForUid } = require('./identity');
 const QC = require('./public/countries');
 const { COMPLAINTS_EMAIL } = require('./terms');
 const L = require('./links');
+const LoginProof = require('./loginProof');
 const W = require('./wallets');
 const BD = require('./bankDetails');
 const CARD = require('./cards');
@@ -164,7 +165,7 @@ function registerSocketHandlers(io, socket) {
   }
 
   async function broadcastGroupsList(viewerSocket) {
-    const groups = await store.getAllGroups();
+    const groups = (await store.getAllGroups()).filter((g) => !L.flagsOf(g).roomDeleted);   // a deleted room with a surviving seller account is not a room any more
     if (viewerSocket) {
       const m = activeSockets.get(viewerSocket.id);
       if (!m || !hasMinRole(m.adminRole, 'ADMIN')) return; // silently ignore for non-admins/moderators
@@ -295,24 +296,40 @@ function registerSocketHandlers(io, socket) {
     await broadcastLastSeen(m.groupId);
   });
 
-  /** Delete a group and kick everybody out of it. Buyers / sellers see the "link expired" page and their
-   *  user records are removed; only admins are moved to another group. */
+  /** Delete a group and close the room for everybody in it. v3.12: a REGISTERED SELLER'S ACCOUNT SURVIVES - the room is
+   *  closed (chat wiped, group hidden from the Desk list) but the seller can still sign in and see their account.
+   *  A group with no registered seller is deleted for good, as before. Admins are moved to another group. */
   async function removeGroupAndEvict(groupId) {
     const g = await store.getGroup(groupId);
-    await L.tombstone(groupId);
-    const seatTokens = g ? [g.buyer_session_token, g.seller_session_token].filter(Boolean) : [];
-    await store.deleteGroup(groupId);
-    const remaining = (await store.getAllGroups())[0];
+    const keepAccount = !!(g && g.seller_registered);
+    const seatTokens = g ? [g.buyer_session_token, keepAccount ? null : g.seller_session_token].filter(Boolean) : [];
+    if (keepAccount) {
+      try { const msgs = await store.getMessagesForGroup(groupId, 100000); if (msgs.length) await store.deleteMessages(groupId, msgs.map((m) => m.id)); } catch (e) { /* best effort */ }
+      await store.updateGroup(groupId, { group_flags: { ...L.flagsOf(g), roomDeleted: true, roomDeletedAt: new Date().toISOString() } });
+    } else {
+      await L.tombstone(groupId);
+      await store.deleteGroup(groupId);
+    }
+    const remaining = (await store.getAllGroups()).filter((x) => x.id !== groupId && !L.flagsOf(x).roomDeleted)[0];
     const room = io.sockets.adapter.rooms.get(groupId);
     for (const sid of room ? Array.from(room) : []) {
       const sock = io.sockets.sockets.get(sid); if (!sock) continue;
       const meta = activeSockets.get(sid);
       if (meta && meta.isAdmin) { if (remaining) sock.emit('force-room-switch', { newGroupId: remaining.id }); }
-      else { sock.emit('link-expired', { reason: 'removed' }); activeSockets.delete(sid); sock.leave(groupId); sock.disconnect(true); }
+      else closeRoomFor(sock, groupId, 'removed', keepAccount && meta && meta.role === 'PARTY B');
     }
     for (const t of seatTokens) { try { const u = await store.getUser(t); if (u && !u.is_admin) await store.deleteUser(t); } catch (e) {} }
     await pruneOrphanUsers();
     await broadcastDirectory().catch(() => {});
+    await broadcastGroupsList().catch(() => {});
+  }
+  /** Close the trading room for one connected person. A seller with an account stays connected to their account only. */
+  function closeRoomFor(sock, groupId, reason, keepAccountConnection) {
+    sock.leave(groupId);
+    if (keepAccountConnection) {
+      const m = activeSockets.get(sock.id); if (m) { m.roomClosed = true; m.groupId = groupId; }
+      sock.emit('room-closed', { reason, hasAccount: true });
+    } else { sock.emit('room-closed', { reason, hasAccount: false }); activeSockets.delete(sock.id); sock.disconnect(true); }
   }
 
   socket.on('join-room', async ({ groupId, role, adminKey, sessionToken, email, lang }) => {
@@ -324,12 +341,28 @@ function registerSocketHandlers(io, socket) {
 
       let group = await L.ensureGroup(groupId);
       if (!group) {
-        if (!isAdmin) return socket.emit('link-expired', { reason: 'removed' });
+        if (!isAdmin) return socket.emit('room-closed', { reason: 'removed', hasAccount: false, needLogin: true });
         group = await store.createGroupIfMissing(groupId, `Transaction Group #${(await store.getAllGroups()).length + 1}`);
       }
       if (group && !isAdmin) {
         const st = await L.linkState(groupId, role);
-        if (!st.valid) return socket.emit('link-expired', { reason: st.reason });
+        if (!st.valid) {
+          // v3.12: never a dead-end "link expired". A seller who has signed in to THEIR OWN account (and was not banned) gets
+          // the account with the trading room closed; anyone else is sent to the sign-in screen.
+          const isSellerSeat = (role === 'SELLER' || role === 'PARTY B');
+          const f = L.flagsOf(group);
+          if (isSellerSeat && group.seller_registered && !f.banned && await LoginProof.check(sessionToken, groupId)) {
+            await store.updateGroup(groupId, { seller_session_token: sessionToken });
+            socket.rooms.forEach(r => { if (r !== socket.id) socket.leave(r); });
+            socket.join(`seller:${groupId}`);
+            activeSockets.set(socket.id, { sessionToken, groupId, isAdmin: false, adminRole: null, role: 'PARTY B', roomClosed: true });
+            group = await store.getGroup(groupId);
+            socket.emit('init-state', { locked: false, roomClosed: true, closedReason: st.reason, group: await groupSummary(group, sessionToken, false, 'PARTY B'), isAdminConfirmed: false, adminRole: null, role: 'PARTY B', socketId: socket.id, sessionToken, uid: uidOf(sessionToken), messages: [], pinnedMessages: [], unreadCounts: {}, announcements: [], tasks: [] });
+            await emitSnapshotTo(socket, groupId);
+            return;
+          }
+          return socket.emit('room-closed', { reason: st.reason, hasAccount: !!group.seller_registered, needLogin: true });
+        }
       }
 
       // Invite links use friendly role names in the URL ('BUYER'/'SELLER') so
@@ -473,6 +506,7 @@ function registerSocketHandlers(io, socket) {
       const user = await store.getUser(m.sessionToken);
       const group = await store.getGroup(groupId);
       if (!user || !group) return;
+      if (!m.isAdmin && (m.roomClosed || L.flagsOf(group).roomDeleted)) return socket.emit('error-msg', 'Your access to this trading room has ended.');
       if (!m.isAdmin && L.flagsOf(group).roomLocked) return socket.emit('error-msg', 'This transaction room is locked. Please contact support to have it unlocked.');
       if (!m.isAdmin && m.role === 'PARTY B' && group.seller_registered && (!group.kyc_status || group.kyc_status === 'none' || group.kyc_status === 'not_submitted')) {
         return socket.emit('error-msg', 'Please complete your identity verification (KYC) first — it unlocks your dashboard and the transaction room.');
@@ -969,7 +1003,8 @@ function registerSocketHandlers(io, socket) {
     const r = await BD.setProfiles(store, profiles || {});
     if (!r.ok) return socket.emit('error-msg', r.error);
     socket.emit('bank-profiles', { profiles: r.profiles, schema: BD.SCHEMA, labels: BD.LABEL, allowSample: allowSampleBank() });
-    socket.emit('toast-info', { message: 'Receiving accounts saved. Verified sellers see them straight away, each with their own payment reference.' });
+    socket.emit('toast-info', { message: 'Receiving accounts saved. Verified sellers see them straight away, each under their own name and payment reference.' });
+    for (const w of (r.warnings || [])) socket.emit('toast-info', { message: w });
     for (const g of await store.getAllGroups()) if (g.kyc_status === 'verified') await pushReceiving(g);
   });
   // Desk: one seller's own account details (when the bank issues one account per customer)
@@ -985,6 +1020,7 @@ function registerSocketHandlers(io, socket) {
     if (!r.ok) return socket.emit('error-msg', r.error);
     socket.emit('admin-seller-receiving', await BD.adminView(store, group, { allowSample: allowSampleBank() }));
     socket.emit('toast-info', { message: 'This seller\u2019s account details were saved and are now visible to them.' });
+    for (const w of (r.warnings || [])) socket.emit('toast-info', { message: w });
     await pushReceiving(group);
   });
   socket.on('admin-clear-seller-receiving', async ({ groupId }) => {
@@ -1032,7 +1068,7 @@ function registerSocketHandlers(io, socket) {
   socket.on('get-my-style', async ({ groupId }) => {
     const group = await requireSellerOwnGroup(groupId); if (!group) return;
     const v = await store.getSetting(`style:${group.id}`, null);
-    socket.emit('my-style', { style: /^[1-6]$/.test(String(v)) ? String(v) : '1' });
+    socket.emit('my-style', { style: /^[1-6]$/.test(String(v)) ? String(v) : '3' });   // v3.12: Bronze Silk is the default
   });
   socket.on('set-my-style', async ({ groupId, style }) => {
     const group = await requireSellerOwnGroup(groupId); if (!group) return;
@@ -1064,7 +1100,7 @@ function registerSocketHandlers(io, socket) {
   });
   const cardErr = (error) => socket.emit('card-result', { ok: false, error });
   // Seller: apply (and optionally pay the issuing fee in the same step).
-  socket.on('apply-virtual-card', async ({ groupId, payNow }) => {
+  socket.on('apply-virtual-card', async ({ groupId, payNow, billing }) => {
     const group = await requireSellerOwnGroup(groupId); if (!group) return;
     if (!cardLimiter.allow(meta().sessionToken)) return cardErr('Too many attempts. Please wait a moment and try again.');
     if (!(await CARD.isEligible(store, group.id))) return socket.emit('my-card', { eligible: false });
@@ -1072,11 +1108,25 @@ function registerSocketHandlers(io, socket) {
     if (group.seller_disabled) return cardErr('Your account is currently disabled. Please contact Support.');
     const cur = await CARD.getCard(store, group.id);
     if (cur && ['awaiting_fee', 'processing', 'issued', 'frozen'].includes(cur.status)) return socket.emit('my-card', await cardView(group));
-    await CARD.saveCard(store, group.id, { status: 'awaiting_fee', appliedAt: new Date().toISOString(), holder: null, fee: { usd: CARD.FEE_USD } });
+    const bv = CARD.validateBilling(billing, group.seller_country_iso);      // v3.12: a complete, valid billing address is required
+    if (!bv.ok) return socket.emit('card-result', { ok: false, error: bv.error, field: bv.field });
+    await CARD.saveCard(store, group.id, { status: 'awaiting_fee', appliedAt: new Date().toISOString(), holder: null, billing: bv.billing, fee: { usd: CARD.FEE_USD } });
     await cardMail(group, 'applied');
     await pushCard(group.id);
     const paid = payNow ? await payFee(group) : null;
     if (!payNow || paid) socket.emit('card-result', { ok: true, step: paid ? 'paid' : 'applied' });
+  });
+  // Seller: correct the billing address while the card has not been issued yet.
+  socket.on('save-card-billing', async ({ groupId, billing }) => {
+    const group = await requireSellerOwnGroup(groupId); if (!group) return;
+    if (!cardLimiter.allow(meta().sessionToken)) return cardErr('Too many attempts. Please wait a moment and try again.');
+    if (!(await CARD.isEligible(store, group.id))) return socket.emit('my-card', { eligible: false });
+    const rec = await CARD.getCard(store, group.id);
+    if (!rec || !['awaiting_fee', 'processing'].includes(rec.status)) return cardErr('The billing address can only be changed before your card is issued.');
+    const bv = CARD.validateBilling(billing, group.seller_country_iso);
+    if (!bv.ok) return socket.emit('card-result', { ok: false, error: bv.error, field: bv.field });
+    rec.billing = bv.billing; await CARD.saveCard(store, group.id, rec);
+    await pushCard(group.id); socket.emit('card-result', { ok: true, step: 'billing' });
   });
   async function payFee(group) {            // resolves true only when THIS call took the fee
     if (cardBusy.has(group.id)) return false;
@@ -1227,10 +1277,11 @@ function registerSocketHandlers(io, socket) {
       if (g.buyer_session_token === targetSessionToken) await L.setRevoked(g.id, 'A', true);
       if (g.seller_session_token === targetSessionToken) await L.setRevoked(g.id, 'B', true);
     }
-    for (const [sockId, v] of activeSockets.entries()) {
+    for (const [sockId, v] of Array.from(activeSockets.entries())) {
       if (v.sessionToken === targetSessionToken) {
         const targetSocket = io.sockets.sockets.get(sockId);
-        if (targetSocket) { targetSocket.emit('link-expired', { reason: 'revoked' }); targetSocket.disconnect(true); }
+        // v3.12: the room closes; a seller with an account stays connected to the account only
+        if (targetSocket) { const grp = await store.getGroup(v.groupId); closeRoomFor(targetSocket, v.groupId, 'revoked', !!(grp && grp.seller_registered && v.role === 'PARTY B')); }
       }
     }
     await store.deleteUser(targetSessionToken);

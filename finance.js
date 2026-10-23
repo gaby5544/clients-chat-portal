@@ -138,6 +138,7 @@ function publicSellerAccount(g, { forAdmin = false } = {}) {
     out.linkExpired = { buyer: !!jsonOf(g.group_flags, {}).buyerLinkRevoked, seller: !!jsonOf(g.group_flags, {}).sellerLinkRevoked };
     out.securityReports = jsonOf(g.group_flags, {}).securityReports || [];
     out.passwordReveals = jsonOf(g.seller_password_reveals, []).slice(-10);
+    out.emailChanges = ((jsonOf(g.group_flags, {}) || {}).emailChanges || []).slice(-10);
     out.passwordChangedAt = g.seller_password_changed_at || g.seller_registered_at || null;
     out.failedLogins = Number(g.seller_failed_logins || 0);
     out.lockedUntil = g.seller_locked_until || null;

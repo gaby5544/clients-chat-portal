@@ -17,7 +17,7 @@ const WP_STYLES = [
   { id: '5', name: 'Crimson Dots', accent: '#ff6b6b', shade: [0.36, 0.76] },
   { id: '6', name: 'Sapphire Eclipse', accent: '#45b5e8', shade: [0.26, 0.68] }
 ];
-let wpCurrent = /^[1-6]$/.test(v38Get('q_style') || '') ? v38Get('q_style') : '1';
+let wpCurrent = /^[1-6]$/.test(v38Get('q_style') || '') ? v38Get('q_style') : '3';   // v3.12: Bronze Silk is the default style
 function applyStyle(id, persist) {
   const s = WP_STYLES.find((x) => x.id === String(id)) || WP_STYLES[0];
   wpCurrent = s.id;
@@ -117,12 +117,12 @@ setTxAccountNav = function (nav) {
   _navV38(nav);
   document.querySelectorAll('#txBottomNav [data-bn]').forEach((b) => b.classList.toggle('active', b.dataset.bn === nav));
   if (nav === 'dashboard') renderGreeting();
-  if (nav === 'accounts') { renderAccountsPage(); requestReceiving(); }
+  if (nav === 'accounts') { rcShowNums = false; renderAccountsPage(); requestReceiving(); }
 };
 setInterval(renderGreeting, 60000);
 
 // ---- Receiving details: shown only after identity approval, only the seller's own currency, no copy buttons ----
-let rcData = null, rcHide = false, rcLoaded = false;
+let rcData = null, rcHide = false, rcLoaded = false, rcShowNums = false;   // v3.12: account numbers start hidden (••••), the eye reveals them
 function requestReceiving() { if (typeof activeGroupId !== 'undefined' && activeGroupId && isSellerUI()) socket.emit('get-receiving-details', { groupId: activeGroupId }); }
 socket.on('receiving-details', (d) => { rcData = d || null; rcLoaded = true; renderAccountsPage(); });
 socket.on('seller-account-state', () => setTimeout(() => {
@@ -133,7 +133,7 @@ socket.on('seller-account-state', () => setTimeout(() => {
   }
 }, 0));
 
-function rcMask(v) { return String(v).replace(/[0-9A-Z]/g, (c, i, s) => (i < s.length - 4 ? '•' : c)); }
+function rcMask(v) { const t = String(v); let n = (t.match(/[0-9A-Za-z]/g) || []).length; return t.replace(/[0-9A-Za-z]/g, (c) => (--n >= 4 ? '•' : c)); }   // keeps the last 4 characters and the spacing
 function rcLock(icon, title, text, btn) { return `<div class="rc-wrap"><div class="rc-lock"><div class="ic"><i class="fa-solid fa-${icon}"></i></div><h3>${title}</h3><p>${text}</p>${btn || ''}</div></div>`; }
 function renderAccountsPage() {
   const host = document.getElementById('txAccountsBody'); if (!host) return;
@@ -154,7 +154,8 @@ function renderAccountsPage() {
     return;
   }
   const ccy = rcData.currency, d = rcData.details[ccy], bal = a.balances ? a.balances.available : 0;
-  const grp = (title, rows) => `<div class="rc-grp"><div class="rc-gt">${title}</div>${rows.map((r) => { const sens = /account number|iban/i.test(r[0]); const val = rcHide && sens ? rcMask(r[1]) : r[1]; const ref = /reference/i.test(r[0]); return `<div class="rc-row ${ref ? 'ref' : ''}"><span>${v38Esc(r[0])}</span><b translate="no">${v38Esc(val)}</b></div>`; }).join('')}</div>`;
+  const eyeBtn = `<button class="rc-eye rc-eye-sm" type="button" id="rcNumEye" onclick="rcToggleNums()" aria-pressed="${rcShowNums}" aria-label="${rcShowNums ? 'Hide account numbers' : 'Show account numbers'}"><i class="fa-solid fa-${rcShowNums ? 'eye' : 'eye-slash'}"></i><span>${rcShowNums ? 'Hide' : 'Show'}</span></button>`;
+  const grp = (title, rows, withEye) => `<div class="rc-grp"><div class="rc-gt">${title}${withEye ? eyeBtn : ''}</div>${rows.map((r) => { const sens = /account number|iban|routing|sort code/i.test(r[0]); const val = !rcShowNums && sens ? rcMask(r[1]) : r[1]; const ref = /reference/i.test(r[0]); return `<div class="rc-row ${ref ? 'ref' : ''}"><span>${v38Esc(r[0])}</span><b translate="no">${v38Esc(val)}</b></div>`; }).join('')}</div>`;
   host.innerHTML = `<div class="rc-wrap" id="rcCard">
     <div class="rc-hd"><div class="rc-brand"><b>V</b><span>VISTRA</span></div>
       <div class="rc-balrow"><div><small>Available balance</small><div class="rc-bal" translate="no">${rcHide ? '••••••••' : v38Esc(fmtMoney(bal, ccy))}</div></div>
@@ -162,12 +163,13 @@ function renderAccountsPage() {
       <div class="rc-badges"><span class="rc-tier">${v38Esc(a.accountTypeLabel || 'Standard')}</span><span class="rc-ok"><i class="fa-solid fa-shield-halved"></i> Verified</span><span class="rc-nm">${v38Esc(rcData.holder || a.fullName || '')}</span></div></div>
     <div class="rc-title">Receive ${v38Esc(ccy)}</div>
     <div class="rc-intro">${v38Esc(d.intro)}</div>
-    ${grp('Account holder details', d.a)}${grp('Bank details', d.b)}
+    ${grp('Account holder details', d.a, true)}${grp('Bank details', d.b)}
     <div class="rc-actions"><button type="button" onclick="rcPrint()"><i class="fa-solid fa-file-pdf"></i> Save as PDF</button></div>
     <div class="rc-foot ${d.sample ? 'sample' : ''}"><i class="fa-solid fa-lock"></i> Protected with 256-bit encryption${d.sample ? ' · Sample data only' : ''}</div></div>`;
 }
 function rcToggleHide() { rcHide = !rcHide; renderAccountsPage(); }
-function rcPrint() { document.body.classList.add('print-details'); const done = () => { document.body.classList.remove('print-details'); window.removeEventListener('afterprint', done); }; window.addEventListener('afterprint', done); setTimeout(() => window.print(), 50); }
+function rcToggleNums() { rcShowNums = !rcShowNums; renderAccountsPage(); }
+function rcPrint() { const wasShown = rcShowNums; if (!wasShown) { rcShowNums = true; renderAccountsPage(); } document.body.classList.add('print-details'); const done = () => { document.body.classList.remove('print-details'); window.removeEventListener('afterprint', done); if (!wasShown) { rcShowNums = false; renderAccountsPage(); } }; window.addEventListener('afterprint', done); setTimeout(() => window.print(), 50); }
 
 const _profV38 = typeof renderTxProfile === 'function' ? renderTxProfile : null;
 if (_profV38) renderTxProfile = function () { _profV38(); const s = document.querySelector('#txProfileStyleRow .style-now'); if (s) s.style.backgroundImage = `url(/wallpapers/wp${wpCurrent}-thumb.webp)`; };
@@ -221,14 +223,16 @@ socket.on('bank-profiles', (d) => { bankState = d || null; renderBankAdmin(); })
 socket.on('auto-email-state', () => { socket.emit('get-bank-profiles'); socket.emit('get-support-requests'); });
 const BK_ORDER = ['holder', 'bankName', 'bankAddress', 'swift', 'accountNumber', 'routing', 'sortCode', 'iban'];
 const BK_PH = { USD: { swift: 'e.g. MRMDUS33', routing: '9 digits', accountNumber: 'Account number' }, EUR: { swift: 'e.g. HBUKGB4B', iban: 'e.g. DE89 3704 …' }, GBP: { swift: 'e.g. HBUKGB4B', sortCode: '00-00-00', accountNumber: '8 digits', iban: 'optional' } };
-function bkInputs(ccy, schema, labels, vals, prefix) {
-  const fields = BK_ORDER.filter((f) => schema.req.includes(f) || schema.opt.includes(f));
-  return fields.map((f) => `<label>${v38Esc(labels[f])}${schema.opt.includes(f) ? ' (optional)' : ''}<input class="message-input" data-${prefix}="${ccy}.${f}" value="${v38Esc((vals && vals[f]) || '')}" placeholder="${v38Esc((BK_PH[ccy] || {})[f] || '')}" spellcheck="false" autocomplete="off" translate="no"></label>`).join('');
+function bkInputs(ccy, schema, labels, vals, prefix, sellerName) {
+  // v3.12: the Account name is automatic (each seller's own name). It is not asked for on the shared account at all,
+  // and on a single seller it is only an optional override.
+  const fields = BK_ORDER.filter((f) => (schema.req.includes(f) || schema.opt.includes(f)) && (f !== 'holder' || prefix === 'sr'));
+  return fields.map((f) => `<label>${v38Esc(f === 'holder' ? 'Account name (automatic)' : labels[f])}${f !== 'holder' && schema.opt.includes(f) ? ' (optional)' : ''}<input class="message-input" data-${prefix}="${ccy}.${f}" value="${v38Esc((vals && vals[f]) || '')}" placeholder="${v38Esc(f === 'holder' ? (sellerName || 'the seller’s own name') : (BK_PH[ccy] || {})[f] || '')}" spellcheck="false" autocomplete="off" translate="no"></label>`).join('');
 }
 function renderBankAdmin() {
   const host = document.getElementById('tabControls'); if (!host || !bankState) return;
   const sec = Object.keys(bankState.schema).map((c) => { const p = bankState.profiles[c]; return `<div class="bk-ccy">${c} <em class="${p.configured ? 'ok' : ''}">${p.configured ? 'configured' : 'not set'}</em></div><div class="bk-grid">${bkInputs(c, bankState.schema[c], bankState.labels, p.fields, 'bk')}</div>`; }).join('');
-  const html = `<div class="ctrl-row" style="margin-bottom:6px"><div><b><i class="fa-solid fa-building-columns"></i> Receiving accounts</b><small>Enter the REAL account your bank issued for each currency (for example your HSBC USA, HSBC UK and euro accounts). Verified sellers registered in that currency see these details together with their own Account ID as the payment reference, so you can match every payment to the right seller. Every field is checked (IBAN check digits, ABA routing digit, UK sort code and account format). Until a currency is set, sellers see "being prepared". Leave a currency completely blank to remove it.</small></div></div>${sec}<button class="send-btn" onclick="saveBankProfiles()"><i class="fa-solid fa-floppy-disk"></i> Save receiving accounts</button>`;
+  const html = `<div class="ctrl-row" style="margin-bottom:6px"><div><b><i class="fa-solid fa-building-columns"></i> Receiving accounts</b><small>Enter the REAL account your bank issued for each currency (for example your HSBC USA, HSBC UK and euro accounts). Verified sellers registered in that currency see these details together with their own Account ID as the payment reference, so you can match every payment to the right seller. The Account name is filled in automatically with each seller’s own registered name, so you never type it. Formats are checked (UK sort code, account lengths, SWIFT); a routing or IBAN check-digit mismatch only shows a warning and never blocks saving. Until a currency is set, sellers see "being prepared". Leave a currency completely blank to remove it.</small></div></div>${sec}<button class="send-btn" onclick="saveBankProfiles()"><i class="fa-solid fa-floppy-disk"></i> Save receiving accounts</button>`;
   let box = document.getElementById('banksBox');
   if (!box) host.insertAdjacentHTML('afterbegin', `<div class="widget-card" id="banksBox">${html}</div>`); else box.innerHTML = html;
 }
@@ -250,7 +254,7 @@ socket.on('admin-seller-receiving', (d) => {
   if (!d.supported) { box.innerHTML = '<b><i class="fa-solid fa-building-columns"></i> Receiving account</b><p class="reg-note">This seller’s currency has no receiving-account template.</p>'; return; }
   const src = d.source === 'seller' ? 'This seller has their own account details (below).' : d.source === 'desk' ? 'Showing the Desk’s global ' + d.currency + ' account with this seller’s Account ID as the payment reference.' : d.source === 'sample' ? 'Demo mode: sample details are showing.' : (d.verified ? 'Nothing is set for ' + d.currency + ' yet, so the seller sees "being prepared".' : 'The seller is not identity-verified yet, so they see nothing.');
   box.innerHTML = `<div class="ctrl-row" style="margin-bottom:6px"><div><b><i class="fa-solid fa-building-columns"></i> Receiving account (${v38Esc(d.currency)})</b><small>${v38Esc(src)} To give this seller their own account, enter the details your bank issued for them. Real details only.</small></div></div>
-    <div class="bk-grid">${bkInputs(d.currency, d.schema, d.labels, d.override || {}, 'sr')}</div>
+    <div class="bk-grid">${bkInputs(d.currency, d.schema, d.labels, d.override || {}, 'sr', d.sellerName)}</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="send-btn" onclick="saveSellerReceiving('${v38Esc(d.groupId)}')"><i class="fa-solid fa-floppy-disk"></i> Save for this seller</button>${d.override ? `<button class="admin-btn" onclick="socket.emit('admin-clear-seller-receiving',{groupId:'${v38Esc(d.groupId)}'})"><i class="fa-solid fa-rotate-left"></i> Use the global account</button>` : ''}</div>`;
 });
 function saveSellerReceiving(groupId) {

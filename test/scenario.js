@@ -56,7 +56,7 @@ function fakeImage(name, w, h, size) {
   await seller.fire('register-transaction-account', { ...base, acceptTerms: false });
   ok(/accept the Terms/i.test(seller.last('error-msg')), 'terms checkbox is mandatory');
   await seller.fire('register-transaction-account', { ...base, phoneNumber: '12' });
-  ok(/valid phone/i.test(seller.last('error-msg')), 'invalid phone rejected');
+  ok(/phone/i.test(seller.last('error-msg')), 'invalid phone rejected');
   await seller.fire('register-transaction-account', { ...base, accountType: 'business' });
   ok(/Standard/i.test(seller.last('error-msg')), 'only Standard accounts can be created at registration');
   await seller.fire('register-transaction-account', base);

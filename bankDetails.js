@@ -22,9 +22,11 @@ const INTRO = {
 };
 // Which fields make up an account, per currency. `req` fields must be present and valid before it counts as configured.
 const SCHEMA = {
-  USD: { req: ['holder', 'accountNumber', 'routing', 'swift', 'bankName', 'bankAddress'], opt: [] },
-  EUR: { req: ['holder', 'iban', 'swift', 'bankName', 'bankAddress'], opt: [] },
-  GBP: { req: ['holder', 'sortCode', 'accountNumber', 'swift', 'bankName', 'bankAddress'], opt: ['iban'] }
+  // v3.12: the Account name is NOT part of the Desk's shared account any more - every seller's own registered name is
+  // used automatically (see holderFor). `holder` is only an optional per-seller override.
+  USD: { req: ['accountNumber', 'routing', 'swift', 'bankName', 'bankAddress'], opt: ['holder'] },
+  EUR: { req: ['iban', 'swift', 'bankName', 'bankAddress'], opt: ['holder'] },
+  GBP: { req: ['sortCode', 'accountNumber', 'swift', 'bankName', 'bankAddress'], opt: ['holder', 'iban'] }
 };
 const LABEL = { holder: 'Account name', accountNumber: 'Account number', routing: 'ABA routing number', iban: 'IBAN', sortCode: 'Sort code', swift: 'SWIFT / BIC', bankName: 'Bank name', bankAddress: 'Bank address' };
 
@@ -36,7 +38,8 @@ const abaOk = (r) => /^\d{9}$/.test(r) && (3 * (+r[0] + +r[3] + +r[6]) + 7 * (+r
 const IBAN_LEN = { GB: 22, DE: 22, FR: 27, ES: 24, IT: 27, NL: 18, IE: 22, BE: 16, AT: 20, PT: 25, FI: 18, LU: 20, GR: 27, MT: 31, CY: 28, SK: 24, SI: 19, EE: 20, LV: 21, LT: 20, HR: 21, IM: 22, JE: 22, GG: 22 };
 const spaced = (s) => s.replace(/(.{4})/g, '$1 ').trim();
 
-/** Normalise + validate one field. @returns {{v?:string, err?:string}} */
+/** Normalise + validate one field. Check-digit failures (ABA / IBAN mod-97) are WARNINGS, not errors (v3.12): the value is
+ *  kept and the Desk is told to double-check it. @returns {{v?:string, err?:string, warn?:string}} */
 function checkField(ccy, f, raw) {
   const t = clean(raw, f === 'bankAddress' ? 200 : 100);
   if (!t) return { err: `${LABEL[f]} is required.` };
@@ -45,15 +48,15 @@ function checkField(ccy, f, raw) {
     case 'bankName': return t.length < 3 ? { err: 'Bank name is too short.' } : { v: t };
     case 'bankAddress': return t.length < 8 ? { err: 'Enter the bank’s full street address.' } : { v: t };
     case 'swift': { const s = t.toUpperCase().replace(/\s/g, ''); return /^[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}([A-Z0-9]{3})?$/.test(s) ? { v: s } : { err: 'SWIFT / BIC must be 8 or 11 characters, e.g. HBUKGB4B.' }; }
-    case 'routing': { const s = t.replace(/\D/g, ''); return abaOk(s) ? { v: s } : { err: 'ABA routing number must be 9 digits and pass the ABA check-digit test.' }; }
+    case 'routing': { const s = t.replace(/\D/g, ''); if (!/^\d{9}$/.test(s)) return { err: 'ABA routing number must be 9 digits.' }; return abaOk(s) ? { v: s } : { v: s, warn: 'The ABA routing number was saved, but its check digit does not match - please double-check it with the bank.' }; }
     case 'sortCode': { const d = t.replace(/\D/g, ''); return /^\d{6}$/.test(d) ? { v: `${d.slice(0, 2)}-${d.slice(2, 4)}-${d.slice(4)}` } : { err: 'Sort code must be 6 digits (00-00-00).' }; }
     case 'accountNumber': { const d = t.replace(/[\s-]/g, ''); if (ccy === 'GBP') return /^\d{8}$/.test(d) ? { v: d } : { err: 'UK account numbers have 8 digits.' }; return /^\d{4,17}$/.test(d) ? { v: d } : { err: 'US account numbers have 4 to 17 digits.' }; }
     case 'iban': {
       const s = t.toUpperCase().replace(/\s/g, '');
       if (!/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/.test(s)) return { err: 'IBAN is not in a valid format.' };
       if (IBAN_LEN[s.slice(0, 2)] && IBAN_LEN[s.slice(0, 2)] !== s.length) return { err: `A ${s.slice(0, 2)} IBAN has ${IBAN_LEN[s.slice(0, 2)]} characters.` };
-      if (ibanMod97(s) !== 1) return { err: 'IBAN check digits are wrong. Please re-check every character.' };
       if (ccy === 'GBP' && !/^(GB|IM|JE|GG)/.test(s)) return { err: 'A sterling account IBAN starts with GB.' };
+      if (ibanMod97(s) !== 1) return { v: spaced(s), warn: 'The IBAN was saved, but its check digits do not match - please double-check every character with the bank.' };
       return { v: spaced(s) };
     }
     default: return { v: t };
@@ -62,14 +65,14 @@ function checkField(ccy, f, raw) {
 /** @returns {{ok:true, fields}|{ok:false, error, errors}} - all required fields (and any supplied optional ones) must be valid. */
 function validateAccount(ccy, input, { requireAll = true } = {}) {
   const sc = SCHEMA[ccy]; if (!sc) return { ok: false, error: 'Unsupported currency.' };
-  const out = {}, errors = {};
+  const out = {}, errors = {}, warnings = [];
   for (const f of sc.req.concat(sc.opt)) {
     const raw = input && input[f]; const isOpt = sc.opt.includes(f);
     if ((raw == null || String(raw).trim() === '') && (isOpt || !requireAll)) continue;
-    const r = checkField(ccy, f, raw); if (r.err) errors[f] = r.err; else out[f] = r.v;
+    const r = checkField(ccy, f, raw); if (r.err) errors[f] = r.err; else { out[f] = r.v; if (r.warn) warnings.push(`${ccy}: ${r.warn}`); }
   }
   const keys = Object.keys(errors);
-  return keys.length ? { ok: false, error: `${ccy}: ${errors[keys[0]]}`, errors } : { ok: true, fields: out };
+  return keys.length ? { ok: false, error: `${ccy}: ${errors[keys[0]]}`, errors } : { ok: true, fields: out, warnings };
 }
 
 // ---- storage ----
@@ -83,27 +86,32 @@ async function getProfiles(store) {
 }
 /** updates = { USD: {...fields}, EUR: {...}, GBP: {...} }. A currency with every field blank is cleared. */
 async function setProfiles(store, updates) {
-  const toSave = {}; const cur = parse(await store.getSetting('bank_profiles', null)) || {};
+  const toSave = {}, warnings = []; const cur = parse(await store.getSetting('bank_profiles', null)) || {};
   for (const c of CCYS) {
     const u = updates && updates[c]; if (!u) { if (cur[c]) toSave[c] = cur[c]; continue; }
     const blank = Object.values(u).every((x) => String(x == null ? '' : x).trim() === '');
     if (blank) continue;                                  // cleared
     const v = validateAccount(c, u); if (!v.ok) return { ok: false, error: v.error, errors: v.errors };
-    toSave[c] = v.fields;
+    const f = { ...v.fields }; delete f.holder;           // the shared account never carries a name: each seller's own name is used
+    toSave[c] = f; warnings.push(...(v.warnings || []));
   }
   await store.setSetting('bank_profiles', JSON.stringify(toSave));
-  return { ok: true, profiles: await getProfiles(store) };
+  return { ok: true, profiles: await getProfiles(store), warnings };
 }
 async function getOverride(store, groupId) { return parse(await store.getSetting(`recv_override:${groupId}`, null)); }
 async function setOverride(store, group, input) {
   const ccy = group.seller_currency; if (!CCYS.includes(ccy)) return { ok: false, error: 'This seller’s currency has no receiving-account template.' };
   const v = validateAccount(ccy, input); if (!v.ok) return { ok: false, error: v.error, errors: v.errors };
   await store.setSetting(`recv_override:${group.id}`, JSON.stringify({ ccy, fields: v.fields, updatedAt: new Date().toISOString() }));
-  return { ok: true, fields: v.fields };
+  return { ok: true, fields: v.fields, warnings: v.warnings || [] };
 }
 async function clearOverride(store, groupId) { await store.setSetting(`recv_override:${groupId}`, ''); }
 
 // ---- presentation ----
+/** The name an account is shown under: the seller's own registered name (HTML entities undone), unless the Desk typed a
+ *  different one for this seller. This is what makes "Account name" fill in by itself for every seller. */
+const unesc = (v) => String(v == null ? '' : v).replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+const holderFor = (group, fields) => clean((fields && fields.holder) || '', 100) || clean(unesc(group && (group.seller_full_name || group.name)), 100) || '';
 function rowsFor(ccy, f, { reference } = {}) {
   const a = [['Account name', f.holder]];
   if (ccy === 'USD') a.push(['Account number', f.accountNumber], ['ABA routing number', f.routing]);
@@ -123,7 +131,7 @@ const SAMPLE_FIELDS = {
 async function getForGroup(store, group, { allowSample = false } = {}) {
   if (!group || group.kyc_status !== 'verified' || !group.seller_account_id) return { approved: false, status: group ? group.kyc_status || 'not_submitted' : 'not_submitted' };
   const ccy = group.seller_currency; const accountId = group.seller_account_id;
-  const base = { approved: true, accountId, currency: ccy, holder: group.seller_full_name || null };
+  const base = { approved: true, accountId, currency: ccy, holder: holderFor(group) || null };
   if (!CCYS.includes(ccy)) return { ...base, ready: false, unsupported: true };
   const ov = await getOverride(store, group.id);
   let fields = null, source = null, reference = null;
@@ -132,7 +140,7 @@ async function getForGroup(store, group, { allowSample = false } = {}) {
   let sample = false;
   if (!fields && allowSample) { fields = SAMPLE_FIELDS[ccy]; source = 'sample'; sample = true; }
   if (!fields) return { ...base, ready: false };
-  const { a, b } = rowsFor(ccy, fields, { reference });
+  const { a, b } = rowsFor(ccy, { ...fields, holder: holderFor(group, source === 'desk' || source === 'sample' ? null : fields) }, { reference });
   return { ...base, ready: true, source, details: { [ccy]: { symbol: SYMBOL[ccy], intro: INTRO[ccy], sample, a, b } } };
 }
 
@@ -164,7 +172,7 @@ async function adminView(store, group, { allowSample = false } = {}) {
   const ccy = group.seller_currency; const ov = await getOverride(store, group.id);
   const prof = CCYS.includes(ccy) ? (await getProfiles(store))[ccy] : null;
   const eff = await getForGroup(store, group, { allowSample });
-  return { groupId: group.id, currency: ccy, supported: CCYS.includes(ccy), verified: group.kyc_status === 'verified', schema: CCYS.includes(ccy) ? SCHEMA[ccy] : null, labels: LABEL, override: ov && ov.ccy === ccy ? ov.fields : null, globalConfigured: !!(prof && prof.configured), source: eff.source || null, ready: !!eff.ready, snapshot: await receivingSnapshot(store, group, { allowSample }) };
+  return { groupId: group.id, sellerName: holderFor(group), currency: ccy, supported: CCYS.includes(ccy), verified: group.kyc_status === 'verified', schema: CCYS.includes(ccy) ? SCHEMA[ccy] : null, labels: LABEL, override: ov && ov.ccy === ccy ? ov.fields : null, globalConfigured: !!(prof && prof.configured), source: eff.source || null, ready: !!eff.ready, snapshot: await receivingSnapshot(store, group, { allowSample }) };
 }
 
-module.exports = { CCYS, SCHEMA, LABEL, validateAccount, checkField, ibanMod97, abaOk, getProfiles, setProfiles, getOverride, setOverride, clearOverride, getForGroup, adminView, receivingSnapshot, referenceCheck };
+module.exports = { holderFor, CCYS, SCHEMA, LABEL, validateAccount, checkField, ibanMod97, abaOk, getProfiles, setProfiles, getOverride, setOverride, clearOverride, getForGroup, adminView, receivingSnapshot, referenceCheck };

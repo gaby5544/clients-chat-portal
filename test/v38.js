@@ -49,8 +49,10 @@ const mod97 = (iban) => { const r = (iban.replace(/\s/g, '').slice(4) + iban.rep
 
   section('3. Validation uses real banking rules');
   const V = BD.validateAccount;
-  ok(!V('USD', { holder: 'Co', accountNumber: '123456', routing: '123456789', swift: 'HBUKGB4B', bankName: 'HSBC Bank USA', bankAddress: '452 Fifth Avenue, New York' }).ok, 'ABA routing with a wrong check digit is rejected');
-  ok(!V('EUR', { holder: 'Co Ltd', iban: 'DE89 3704 0044 0532 0130 01', swift: 'COBADEFF', bankName: 'Bank', bankAddress: 'Platz 1, Frankfurt' }).ok, 'IBAN with wrong check digits is rejected');
+  { const r = V('USD', { accountNumber: '123456', routing: '123456789', swift: 'HBUKGB4B', bankName: 'HSBC Bank USA', bankAddress: '452 Fifth Avenue, New York' }); ok(r.ok && r.warnings.length === 1, 'v3.12: ABA routing with a wrong check digit is saved with a WARNING (not blocked)'); }
+  ok(!V('USD', { accountNumber: '123456', routing: '12345', swift: 'HBUKGB4B', bankName: 'HSBC Bank USA', bankAddress: '452 Fifth Avenue, New York' }).ok, 'a routing number that is not 9 digits is rejected');
+  { const r = V('EUR', { iban: 'DE89 3704 0044 0532 0130 01', swift: 'COBADEFF', bankName: 'Bank', bankAddress: 'Platz 1, Frankfurt' }); ok(r.ok && r.warnings.length === 1, 'v3.12: IBAN with wrong check digits is saved with a WARNING (not blocked)'); }
+  ok(!V('EUR', { iban: 'DE89 3704', swift: 'COBADEFF', bankName: 'Bank', bankAddress: 'Platz 1, Frankfurt' }).ok, 'a malformed / wrong-length IBAN is rejected');
   ok(!V('GBP', { holder: 'Co Ltd', sortCode: '12-34', accountNumber: '1234567', swift: 'HBUKGB4B', bankName: 'HSBC UK', bankAddress: '8 Canada Square, London' }).ok, 'bad sort code / 7-digit UK account rejected');
   ok(!V('USD', { holder: 'Co', accountNumber: '123456', routing: '021000021', swift: 'bad', bankName: 'Bank', bankAddress: '1 Main Street, NY' }).ok, 'malformed SWIFT rejected');
   ok(V('USD', { holder: 'Co', accountNumber: '123456789', routing: '021000021', swift: 'CHASUS33', bankName: 'Test Bank', bankAddress: '1 Main Street, New York' }).ok, 'a correctly formed USD account passes');
@@ -69,6 +71,9 @@ const mod97 = (iban) => { const r = (iban.replace(/\s/g, '').slice(4) + iban.rep
   await admin.fire('get-bank-profiles', {});
   ok(admin.last('bank-profiles').profiles.USD.configured === false && admin.last('bank-profiles').schema.GBP.req.includes('sortCode'), 'Desk sees which currencies are not set yet');
   await admin.fire('admin-set-bank-profiles', { profiles: { USD: { holder: 'Vistra Client Account', accountNumber: '123456789', routing: '123456788', swift: 'CHASUS33', bankName: 'Test Bank', bankAddress: '1 Main Street, New York' } } });
+  ok(admin.last('bank-profiles').profiles.USD.configured && !admin.last('bank-profiles').profiles.USD.fields.holder, 'v3.12: a bad check digit no longer blocks saving, and no account name is stored on the shared account');
+  ok((admin.all('toast-info') || []).some((t) => /check digit/i.test(t.message || '')), 'the Desk is shown a check-digit warning');
+  await admin.fire('admin-set-bank-profiles', { profiles: { USD: { accountNumber: '123456789', routing: '1234', swift: 'CHASUS33', bankName: 'Test Bank', bankAddress: '1 Main Street, New York' } } });
   ok(/routing/i.test(admin.last('error-msg') || ''), 'an invalid routing number is refused with a clear message');
   const USD = { holder: 'Vistra Client Account', accountNumber: '4821907765', routing: '021000021', swift: 'CHASUS33', bankName: 'Test Bank USA', bankAddress: '1 Main Street, New York, NY 10001' };
   const EUR = { holder: 'Vistra Client Account', iban: 'DE89 3704 0044 0532 0130 00', swift: 'COBADEFF', bankName: 'Test Bank AG', bankAddress: 'Platz 1, 60311 Frankfurt' };
@@ -101,7 +106,7 @@ const mod97 = (iban) => { const r = (iban.replace(/\s/g, '').slice(4) + iban.rep
   await seller.fire('get-receiving-details', { groupId: g1 });
   const o = flat(seller.last('receiving-details'), 'USD');
   ok(seller.last('receiving-details').source === 'seller' && o['Account number'] === '99887766554' && o['Account name'] === 'Kwame Mensah' && !('Payment reference' in o), 'the seller\'s own account details replace the global ones');
-  await admin.fire('admin-set-seller-receiving', { groupId: g1, fields: { ...USD, routing: '123456789' } });
+  await admin.fire('admin-set-seller-receiving', { groupId: g1, fields: { ...USD, routing: '1234' } });
   ok(/routing/i.test(admin.last('error-msg') || ''), 'per-seller details are validated too');
   await admin.fire('admin-clear-seller-receiving', { groupId: g1 });
   await seller.fire('get-receiving-details', { groupId: g1 });
@@ -143,14 +148,14 @@ const mod97 = (iban) => { const r = (iban.replace(/\s/g, '').slice(4) + iban.rep
 
   section('5. Per-seller style (wallpaper)');
   await seller.fire('get-my-style', { groupId: g1 });
-  ok(seller.last('my-style').style === '1', 'default style is number 1');
+  ok(seller.last('my-style').style === '3', 'default style is number 3 (Bronze Silk)');
   await seller.fire('set-my-style', { groupId: g1, style: '4' });
   ok(seller.last('my-style').style === '4' && seller.last('my-style').saved, 'seller picks style 4');
   await seller.fire('set-my-style', { groupId: g1, style: '9' });
   await seller.fire('get-my-style', { groupId: g1 });
   ok(seller.last('my-style').style === '4', 'invalid style numbers are ignored');
   await seller2.fire('get-my-style', { groupId: g2 });
-  ok(seller2.last('my-style').style === '1', 'each seller has their own style');
+  ok(seller2.last('my-style').style === '3', 'each seller has their own style');
   await buyer.fire('set-my-style', { groupId: g1, style: '6' });
   await seller.fire('get-my-style', { groupId: g1 });
   ok(seller.last('my-style').style === '4', 'only the seller can change their style');

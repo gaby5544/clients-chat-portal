@@ -43,7 +43,7 @@ class FakeSocket extends EventEmitter {
   all(ev) { return this.emitted.filter((x) => x[0] === ev).map((x) => x[1]); }
 }
 class FakeIO {
-  constructor() { this.sockets = { sockets: new Map() }; this.log = []; }
+  constructor() { this.sockets = { sockets: new Map() }; this.sockets.adapter = { rooms: { get: (room) => { const ids = new Set(); for (const s of this.sockets.sockets.values()) if (s.rooms.has(room)) ids.add(s.id); return ids.size ? ids : undefined; } } }; this.log = []; }
   add(ip) { const s = new FakeSocket(this, 's' + (this.sockets.sockets.size + 1), ip); this.sockets.sockets.set(s.id, s); return s; }
   _deliver() {}
   _toRoom(room, ev, data, except) { this.log.push([room, ev, data]); for (const s of this.sockets.sockets.values()) if (s !== except && s.rooms.has(room)) s.emitted.push([ev, data]); }

@@ -146,3 +146,6 @@ See **CHANGES-v3.1.md** for the full item-by-item report, new environment variab
 
 ## v3.11
 See **CHANGES-v3.11.md** (Airwallex welcome slide, AIRWX virtual card, incoming payments matched to the receiving account).
+
+## v3.12
+See **CHANGES-v3.12.md** (automatic account name, masked account numbers with an eye, phone numbers matched to the country, visible Chat room, Notifications page, card billing address, roomy chat box, silent admin email change, closed rooms no longer show "link expired").

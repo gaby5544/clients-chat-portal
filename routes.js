@@ -16,6 +16,7 @@ const { TERMS_VERSION, TERMS_SECTIONS, TERMS_CHECKBOX_LABEL, COMPLAINTS_EMAIL, S
 const { recordSellerIp, isIpBlocked } = require('./accountHandlers');
 const LA = require('./loginAlert');
 const Links = require('./links');
+const LoginProof = require('./loginProof');
 const vault = require('./vault');
 const { v4: uuidv4 } = require('uuid');
 
@@ -227,14 +228,16 @@ function buildRouter() {
       const lower = email.trim().toLowerCase();
       const buyers = (await store.getAllGroups()).filter((g) => g.email_a && g.email_a.toLowerCase() === lower && Links.flagsOf(g).buyerPwHash && verifyPassword(password, Links.flagsOf(g).buyerPwHash));
       if (!buyers.length) return res.status(401).json(BAD_LOGIN);
-      const open = buyers.filter((g) => !Links.flagsOf(g).buyerLinkRevoked);
-      if (!open.length) return res.status(410).json({ error: `This link has expired. Please contact us at ${SUPPORT_EMAIL}.`, code: 'link_expired' });
+      const open = buyers.filter((g) => !Links.flagsOf(g).buyerLinkRevoked && !Links.flagsOf(g).roomDeleted);
+      // v3.12: no more "link expired" - a buyer whose seat was removed has no account to show, so say that plainly
+      if (!open.length) return res.status(403).json({ error: `Your access to this trading room has ended, so there is nothing to open. If you think this is a mistake, please contact ${SUPPORT_EMAIL}.`, code: 'room_closed' });
       const g = open.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))[0];
-      return res.json({ success: true, ok: true, role: 'BUYER', groupId: g.id, sessionToken: require('crypto').randomUUID() });
+      const bTok = require('crypto').randomUUID(); await LoginProof.issue(bTok, [g.id]);
+      return res.json({ success: true, ok: true, role: 'BUYER', groupId: g.id, sessionToken: bTok });
     }
-    // Accounts whose seller link was expired by the Desk (user deleted) can no longer sign in.
-    const matches = all.filter((g) => !Links.flagsOf(g).sellerLinkRevoked);
-    if (!matches.length) return res.status(410).json({ error: `This link has expired. Please contact us at ${SUPPORT_EMAIL}.`, code: 'link_expired' });
+    // v3.12: a seller whose trading room was closed (removed from the group / group deleted) can STILL sign in and see
+    // their account; only the room is closed. A banned (closed) account is the one thing that cannot sign in.
+    const matches = all;
     const ip = clientIpFrom(req.headers, req.socket && req.socket.remoteAddress);
     const now = new Date();
     const open = matches.filter((g) => !(g.seller_locked_until && new Date(g.seller_locked_until) > now));
@@ -250,15 +253,19 @@ function buildRouter() {
       return res.status(401).json(BAD_LOGIN);
     }
     // Correct password from here on, so it is safe to say why access is refused.
-    const allowed = valid.filter((g) => !isIpBlocked(g, ip));
+    const notBanned = valid.filter((g) => !Links.flagsOf(g).banned);
+    if (!notBanned.length) return res.status(403).json({ error: `This account has been closed. Please contact ${COMPLAINTS_EMAIL}.`, code: 'account_closed' });
+    const allowed = notBanned.filter((g) => !isIpBlocked(g, ip));
     if (!allowed.length) return res.status(403).json({ error: `Access from this network location has been disabled for this account. Please contact ${COMPLAINTS_EMAIL}.`, code: 'ip_blocked' });
     const sessionToken = uuidv4();
+    await LoginProof.issue(sessionToken, allowed.map((g) => g.id));
     for (const g of allowed) { await store.updateGroup(g.id, { seller_failed_logins: 0, seller_locked_until: null }); await recordSellerIp(g.id, ip, 'login'); LA.sendLoginAlert(g, ip, { ua: req.headers['user-agent'], source: 'password', baseUrl: (req.headers && req.headers.host) ? `${req.protocol || 'https'}://${req.headers.host}` : undefined }).catch(() => {}); }
-    const shape = (g) => ({ groupId: g.id, groupName: g.name, accountId: g.seller_account_id || null, language: g.seller_language || 'en', disabled: !!g.seller_disabled });
+    const roomOpenOf = (g) => !Links.flagsOf(g).sellerLinkRevoked && !Links.flagsOf(g).roomDeleted;
+    const shape = (g) => ({ groupId: g.id, groupName: g.name, accountId: g.seller_account_id || null, language: g.seller_language || 'en', disabled: !!g.seller_disabled, roomOpen: roomOpenOf(g) });
     // A disabled account can still sign in, so the seller sees WHY it is disabled and how to complain.
     if (allowed.length === 1) {
       const g = allowed[0];
-      return res.json({ success: true, groupId: g.id, sessionToken, groupName: g.name, language: g.seller_language || 'en', disabled: !!g.seller_disabled, complaintsEmail: COMPLAINTS_EMAIL });
+      return res.json({ success: true, groupId: g.id, sessionToken, groupName: g.name, language: g.seller_language || 'en', disabled: !!g.seller_disabled, roomOpen: roomOpenOf(g), complaintsEmail: COMPLAINTS_EMAIL });
     }
     res.json({ success: true, multiple: true, sessionToken, accounts: allowed.map(shape), complaintsEmail: COMPLAINTS_EMAIL });
   });
@@ -275,8 +282,10 @@ function buildRouter() {
     if (!isValidEmail(email) || !['BUYER', 'SELLER'].includes(role)) return res.status(400).json({ error: 'Enter a valid email address.' });
     const hits = await findParty(email, role);
     if (!hits.length) return res.status(404).json({ error: NO_DEAL });
-    const live = hits.filter((g) => !Links.flagsOf(g)[role === 'BUYER' ? 'buyerLinkRevoked' : 'sellerLinkRevoked']);
-    if (!live.length) return res.status(410).json({ error: `This link has expired. Please contact us at ${SUPPORT_EMAIL}.`, code: 'link_expired' });
+    let live = hits.filter((g) => !Links.flagsOf(g)[role === 'BUYER' ? 'buyerLinkRevoked' : 'sellerLinkRevoked'] && !Links.flagsOf(g).roomDeleted);
+    // v3.12: a seller with a registered account whose room was closed is still pointed to sign-in (their account is intact)
+    if (!live.length && role === 'SELLER') live = hits.filter((g) => g.seller_registered && !Links.flagsOf(g).banned);
+    if (!live.length) return res.status(403).json({ error: `We could not open that transaction any more. If you already have an account, please sign in; otherwise contact ${SUPPORT_EMAIL}.`, code: 'room_closed' });
     const g = live[0];
     const exists = role === 'BUYER' ? !!Links.flagsOf(g).buyerPwHash : !!g.seller_registered;
     res.json({ ok: true, groupId: g.id, exists });
@@ -306,7 +315,8 @@ function buildRouter() {
     if (!hits.length) return res.status(404).json({ error: NO_DEAL });
     for (const g of hits) await store.updateGroup(g.id, { group_flags: { ...Links.flagsOf(g), buyerPwHash: hashPassword(password), buyerAccountAt: new Date().toISOString() } });
     await store.setSetting(key, 'null');
-    res.json({ ok: true, groupId: hits[0].id, sessionToken: require('crypto').randomUUID() });
+    const brTok = require('crypto').randomUUID(); await LoginProof.issue(brTok, [hits[0].id]);
+    res.json({ ok: true, groupId: hits[0].id, sessionToken: brTok });
   });
 
   // Company contact details for the sign-in screen and the "link expired" page.

@@ -15,6 +15,8 @@ function flagHtml(iso, name) {
 socket.on('link-expired', () => {
   // The Desk Officer / admin entry must never be sent to the "expired" page (e.g. while the default group is deleted).
   if (new URLSearchParams(location.search).has('officer') || sessionStorage.getItem('q_admin_reveal') === '1' || (typeof isAdminConfirmed !== 'undefined' && isAdminConfirmed)) return;
+  // v3.12: no dead-end page any more - the app stays open and offers Sign in / Create account (see v40.js showRoomClosed)
+  if (typeof showRoomClosed === 'function') return showRoomClosed({ reason: 'revoked', needLogin: true });
   try { socket.disconnect(); } catch (e) { /* ignore */ } location.replace('/expired');
 });
 

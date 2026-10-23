@@ -42,9 +42,9 @@ app.get(['/', '/index.html'], async (req, res, next) => {
   try {
     if (Object.prototype.hasOwnProperty.call(req.query, 'officer')) return next();   // admin entry
     if (typeof req.query.groupId !== 'string' || !req.query.groupId) return next();
-    const st = await linkState(req.query.groupId, typeof req.query.role === 'string' ? req.query.role : null);
-    if (st.valid) return next();
-    res.status(410).set('Cache-Control', 'no-store').type('html').send(expiredPageHtml());
+    // v3.12: the app ALWAYS opens. A dead link (group deleted / person removed) no longer shows a dead-end "expired" page:
+    // the app loads and offers Sign in / Create account; the trading room itself stays closed (enforced on the socket).
+    return next();
   } catch (e) { next(); }
 });
 

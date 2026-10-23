@@ -38,6 +38,7 @@ async function linkState(groupId, role) {
   if (!g) return { valid: false, reason: 'removed' };
   const party = partyOf(role);
   const f = flagsOf(g);
+  if (f.roomDeleted) return { valid: false, reason: 'removed', group: g, party };   // v3.12: the group was deleted but a registered seller's account lives on
   if (party === 'A' && f.buyerLinkRevoked) return { valid: false, reason: 'revoked', group: g, party };
   if (party === 'B' && f.sellerLinkRevoked) return { valid: false, reason: 'revoked', group: g, party };
   return { valid: true, group: g, party };

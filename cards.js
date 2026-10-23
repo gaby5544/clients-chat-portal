@@ -11,6 +11,7 @@
 
 const crypto = require('crypto');
 const vault = require('./vault');
+const QA = require('./public/addressRules');
 
 const PROGRAM = 'AIRWX';
 const NETWORK = 'Visa';
@@ -68,7 +69,9 @@ async function sellerView(store, group, { convert }) {
     eligible: true, program: PROGRAM, network: NETWORK, status: rec ? rec.status : 'none',
     fee: { usd: fee.usd, amount: fee.ledger, currency: ccy, paid: !!(rec && rec.fee && rec.fee.paidAt), paidAt: rec && rec.fee ? rec.fee.paidAt || null : null, ref: rec && rec.fee ? rec.fee.ref || null : null },
     balance: { available: avail, enough: avail + 1e-9 >= fee.ledger, short: Math.max(0, Math.round((fee.ledger - avail) * 100) / 100) },
-    verified: group.kyc_status === 'verified', holder: (group.seller_full_name || '').replace(/&amp;/g, '&')
+    verified: group.kyc_status === 'verified', holder: (group.seller_full_name || '').replace(/&amp;/g, '&'),
+    // v3.12: billing address (street, city, state, ZIP, country) the card is registered to
+    billing: rec && rec.billing ? rec.billing : null, billingDefaultIso: group.seller_country_iso || null
   };
   if (rec) {
     out.appliedAt = rec.appliedAt || null;
@@ -88,8 +91,9 @@ async function adminView(store, group, { convert }) {
     verified: group.kyc_status === 'verified', eligible: await isEligible(store, group.id), status: rec ? rec.status : 'none',
     fee: { usd: FEE_USD, amount: feeFor(convert, ccy).ledger, currency: ccy, paid: !!(rec && rec.fee && rec.fee.paidAt), paidAt: rec && rec.fee ? rec.fee.paidAt || null : null, ref: rec && rec.fee ? rec.fee.ref || null : null },
     appliedAt: rec ? rec.appliedAt || null : null, issuedAt: rec ? rec.issuedAt || null : null, last4: rec ? rec.last4 || null : null,
+    billing: rec && rec.billing ? rec.billing : null, billingText: rec && rec.billing ? QA.formatBilling(rec.billing) : null,
     holder: rec ? rec.holder || null : null, declinedReason: rec ? rec.declinedReason || null : null, reveals: rec ? rec.reveals || 0 : 0, lastRevealAt: rec ? rec.lastRevealAt || null : null
   };
 }
 
-module.exports = { PROGRAM, NETWORK, FEE_USD, isEligible, setEligible, getCard, saveCard, luhnOk, validateIssued, panHash, feeFor, sellerView, adminView, vault };
+module.exports = { validateBilling: QA.validateBilling, formatBilling: QA.formatBilling, PROGRAM, NETWORK, FEE_USD, isEligible, setEligible, getCard, saveCard, luhnOk, validateIssued, panHash, feeFor, sellerView, adminView, vault };
