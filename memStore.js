@@ -559,7 +559,7 @@ class MemStore {
       bank_account: rec.bankAccount || null, bank_swift: rec.bankSwift || null, bank_country: rec.bankCountry || null,
       amount: rec.amount, amount_currency: rec.amountCurrency, amount_ledger: rec.amountLedger,
       status: 'pending', status_reason: null,
-      status_history: [{ status: 'pending', at: nowIso(), by: null, note: 'Submitted by seller' }],
+      status_history: [{ status: 'pending', at: nowIso(), by: null, note: rec.note ? 'Submitted by seller · ' + rec.note : 'Submitted by seller' }],
       request_ip: rec.requestIp || null, email_confirmed_at: rec.emailConfirmedAt || null, seller_account_id: rec.sellerAccountId || null,
       created_at: nowIso(), updated_at: nowIso()
     };

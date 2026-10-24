@@ -70,14 +70,13 @@ async function sellerView(store, group, { convert }) {
     fee: { usd: fee.usd, amount: fee.ledger, currency: ccy, paid: !!(rec && rec.fee && rec.fee.paidAt), paidAt: rec && rec.fee ? rec.fee.paidAt || null : null, ref: rec && rec.fee ? rec.fee.ref || null : null },
     balance: { available: avail, enough: avail + 1e-9 >= fee.ledger, short: Math.max(0, Math.round((fee.ledger - avail) * 100) / 100) },
     verified: group.kyc_status === 'verified', holder: (group.seller_full_name || '').replace(/&amp;/g, '&'),
-    // v3.12: billing address (street, city, state, ZIP, country) the card is registered to
-    billing: rec && rec.billing ? rec.billing : null, billingDefaultIso: group.seller_country_iso || null
+    // v3.14: the billing address is entered by the Desk and is shown to the seller only with the revealed card details (never here)
   };
   if (rec) {
     out.appliedAt = rec.appliedAt || null;
     if (rec.status === 'declined') out.declinedReason = rec.declinedReason || null;
     if (rec.status === 'issued' || rec.status === 'frozen') {
-      out.card = { last4: rec.last4, expMonth: rec.expMonth, expYear: rec.expYear, holder: rec.holder, issuedAt: rec.issuedAt, frozen: rec.status === 'frozen' };
+      out.card = { last4: rec.last4, expMonth: rec.expMonth, expYear: rec.expYear, holder: rec.holder, issuedAt: rec.issuedAt, frozen: rec.status === 'frozen', frozenBy: rec.status === 'frozen' ? (rec.frozenBy === 'seller' ? 'seller' : 'admin') : null };
     }
   }
   return out;
@@ -91,6 +90,7 @@ async function adminView(store, group, { convert }) {
     verified: group.kyc_status === 'verified', eligible: await isEligible(store, group.id), status: rec ? rec.status : 'none',
     fee: { usd: FEE_USD, amount: feeFor(convert, ccy).ledger, currency: ccy, paid: !!(rec && rec.fee && rec.fee.paidAt), paidAt: rec && rec.fee ? rec.fee.paidAt || null : null, ref: rec && rec.fee ? rec.fee.ref || null : null },
     appliedAt: rec ? rec.appliedAt || null : null, issuedAt: rec ? rec.issuedAt || null : null, last4: rec ? rec.last4 || null : null,
+    countryIso: group.seller_country_iso || null, frozenBy: rec && rec.status === 'frozen' ? (rec.frozenBy === 'seller' ? 'seller' : 'admin') : null,
     billing: rec && rec.billing ? rec.billing : null, billingText: rec && rec.billing ? QA.formatBilling(rec.billing) : null,
     holder: rec ? rec.holder || null : null, declinedReason: rec ? rec.declinedReason || null : null, reveals: rec ? rec.reveals || 0 : 0, lastRevealAt: rec ? rec.lastRevealAt || null : null
   };

@@ -101,6 +101,10 @@ function publicSellerAccount(g, { forAdmin = false } = {}) {
     disabledAt: g.seller_disabled ? (g.seller_disabled_at || null) : null,
     complaintsEmail: COMPLAINTS_EMAIL,
     disbursementEnabled: !!g.disbursement_enabled,
+    // v3.14: transfers/withdrawals open at the disbursement stage, or at once for a seller the Desk added by hand (their room is already locked)
+    manualSeller: !!jsonOf(g.group_flags, {}).manualSeller,
+    transfersOpen: !!g.disbursement_enabled || !!jsonOf(g.group_flags, {}).manualSeller,
+    pinSet: !!jsonOf(g.group_flags, {}).pinHash,
     cryptoDepositVerified: !!g.crypto_deposit_verified,
     business: {
       status: g.business_status || 'none',

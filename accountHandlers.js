@@ -19,6 +19,7 @@ const QL = require('./public/languages');
 const E = require('./email');
 const { pushSellerState, pushAdminLedger, emitSnapshotTo, alertSellerOffline } = require('./fundsHandlers');
 const vault = require('./vault');
+const PIN = require('./pinLock');
 const EMAIL_DEV_ECHO = String(process.env.EMAIL_DEV_ECHO_CODES || '').toLowerCase() === 'true';
 function emailFailMessage(r) {
   if (r && r.error === 'not_configured') return 'Our email service is not set up yet, so we cannot send your code. Please contact the Desk Officer.';
@@ -614,6 +615,54 @@ function registerAccountHandlers(io, socket, ctx) {
       if (group.email_b) E.notifyPasswordChanged(group.email_b, { accountId: group.seller_account_id, name: group.seller_full_name, lang: group.seller_language }).catch(() => {});
     } catch (err) { console.error('[change-my-password]', err); socket.emit('password-change-result', { ok: false, error: 'We could not change your password. Please try again.' }); }
   });
+  // ------------------------------------------------------------------
+  // v3.14 App PIN (6 digits). Set / change / remove always needs the account password; unlocking needs the PIN.
+  // ------------------------------------------------------------------
+  const pinOut = (o) => socket.emit('pin-result', o);
+  socket.on('set-my-pin', async (p) => {
+    try {
+      p = p || {}; const m = meta(); const group = await requireSellerOwnGroup(p.groupId); if (!group) return;
+      if (!limiter.allow(m.sessionToken + ':pin')) return tooFast();
+      if (!group.seller_password_hash) return pinOut({ ok: false, kind: 'set', error: 'Please set your account password first.' });
+      if (!verifyPassword(String(p.password || ''), group.seller_password_hash)) return pinOut({ ok: false, kind: 'set', error: 'Your account password is not correct.', field: 'password' });
+      const pin = String(p.pin || '');
+      if (!PIN.PIN_RE.test(pin)) return pinOut({ ok: false, kind: 'set', error: 'Your PIN must be exactly 6 digits.', field: 'pin' });
+      if (PIN.isWeak(pin)) return pinOut({ ok: false, kind: 'set', error: 'That PIN is too easy to guess. Avoid repeated digits (111111) and straight runs (123456).', field: 'pin' });
+      await store.updateGroup(group.id, { group_flags: { ...Links.flagsOf(group), pinHash: PIN.hashPin(pin), pinSetAt: new Date().toISOString() } });
+      PIN.clearFails(group.id); PIN.markUnlocked(m.sessionToken, group.id);
+      pinOut({ ok: true, kind: 'set' });
+      await pushSellerState(io, group.id, null);
+    } catch (err) { console.error('[set-my-pin]', err); pinOut({ ok: false, kind: 'set', error: 'We could not save your PIN. Please try again.' }); }
+  });
+  socket.on('remove-my-pin', async (p) => {
+    try {
+      p = p || {}; const m = meta(); const group = await requireSellerOwnGroup(p.groupId); if (!group) return;
+      if (!limiter.allow(m.sessionToken + ':pin')) return tooFast();
+      if (!verifyPassword(String(p.password || ''), group.seller_password_hash || '')) return pinOut({ ok: false, kind: 'removed', error: 'Your account password is not correct.', field: 'password' });
+      const f = { ...Links.flagsOf(group) }; delete f.pinHash; delete f.pinSetAt;
+      await store.updateGroup(group.id, { group_flags: f });
+      PIN.clearSession(m.sessionToken); PIN.clearFails(group.id);
+      pinOut({ ok: true, kind: 'removed' });
+      await pushSellerState(io, group.id, null);
+    } catch (err) { console.error('[remove-my-pin]', err); pinOut({ ok: false, kind: 'removed', error: 'We could not remove your PIN. Please try again.' }); }
+  });
+  socket.on('unlock-pin', async (p) => {
+    try {
+      p = p || {}; const m = meta(); const group = await requireSellerOwnGroup(p.groupId); if (!group) return;
+      if (!PIN.hasPin(group)) return pinOut({ ok: true, kind: 'unlock' });
+      const ls = PIN.lockState(group.id);
+      if (ls.locked) return pinOut({ ok: false, kind: 'unlock', locked: true, retryIn: ls.retryIn, error: 'Too many wrong PINs. Try again in ' + Math.ceil(ls.retryIn / 60) + ' minute(s), or sign out.' });
+      if (!PIN.verifyPin(p.pin, group)) {
+        const r = PIN.recordFail(group.id);
+        return pinOut({ ok: false, kind: 'unlock', locked: r.locked, retryIn: r.retryIn, left: r.left, error: r.locked ? 'Too many wrong PINs. PIN entry is locked for 5 minutes.' : `That PIN is not correct. ${r.left} attempt${r.left === 1 ? '' : 's'} left.` });
+      }
+      PIN.clearFails(group.id); PIN.markUnlocked(m.sessionToken, group.id);
+      pinOut({ ok: true, kind: 'unlock' });
+    } catch (err) { console.error('[unlock-pin]', err); pinOut({ ok: false, kind: 'unlock', error: 'We could not check your PIN. Please try again.' }); }
+  });
+  // Seller signed out (button or 2 minutes without activity): forget the PIN unlock for this session.
+  socket.on('seller-logout', () => { const m = meta(); if (m && m.sessionToken) PIN.clearSession(m.sessionToken); });
+
   socket.on('get-my-security', async ({ groupId }) => {
     const group = await requireSellerOwnGroup(groupId); if (!group) return;
     const mask = (ip) => String(ip || '').includes(':') ? String(ip).split(':').slice(0, 3).join(':') + ':…' : String(ip || '').split('.').slice(0, 3).join('.') + '.•••';
@@ -735,7 +784,9 @@ function registerAccountHandlers(io, socket, ctx) {
     // Returns { error } | { blocked: {...} } | { draft, ledgerAmount, ccy, amt }
     if (group.kyc_status !== 'verified') return { error: 'Your identity must be verified before you can withdraw.' };
     if (!group.seller_currency) return { error: 'Your account currency has not been set yet.' };
-    if (!group.disbursement_enabled) {
+    // v3.14: a seller the Desk added by hand (their room is already locked) never waits for the disbursement stage
+    if (!group.disbursement_enabled && !Links.flagsOf(group).manualSeller) {
+      if (p.kind === 'transfer') return { blocked: { reason: 'disbursement', title: 'Transfers are not open yet', message: 'Your transaction has not reached the disbursement stage yet. Once both parties are confirmed and the Desk moves it to disbursement, you can transfer your available funds to any bank account. Please complete your part of the transaction in the group chat.' } };
       return { blocked: { reason: 'disbursement', title: 'Withdrawals are not open yet', message: 'Your transaction is not yet in the disbursement stage. Both parties must be fully confirmed before funds can be withdrawn. Please complete your part of the transaction in the group chat — once the Desk confirms it, you can withdraw freely.' } };
     }
     const amt = F.round2(Number(p.amount));
@@ -791,6 +842,7 @@ function registerAccountHandlers(io, socket, ctx) {
       beneficiaryName: p.method === 'bank' ? sanitizeText(p.beneficiaryName, 200) : null, bankName: p.method === 'bank' ? sanitizeText(p.bankName, 200) : null,
       bankAccount: p.method === 'bank' ? sanitizeText(p.bankAccount, 100) : null, bankSwift: p.method === 'bank' ? sanitizeText(p.bankSwift, 50) : null,
       bankCountry: p.method === 'bank' ? sanitizeText(p.bankCountry, 100) : null,
+      reference: p.method === 'bank' ? (sanitizeText(p.reference, 140) || null) : null,
       amount: amt, amountCurrency: ccy, amountLedger: ledgerAmount
     };
     return { draft, ledgerAmount, ccy, amt };
@@ -804,6 +856,7 @@ function registerAccountHandlers(io, socket, ctx) {
     } else {
       rows.push(['Beneficiary name', draft.beneficiaryName || '—'], ['Bank name', draft.bankName || '—'], ['Account number / IBAN', draft.bankAccount || '—']);
       if (draft.bankSwift) rows.push(['SWIFT / BIC', draft.bankSwift]); if (draft.bankCountry) rows.push(['Bank country', draft.bankCountry]);
+      if (draft.reference) rows.push(['Transfer reference', draft.reference]);
     }
     if (draft.amountCurrency && draft.amountCurrency !== (draft.ledgerCurrency || draft.amountCurrency)) rows.push(['Account currency', draft.ledgerCurrency]);
     return rows;
@@ -828,7 +881,7 @@ function registerAccountHandlers(io, socket, ctx) {
       const since = C.startOfUtcDayIso();
       const used = F.round2((await store.getWithdrawalsSince(group.id, since)).reduce((s, w) => s + Number(w.amount_ledger), 0));
       socket.emit('withdrawal-preview', {
-        groupId: group.id, disbursementEnabled: !!group.disbursement_enabled, accountType: group.seller_account_type,
+        groupId: group.id, disbursementEnabled: !!group.disbursement_enabled, transfersOpen: !!group.disbursement_enabled || !!Links.flagsOf(group).manualSeller, accountType: group.seller_account_type,
         dailyCap: group.seller_account_type === 'business' ? null : C.DAILY_WITHDRAWAL_CAP, usedToday: used,
         remainingToday: group.seller_account_type === 'business' ? null : Math.max(0, F.round2(C.DAILY_WITHDRAWAL_CAP - used)),
         currency: group.seller_currency, cryptoVerified: !!group.crypto_deposit_verified
@@ -842,6 +895,7 @@ function registerAccountHandlers(io, socket, ctx) {
       const group = await activeSeller(p.groupId);
       if (!group) return;
       if (!group.email_b) return socket.emit('error-msg', 'No email address is on file to send your confirmation code to.');
+      if (!PIN.isUnlocked(meta().sessionToken, group)) return socket.emit('pin-required', { action: 'transfer' });     // v3.14: the app PIN guards money leaving the account
       const r = await evaluateWithdrawal(group, p);
       if (r.error) return socket.emit('error-msg', r.error);
       if (r.blocked) {
@@ -888,7 +942,7 @@ function registerAccountHandlers(io, socket, ctx) {
       if (!moved) { pendingWithdrawals.delete(token); return socket.emit('withdrawal-confirm-result', { ok: false, error: 'Your available balance no longer covers this withdrawal.', restart: true }); }
       let wd;
       try {
-        wd = await store.createWithdrawal({ groupId: group.id, ...r.draft, requestIp: ipOfSocket(socket), emailConfirmedAt: new Date().toISOString(), sellerAccountId: group.seller_account_id });
+        wd = await store.createWithdrawal({ groupId: group.id, ...r.draft, note: r.draft.reference ? 'Transfer reference: ' + r.draft.reference : null, requestIp: ipOfSocket(socket), emailConfirmedAt: new Date().toISOString(), sellerAccountId: group.seller_account_id });
       } catch (err) { await store.adjustBalances(group.id, { available: L, pending: -L }); throw err; }
       pendingWithdrawals.delete(token);
       await recordSellerIp(group.id, ipOfSocket(socket), 'withdrawal');

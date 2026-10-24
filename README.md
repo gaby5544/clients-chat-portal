@@ -152,3 +152,6 @@ See **CHANGES-v3.12.md** (automatic account name, masked account numbers with an
 
 ## v3.13
 See **CHANGES-v3.13.md** (bank-style dashboard, own Cards page, exact ledger, profile picture, Sign out, Summit default, Desk Officer console, Account ID / account number in payment stages).
+
+## v3.14
+See **CHANGES-v3.14.md** (Transfer instead of Send, disbursement gate, billing address registered by the Desk, App PIN, 2-minute auto sign-out, card freeze).

@@ -1,6 +1,6 @@
 {
   "name": "quantum-secure-desk",
-  "version": "3.13.0",
+  "version": "3.14.0",
   "description": "Quantum Secure Transaction Desk - Enterprise Chat Portal",
   "main": "server.js",
   "engines": {

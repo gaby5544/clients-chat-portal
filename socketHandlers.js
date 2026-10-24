@@ -6,6 +6,7 @@ const { sendPushToUser } = require('./webpush');
 const F = require('./finance');
 const { publicSellerAccount, publicDeposit, publicWithdrawal, CURRENCIES, CRYPTO_ASSETS, convertCurrency } = F;
 const { registerFundsHandlers, pushSellerState, pushAdminLedger, emitSnapshotTo } = require('./fundsHandlers');
+const PIN = require('./pinLock');
 const { registerAccountHandlers, recordSellerIp, isIpBlocked, ipOfSocket } = require('./accountHandlers');
 const { registerTrackingHandlers } = require('./tracking');
 const notifier = require('./notifier');
@@ -1127,9 +1128,8 @@ function registerSocketHandlers(io, socket) {
     if (group.seller_disabled) return cardErr('Your account is currently disabled. Please contact Support.');
     const cur = await CARD.getCard(store, group.id);
     if (cur && ['awaiting_fee', 'processing', 'issued', 'frozen'].includes(cur.status)) return socket.emit('my-card', await cardView(group));
-    const bv = CARD.validateBilling(billing, group.seller_country_iso);      // v3.12: a complete, valid billing address is required
-    if (!bv.ok) return socket.emit('card-result', { ok: false, error: bv.error, field: bv.field });
-    await CARD.saveCard(store, group.id, { status: 'awaiting_fee', appliedAt: new Date().toISOString(), holder: null, billing: bv.billing, fee: { usd: CARD.FEE_USD } });
+    // v3.14: the seller no longer gives a billing address; the Desk registers it when the card is issued
+    await CARD.saveCard(store, group.id, { status: 'awaiting_fee', appliedAt: new Date().toISOString(), holder: null, billing: null, fee: { usd: CARD.FEE_USD } });
     await cardMail(group, 'applied');
     await pushCard(group.id);
     const paid = payNow ? await payFee(group) : null;
@@ -1140,12 +1140,7 @@ function registerSocketHandlers(io, socket) {
     const group = await requireSellerOwnGroup(groupId); if (!group) return;
     if (!cardLimiter.allow(meta().sessionToken)) return cardErr('Too many attempts. Please wait a moment and try again.');
     if (!(await CARD.isEligible(store, group.id))) return socket.emit('my-card', { eligible: false });
-    const rec = await CARD.getCard(store, group.id);
-    if (!rec || !['awaiting_fee', 'processing'].includes(rec.status)) return cardErr('The billing address can only be changed before your card is issued.');
-    const bv = CARD.validateBilling(billing, group.seller_country_iso);
-    if (!bv.ok) return socket.emit('card-result', { ok: false, error: bv.error, field: bv.field });
-    rec.billing = bv.billing; await CARD.saveCard(store, group.id, rec);
-    await pushCard(group.id); socket.emit('card-result', { ok: true, step: 'billing' });
+    return cardErr('Your billing address is registered by the Desk when your card is issued. You will see it with your card details.');   // v3.14
   });
   async function payFee(group) {            // resolves true only when THIS call took the fee
     if (cardBusy.has(group.id)) return false;
@@ -1178,10 +1173,11 @@ function registerSocketHandlers(io, socket) {
     if (!revealLimiter.allow(meta().sessionToken)) return socket.emit('card-result', { ok: false, error: 'Please wait a moment before showing your card details again.' });
     const rec = await CARD.getCard(store, group.id);
     if (!(await CARD.isEligible(store, group.id)) || !rec || rec.status !== 'issued' || !rec.enc) return;
+    if (!PIN.isUnlocked(meta().sessionToken, group)) return socket.emit('pin-required', { action: 'reveal' });      // v3.14: the app PIN guards the card details
     const pan = await CARD.vault.decrypt(rec.enc.pan), cvv = await CARD.vault.decrypt(rec.enc.cvv);
     if (!pan || !cvv) return socket.emit('card-result', { ok: false, error: 'We could not open the card details. Please contact Support.' });
     rec.reveals = (rec.reveals || 0) + 1; rec.lastRevealAt = new Date().toISOString(); await CARD.saveCard(store, group.id, rec);
-    socket.emit('card-reveal', { pan, expMonth: rec.expMonth, expYear: rec.expYear, cvv, holder: rec.holder });
+    socket.emit('card-reveal', { pan, expMonth: rec.expMonth, expYear: rec.expYear, cvv, holder: rec.holder, billing: rec.billing || null, billingText: rec.billing ? CARD.formatBilling(rec.billing) : null });
   });
   // Desk: eligibility switch, per seller.
   socket.on('admin-get-card', async ({ groupId }) => {
@@ -1212,7 +1208,7 @@ function registerSocketHandlers(io, socket) {
     socket.emit('card-queue', { list, eligible: elig, fee: CARD.FEE_USD });
   });
   // Desk: enter the card the issuer generated. Validated, encrypted, and the seller is told.
-  socket.on('admin-issue-card', async ({ groupId, pan, expMonth, expYear, cvv, holder }) => {
+  socket.on('admin-issue-card', async ({ groupId, pan, expMonth, expYear, cvv, holder, billing }) => {
     if (!metaHasMinRole('ADMIN')) return;
     if (!actionLimiter.allow(meta().sessionToken)) return;
     const g = await store.getGroup(String(groupId || '')); if (!g) return;
@@ -1220,10 +1216,12 @@ function registerSocketHandlers(io, socket) {
     if (!rec || rec.status !== 'processing') return socket.emit('error-msg', 'There is no paid application waiting for this seller.');
     const v = CARD.validateIssued({ pan, expMonth, expYear, cvv, holder }, g.seller_full_name);
     if (!v.ok) return socket.emit('error-msg', v.error);
+    const bv = CARD.validateBilling(billing || rec.billing, g.seller_country_iso);                  // v3.14: the Desk registers the billing address with the card
+    if (!bv.ok) return socket.emit('card-billing-error', { groupId: g.id, error: bv.error, field: bv.field });
     const h = CARD.panHash(v.v.pan); const used = await store.getSetting(`card_pan:${h}`, '');
     if (used && used !== g.id) return socket.emit('error-msg', 'That card number is already assigned to another seller.');
     await store.setSetting(`card_pan:${h}`, g.id);
-    Object.assign(rec, { status: 'issued', issuedAt: new Date().toISOString(), issuedBy: meta().sessionToken, last4: v.v.pan.slice(-4), expMonth: v.v.expMonth, expYear: v.v.expYear, holder: v.v.holder, enc: { pan: await CARD.vault.encrypt(v.v.pan), cvv: await CARD.vault.encrypt(v.v.cvv) } });
+    Object.assign(rec, { billing: bv.billing, status: 'issued', issuedAt: new Date().toISOString(), issuedBy: meta().sessionToken, last4: v.v.pan.slice(-4), expMonth: v.v.expMonth, expYear: v.v.expYear, holder: v.v.holder, enc: { pan: await CARD.vault.encrypt(v.v.pan), cvv: await CARD.vault.encrypt(v.v.cvv) } });
     await CARD.saveCard(store, g.id, rec);
     await cardMail(g, 'issued');
     io.to(`seller:${g.id}`).emit('seller-notice', { kind: 'card', title: 'Your AIRWX card is ready', body: 'Open the Card page to see it.' });
@@ -1250,10 +1248,43 @@ function registerSocketHandlers(io, socket) {
     const g = await store.getGroup(String(groupId || '')); if (!g) return;
     const rec = await CARD.getCard(store, g.id);
     if (!rec || !['issued', 'frozen'].includes(rec.status)) return;
-    rec.status = frozen === true ? 'frozen' : 'issued'; await CARD.saveCard(store, g.id, rec);
+    rec.status = frozen === true ? 'frozen' : 'issued'; rec.frozenBy = frozen === true ? 'admin' : null; await CARD.saveCard(store, g.id, rec);
     if (frozen === true) await cardMail(g, 'frozen');
     socket.emit('admin-card', await CARD.adminView(store, g, { convert: F.convertCurrency }));
     await pushCard(g.id);
+  });
+
+  // Desk: correct or complete the billing address registered to a card (any time, issued or not).
+  socket.on('admin-save-card-billing', async ({ groupId, billing }) => {
+    if (!metaHasMinRole('ADMIN')) return;
+    const g = await store.getGroup(String(groupId || '')); if (!g) return;
+    const rec = await CARD.getCard(store, g.id);
+    if (!rec) return socket.emit('error-msg', 'This seller has no card application yet.');
+    const bv = CARD.validateBilling(billing, g.seller_country_iso);
+    if (!bv.ok) return socket.emit('card-billing-error', { groupId: g.id, error: bv.error, field: bv.field });
+    rec.billing = bv.billing; await CARD.saveCard(store, g.id, rec);
+    socket.emit('toast-info', { message: 'Billing address saved for this card.' });
+    socket.emit('admin-card', await CARD.adminView(store, g, { convert: F.convertCurrency }));
+    await pushCard(g.id);
+  });
+  // Seller: freeze / unfreeze their own card. A card the Desk froze stays frozen until the Desk unfreezes it.
+  socket.on('set-card-frozen', async ({ groupId, frozen }) => {
+    const group = await requireSellerOwnGroup(groupId); if (!group) return;
+    if (!cardLimiter.allow(meta().sessionToken)) return cardErr('Too many attempts. Please wait a moment and try again.');
+    const rec = await CARD.getCard(store, group.id);
+    if (!(await CARD.isEligible(store, group.id)) || !rec || !['issued', 'frozen'].includes(rec.status)) return;
+    if (frozen === true) {
+      if (rec.status === 'frozen') return socket.emit('my-card', await cardView(group));
+      rec.status = 'frozen'; rec.frozenBy = 'seller'; rec.frozenAt = new Date().toISOString();
+    } else {
+      if (rec.status !== 'frozen') return socket.emit('my-card', await cardView(group));
+      if (rec.frozenBy !== 'seller') return cardErr('The Desk froze this card. Please contact Support to unfreeze it.');
+      if (!PIN.isUnlocked(meta().sessionToken, group)) return socket.emit('pin-required', { action: 'unfreeze' });
+      rec.status = 'issued'; rec.frozenBy = null;
+    }
+    await CARD.saveCard(store, group.id, rec);
+    await pushCard(group.id);
+    socket.emit('card-result', { ok: true, step: frozen === true ? 'frozen' : 'unfrozen' });
   });
 
   socket.on('get-my-seller-account', async ({ groupId }) => {

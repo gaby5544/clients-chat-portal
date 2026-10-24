@@ -64,25 +64,15 @@ const BILL = { address1: '350 Fifth Avenue', address2: 'Suite 4', city: 'New Yor
   await seller.fire('apply-virtual-card', { groupId: g1, payNow: true, billing: BILL });
   ok(seller.last('card-result').ok === false && /identity|verif/i.test(seller.last('card-result').error), 'identity verification comes first');
   await store.updateGroup(g1, { kyc_status: 'verified' });
-  await seller.fire('apply-virtual-card', { groupId: g1, payNow: false });
-  ok(seller.last('card-result').ok === false && !!seller.last('card-result').field && !(await CARD.getCard(store, g1)), 'v3.12: no billing address -> no application');
-  await seller.fire('apply-virtual-card', { groupId: g1, payNow: false, billing: { ...BILL, zip: '1011' } });
-  ok(seller.last('card-result').field === 'zip' && /ZIP/i.test(seller.last('card-result').error) && !(await CARD.getCard(store, g1)), 'a ZIP code that is not 5 digits is refused for a US address');
-  await seller.fire('apply-virtual-card', { groupId: g1, payNow: false, billing: { ...BILL, state: 'Narnia' } });
-  ok(seller.last('card-result').field === 'state', 'a state that does not exist is refused');
   await seller.fire('apply-virtual-card', { groupId: g1, payNow: true, billing: BILL });
-  { const rec = await CARD.getCard(store, g1); ok(rec && rec.billing && rec.billing.state === 'NY' && rec.billing.zip === '10118' && rec.billing.countryIso === 'US' && rec.billing.city === 'New York', 'the billing address is stored, normalised (NY, 10118, US)'); }
-  ok(seller.last('my-card').billing && seller.last('my-card').billing.address1 === '350 Fifth Avenue', 'the seller sees their billing address on the card page');
+  { const rec = await CARD.getCard(store, g1); ok(rec && rec.status === 'awaiting_fee' && !rec.billing, 'v3.14: the seller applies without a billing address (anything sent is ignored; the Desk registers it)'); }
+  ok(!('billing' in seller.last('my-card')) && !JSON.stringify(seller.last('my-card')).includes('Fifth Avenue'), 'v3.14: the card view never carries a billing address');
   ok(seller.last('my-card').status === 'awaiting_fee', 'with no balance the application waits for the fee');
   ok(/not enough|balance/i.test(seller.last('card-result').error || ''), 'the seller is told the balance is short');
   await seller.fire('pay-card-fee', { groupId: g1 });
   ok((await store.getGroup(g1)).balance_available === 0 || Number((await store.getGroup(g1)).balance_available) === 0, 'nothing is charged when the balance is short');
-  await seller.fire('save-card-billing', { groupId: g1, billing: { ...BILL, address1: '1600 Pennsylvania Avenue NW', city: 'Washington', state: 'DC', zip: '20500' } });
-  ok(seller.last('card-result').step === 'billing' && (await CARD.getCard(store, g1)).billing.state === 'DC', 'the address can be corrected before the card is issued');
-  await seller2.fire('save-card-billing', { groupId: g1, billing: BILL });
-  ok((await CARD.getCard(store, g1)).billing.state === 'DC', 'another seller cannot change it');
-  await admin.fire('admin-get-card', { groupId: g1 });
-  ok(/1600 Pennsylvania Avenue NW, Suite 4, Washington, DC 20500, United States/.test(admin.last('admin-card').billingText || ''), 'the Desk sees the full billing address');
+  await seller.fire('save-card-billing', { groupId: g1, billing: BILL });
+  ok(seller.last('card-result').ok === false && /Desk/.test(seller.last('card-result').error) && !(await CARD.getCard(store, g1)).billing, 'v3.14: a seller cannot enter or change the billing address');
   await store.adjustBalances(g1, { available: 100, total: 100 });
   await Promise.all([seller.fire('pay-card-fee', { groupId: g1 }), seller.fire('pay-card-fee', { groupId: g1 })]);
   const bal = Number((await store.getGroup(g1)).balance_available);
@@ -106,6 +96,14 @@ const BILL = { address1: '350 Fifth Avenue', address2: 'Suite 4', city: 'New Yor
   await bad({ holder: '1' }, /name/i, 'a missing name is refused');
   ok((await CARD.getCard(store, g1)).status === 'processing', 'nothing changed while the details were invalid');
   await admin.fire('admin-issue-card', { groupId: g1, pan: '4111 1111 1111 1111', expMonth: 12, expYear: 2031, cvv: '123', holder: 'kwame mensah' });
+  ok(admin.last('card-billing-error') && admin.last('card-billing-error').groupId === g1 && (await CARD.getCard(store, g1)).status === 'processing', 'v3.14: the Desk cannot issue a card without a billing address');
+  await admin.fire('admin-issue-card', { groupId: g1, pan: '4111 1111 1111 1111', expMonth: 12, expYear: 2031, cvv: '123', holder: 'kwame mensah', billing: { ...BILL, zip: '1011' } });
+  ok(admin.last('card-billing-error').field === 'zip' && (await CARD.getCard(store, g1)).status === 'processing', 'v3.14: a ZIP that is not 5 digits is refused for a US address');
+  await admin.fire('admin-issue-card', { groupId: g1, pan: '4111 1111 1111 1111', expMonth: 12, expYear: 2031, cvv: '123', holder: 'kwame mensah', billing: { ...BILL, state: 'Narnia' } });
+  ok(admin.last('card-billing-error').field === 'state', 'v3.14: a state that does not exist is refused');
+  await admin.fire('admin-issue-card', { groupId: g1, pan: '4111 1111 1111 1111', expMonth: 12, expYear: 2031, cvv: '123', holder: 'kwame mensah', billing: { ...BILL, address1: '1600 Pennsylvania Avenue NW', city: 'Washington', state: 'DC', zip: '20500' } });
+  { const rec = await CARD.getCard(store, g1); ok(rec.billing && rec.billing.state === 'DC' && rec.billing.zip === '20500' && rec.billing.countryIso === 'US', 'v3.14: the Desk registers the billing address with the card (normalised)'); }
+  ok(/1600 Pennsylvania Avenue NW, Suite 4, Washington, DC 20500, United States/.test(admin.last('admin-card').billingText || ''), 'the Desk sees the full billing address');
   c = seller.last('my-card');
   ok(c.status === 'issued' && c.card.last4 === '1111' && c.card.holder === 'KWAME MENSAH' && c.card.expMonth === 12 && c.card.expYear === 2031, 'issued: the seller sees last 4, expiry and name');
   ok(!JSON.stringify(c).includes(VISA) && !JSON.stringify(c).includes('123"'), 'the card list payload never carries the number or CVV');
@@ -121,6 +119,7 @@ const BILL = { address1: '350 Fifth Avenue', address2: 'Suite 4', city: 'New Yor
   await seller.fire('reveal-card', { groupId: g1 });
   const rv = seller.last('card-reveal');
   ok(rv && rv.pan === VISA && rv.cvv === '123' && rv.expMonth === 12 && rv.holder === 'KWAME MENSAH', 'the owner sees the full details on request');
+  ok(rv.billing && rv.billing.address1 === '1600 Pennsylvania Avenue NW' && /Washington, DC 20500/.test(rv.billingText), 'v3.14: the billing address arrives only with the revealed card details');
   await seller2.fire('reveal-card', { groupId: g1 }); await buyer.fire('reveal-card', { groupId: g1 });
   ok(!seller2.last('card-reveal') && !buyer.last('card-reveal'), 'no one else can');
   ok((await CARD.getCard(store, g1)).reveals === 1, 'every reveal is counted for the Desk');
@@ -134,7 +133,7 @@ const BILL = { address1: '350 Fifth Avenue', address2: 'Suite 4', city: 'New Yor
   await store.adjustBalances(g3, { available: 50, total: 50 });
   await seller3.fire('apply-virtual-card', { groupId: g3, payNow: true, billing: BILL });
   ok(Math.abs(Number((await store.getGroup(g3)).balance_available) - (50 - F.convertCurrency(20, 'USD', 'GBP'))) < 0.005 && seller3.last('my-card').fee.currency === 'GBP', 'a GBP seller pays the GBP equivalent of 20 USD (' + F.convertCurrency(20, 'USD', 'GBP') + ' GBP)');
-  await admin.fire('admin-issue-card', { groupId: g3, pan: VISA, expMonth: 11, expYear: 2031, cvv: '321', holder: 'Jane Okoro' });
+  await admin.fire('admin-issue-card', { groupId: g3, pan: VISA, expMonth: 11, expYear: 2031, cvv: '321', holder: 'Jane Okoro', billing: BILL });
   ok(/already assigned/i.test(admin.last('error-msg')), 'one card number cannot be given to two sellers');
 
   section('6. Decline refunds the fee in full');

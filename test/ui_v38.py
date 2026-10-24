@@ -44,7 +44,7 @@ with sync_playwright() as p:
     page.clock.set_fixed_time('2026-10-22T12:00:00+01:00'); page.evaluate("() => setTxAccountNav('dashboard')")
     ok(title(page) == 'Good afternoon, Kwame', 'afternoon from 12:00')
     row = page.inner_text('.v41-actions').replace('\n', ' ')
-    ok(all(w in row for w in ('Send', 'Receive', 'Withdraw', 'Statements')), 'v3.13 dashboard has Send, Receive, Withdraw, Statements: ' + row)
+    ok(all(w in row for w in ('Transfer', 'Receive', 'Withdraw', 'Statements')), 'v3.14 dashboard has Transfer, Receive, Withdraw, Statements: ' + row)
     ok(page.locator('#txStyleBtn').count() == 0, 'the palette button is gone from the top bar')
     ok(page.locator('#txSupportBtn').count() == 0 and page.locator('#txBellBtn').count() == 0, 'v3.12: Support and the bell are gone from the top bar')
     ok(page.is_visible('#txBottomNav') and all(w in page.inner_text('#txBottomNav') for w in ('Home', 'Transfer', 'Cards', 'Activity', 'Profile')), 'v3.13 bottom bar: Home, Transfer, Cards, Activity, Profile')

@@ -608,7 +608,7 @@ class PgStore {
 
   // ---------- WITHDRAWAL REQUESTS ----------
   async createWithdrawal(rec) {
-    const history = JSON.stringify([{ status: 'pending', at: new Date().toISOString(), by: null, note: 'Submitted by seller' }]);
+    const history = JSON.stringify([{ status: 'pending', at: new Date().toISOString(), by: null, note: rec.note ? 'Submitted by seller · ' + rec.note : 'Submitted by seller' }]);
     const { rows } = await this.pool.query(
       `INSERT INTO withdrawal_requests
         (id, group_id, method, asset, network, destination, beneficiary_name, bank_name, bank_account, bank_swift, bank_country, amount, amount_currency, amount_ledger, status_history, request_ip, email_confirmed_at, seller_account_id)
