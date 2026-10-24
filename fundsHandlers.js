@@ -58,6 +58,27 @@ function isSellerOnline(io, token) {
   return Array.from(activeSocketsOf(io).values()).some((v) => v.sessionToken === token);
 }
 
+// ---------------- Ledger (v3.13) ----------------
+// One reconciled picture of the money: what came in, what went out and why, what is available. By construction
+//   moneyIn - moneyOut = available balance,   moneyOut = fees + completed withdrawals + withdrawals in progress (+ any adjustment)
+const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+async function ledgerFor(g, wds) {
+  const total = r2(g.total_deposited), held = r2(g.balance_held), avail = r2(g.balance_available), pending = r2(g.balance_pending);
+  let moneyIn = r2(total - held); let moneyOut = r2(moneyIn - avail);
+  if (moneyOut < 0) { moneyIn = r2(moneyIn - moneyOut); moneyOut = 0; }
+  const feeItems = [];
+  try {
+    const rec = await require('./cards').getCard(store, g.id);
+    if (rec && rec.fee && rec.fee.paidAt && ['processing', 'issued', 'frozen'].includes(rec.status)) {
+      feeItems.push({ kind: 'card_fee', title: 'AIRWX card issuing fee', amount: r2(rec.fee.ledger), date: rec.fee.paidAt, ref: rec.fee.ref || null });
+    }
+  } catch (e) { /* no card record: no card fee */ }
+  const fees = r2(feeItems.reduce((a, f) => a + f.amount, 0));
+  const withdrawn = r2((wds || []).filter((w) => w.status === 'completed').reduce((a, w) => a + Number(w.amount_ledger || 0), 0));
+  const other = r2(moneyOut - fees - withdrawn - pending);
+  return { currency: g.seller_currency || 'USD', totalDeposited: total, moneyIn, moneyOut, fees, withdrawn, inProgress: pending, held, available: avail, other, reconciles: Math.abs(other) < 0.005, feeItems };
+}
+
 // ---------------- Snapshots ----------------
 async function sellerSnapshot(groupId) {
   const g = await store.getGroup(groupId);
@@ -65,8 +86,9 @@ async function sellerSnapshot(groupId) {
   const [deps, wds, inc] = await Promise.all([
     store.getDepositsForGroup(groupId), store.getWithdrawalsForGroup(groupId), store.getIncomingFundsForGroup(groupId)
   ]);
+  const account = F.publicSellerAccount(g); account.ledger = await ledgerFor(g, wds);
   return {
-    account: F.publicSellerAccount(g),
+    account,
     deposits: deps.map(F.publicDeposit),
     withdrawals: wds.map((w) => F.publicWithdrawal(w)),
     incoming: inc.map((i) => F.publicIncoming(i, false, g.seller_account_id, g.seller_phone))
@@ -114,7 +136,7 @@ async function adminLedger(g) {
   return {
     ledger: {
       groupId: g.id,
-      account: F.publicSellerAccount(g, { forAdmin: true }),
+      account: Object.assign(F.publicSellerAccount(g, { forAdmin: true }), { ledger: await ledgerFor(g, wds) }),
       deposits: deps.map(F.publicDeposit),
       withdrawals: wds.map((w) => F.publicWithdrawal(w, { forAdmin: true })),
       incoming: inc.map((i) => F.publicIncoming(i, true, g.seller_account_id, g.seller_phone))
@@ -259,7 +281,8 @@ function incomingExtraDetails(v, rec) {
   }
   if (v.meta && v.meta.receivingAccount && v.meta.receivingAccount.accountId) {
     const ra = v.meta.receivingAccount;
-    rows.push(['Credited to', `${ra.currency || ''} account${ra.ending ? ' \u2022\u2022' + ra.ending : ''} (Account ID ${ra.accountId})`.replace(/\s+/g, ' ').trim()]);
+    // v3.13: the account number once bank details exist, the Account ID until then
+    rows.push(['Credited to', `${ra.currency || ''} account${ra.ending ? ' \u2022\u2022' + ra.ending : ''} (${ra.ready && ra.idLabel ? ra.idLabel : 'Account ID ' + ra.accountId})`.replace(/\s+/g, ' ').trim()]);
     if (v.amountCurrency !== ra.currency) rows.push(['Converted to', `${fmt(v.amountLedger, ra.currency)} at ${Number(v.fxRate).toFixed(4)}`]);
   }
   rows.push(['You receive', v.feePayer === 'seller' ? fmt(v.amount - v.feeAmount, v.amountCurrency) : fmt(v.amount, v.amountCurrency)]);
@@ -312,8 +335,9 @@ function registerFundsHandlers(io, socket, ctx) {
       // v3.11: stamp the receiving account onto the payment, so the account card, the tracker, the emails and the receipt all name the SAME account.
       const BD = require('./bankDetails');
       const rsnap = await BD.receivingSnapshot(store, group, { allowSample: String(process.env.ALLOW_SAMPLE_BANK_DETAILS || '').toLowerCase() === 'true' });
-      v.meta.receivingAccount = { accountId: rsnap.accountId, currency: rsnap.currency, ending: rsnap.ending, bankName: rsnap.bankName, source: rsnap.source, ready: rsnap.ready };
-      v.meta.referenceCheck = v.method === 'crypto' ? 'na' : BD.referenceCheck(group.seller_account_id, v.externalRef);
+      v.meta.receivingAccount = { accountId: rsnap.accountId, currency: rsnap.currency, ending: rsnap.ending, bankName: rsnap.bankName, source: rsnap.source, ready: rsnap.ready, idKind: rsnap.idKind, idLabel: rsnap.idLabel };
+      const rm = v.method === 'crypto' ? { result: 'na', by: null } : BD.referenceMatch(rsnap, v.externalRef);   // v3.13: Account ID, or the seller's own account number
+      v.meta.referenceCheck = rm.result; v.meta.matchedBy = rm.by;
 
       const credited = v.treatment === 'credit';
       const L = v.amountLedger;
@@ -483,6 +507,6 @@ function registerFundsHandlers(io, socket, ctx) {
 }
 
 module.exports = {
-  registerFundsHandlers, pushSellerState, pushAdminLedger, emitSnapshotTo, sellerSnapshot,
+  registerFundsHandlers, pushSellerState, pushAdminLedger, emitSnapshotTo, sellerSnapshot, ledgerFor,
   WITHDRAWAL_TRANSITIONS, WD_LABEL, WD_STATUSES, alertSellerOffline, canon, bucketOf
 };

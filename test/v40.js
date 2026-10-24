@@ -138,7 +138,7 @@ const lastCode = (re) => { for (let i = logs.length - 1; i >= 0; i--) { const m 
 
   section('6. Style default and address rules');
   await seller.fire('get-my-style', { groupId: g1 });
-  ok(seller.last('my-style').style === '3', 'Bronze Silk (3) is the default style');
+  ok(seller.last('my-style').style === '4' && seller.last('my-style').chosen === false, 'Summit (4) is the default style until the seller picks one');
   const vb = (o) => QA.validateBilling(o, '');
   ok(vb({ address1: '350 Fifth Avenue', city: 'New York', state: 'New York', zip: '10118', country: 'US' }).billing.state === 'NY', 'US state names become codes');
   ok(vb({ address1: '350 Fifth Avenue', city: 'New York', state: 'NY', zip: 'ABCDE', country: 'US' }).field === 'zip', 'US ZIP must be digits');

@@ -195,6 +195,18 @@ socket.on('my-card', () => { if (typeof renderStatements === 'function' && docum
 // ====================================================================
 // 3. Incoming payments <-> the account they land in
 // ====================================================================
+// v3.13: the account is identified by its account number once bank details exist, otherwise by the Account ID
+function rcIdLabel(a) {
+  a = a || {};
+  try {
+    if (typeof rcData !== 'undefined' && rcData && rcData.ready && rcData.details && rcData.currency) {
+      const d = rcData.details[rcData.currency]; const rows = [].concat((d && d.a) || [], (d && d.b) || []);
+      const hit = rows.find((r) => /^(account number|iban)$/i.test(r[0]));
+      if (hit) { const t = String(hit[1]).replace(/[^0-9A-Za-z]/g, ''); return `${/iban/i.test(hit[0]) ? 'IBAN' : 'Account number'} \u2022\u2022${t.slice(-4)}`; }
+    }
+  } catch (e) { /* fall back to the Account ID */ }
+  return `Account ID ${a.accountId || ''}`.trim();
+}
 function rcIncomingHtml() {
   const list = (typeof sellerIncoming !== 'undefined' ? sellerIncoming : []).slice(0, 5);
   const a = sellerAccountState || {};
@@ -206,7 +218,7 @@ function rcIncomingHtml() {
     }
     return `<div class="rc-in"><div><b>${v38Esc(i.payerName)}</b><small>${v38Esc(i.ref)} · ${v38Esc(i.receivedInto ? i.receivedInto.label : (a.currency || '') + ' account')}</small></div><div class="rc-in-r"><b>+${v38Esc(fmtMoney(i.sellerReceives != null ? i.sellerReceives : i.amount, i.amountCurrency))}</b><span>${v38Esc(st)}</span></div></div>`;
   }).join('');
-  return `<div class="rc-wrap rc-incoming" id="rcIncoming"><div class="rc-gt">Incoming to Account ID <span translate="no">${v38Esc(a.accountId || '')}</span></div>${rows || '<p class="rc-empty">No incoming payments yet. When a payment is recorded for you it appears here and moves through the verification stages.</p>'}</div>`;
+  return `<div class="rc-wrap rc-incoming" id="rcIncoming"><div class="rc-gt"><span>Incoming to <span translate="no">${v38Esc(rcIdLabel(a))}</span></span></div>${rows || '<p class="rc-empty">No incoming payments yet. When a payment is recorded for you it appears here and moves through the verification stages.</p>'}</div>`;
 }
 const _renderAccV39 = renderAccountsPage;
 renderAccountsPage = function () {
@@ -287,6 +299,9 @@ function renderRfStrip() {
   const lines = [`<div><i class="fa-solid fa-building-columns"></i> Pays into <b translate="no">${v38Esc(s.label || 'the seller account')}</b> · Account ID <b translate="no">${v38Esc(s.accountId || '—')}</b>${s.bankName ? ' · ' + v38Esc(s.bankName) : ''}</div>`];
   if (!s.ready) lines.push('<div class="warn"><i class="fa-solid fa-triangle-exclamation"></i> No receiving account is set for this currency yet (Controls → Receiving accounts).</div>');
   if (cur && s.currency && cur !== s.currency) lines.push(`<div class="warn"><i class="fa-solid fa-right-left"></i> The seller’s account is in ${v38Esc(s.currency)}; this payment will be converted.</div>`);
-  if (ref && s.accountId) lines.push(ref.includes(String(s.accountId)) ? '<div class="good"><i class="fa-solid fa-circle-check"></i> The reference contains the seller’s Account ID.</div>' : '<div class="warn"><i class="fa-solid fa-triangle-exclamation"></i> The reference does not contain the seller’s Account ID. Check it against the payer before crediting.</div>');
+  const byNo = !!(s.ready && s.source === 'seller' && s.accountNumber && s.accountNumber.length >= 6 && ref.toUpperCase().includes(String(s.accountNumber).toUpperCase()));
+  if (s.ready) lines.push(`<div><i class="fa-solid fa-hashtag"></i> Identified by <b translate="no">${v38Esc(s.idLabel || '')}</b>${s.source === 'seller' ? ' (the seller’s own account)' : ' · the payer quotes the seller’s Account ID as the reference'}</div>`);
+  else lines.push('<div><i class="fa-solid fa-fingerprint"></i> No bank details yet, so this payment is identified by the Account ID <b translate="no">' + v38Esc(s.accountId || '—') + '</b>.</div>');
+  if (ref && s.accountId) lines.push(ref.includes(String(s.accountId)) ? '<div class="good"><i class="fa-solid fa-circle-check"></i> The reference contains the seller’s Account ID.</div>' : byNo ? '<div class="good"><i class="fa-solid fa-circle-check"></i> The reference contains the seller’s account number.</div>' : '<div class="warn"><i class="fa-solid fa-triangle-exclamation"></i> The reference does not contain the seller’s ' + (s.source === 'seller' ? 'Account ID or account number' : 'Account ID') + '. Check it against the payer before crediting.</div>');
   strip.innerHTML = lines.join('');
 }

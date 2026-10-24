@@ -218,7 +218,7 @@ function generateFundsReceiptPdf(res, { kind, record, group }) {
     }
     y = flowRow(doc, y, [{ x: L, w: CW, label: record.method === 'crypto' ? 'Transaction hash' : 'Bank reference', value: record.externalRef }]);
     if (record.receivedInto) {
-      y = flowRow(doc, y, [{ x: L, w: W2, label: 'Credited to', value: record.receivedInto.label }, { x: R2, w: W2, label: 'Account ID', value: record.receivedInto.accountId }]);
+      y = flowRow(doc, y, [{ x: L, w: W2, label: 'Credited to', value: record.receivedInto.label }, { x: R2, w: W2, label: record.receivedInto.idKind === 'accountNumber' ? (record.receivedInto.currency === 'EUR' ? 'IBAN' : 'Account number') : 'Account ID', value: record.receivedInto.idKind === 'accountNumber' ? '\u2022\u2022' + record.receivedInto.ending : record.receivedInto.accountId }]);
     }
     if (record.status === 'held_in_vault') {
       y += 2;

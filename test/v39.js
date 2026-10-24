@@ -178,7 +178,7 @@ const BILL = { address1: '350 Fifth Avenue', address2: 'Suite 4', city: 'New Yor
   ok(sellerView.track.stages.find((s) => s.n === 4).checks === undefined, 'the seller sees no detail for stages that have not started');
   ok(!('referenceCheck' in sellerView) && adminView.referenceCheck === 'different', 'the reference check is for the Desk only');
   const t4 = adminView.track.stages.find((s) => s.n === 4);
-  ok(t4.checks.some((k) => k.text === 'Funds transferred to the seller account 12345678901') && sellerView.receivedInto.accountId === '12345678901', 'stage 4 and the receiving account name the SAME Account ID');
+  ok(t4.checks.some((k) => k.text === 'Funds transferred to the seller account number ••6554') && sellerView.receivedInto.accountId === '12345678901' && sellerView.receivedInto.idKind === 'accountNumber', 'v3.13: with bank details, stage 4 names the account NUMBER (••6554) and the receiving account says the same');
   const mails = logs.filter((l) => /\[email:mock\]/.test(l)).filter((l) => /Credited to/.test(l));
   ok(mails.length >= 1 && mails.some((l) => /USD account/.test(l) && /12345678901/.test(l)), 'the "funds received" email names the account and Account ID');
   await admin.fire('admin-record-incoming-funds', { groupId: g1, payerName: 'Euro Co', purpose: 'Goods', method: 'wire', amount: 100, amountCurrency: 'EUR', treatment: 'credit', externalRef: '12345678901' });

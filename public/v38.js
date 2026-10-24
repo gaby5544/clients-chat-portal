@@ -17,7 +17,8 @@ const WP_STYLES = [
   { id: '5', name: 'Crimson Dots', accent: '#ff6b6b', shade: [0.36, 0.76] },
   { id: '6', name: 'Sapphire Eclipse', accent: '#45b5e8', shade: [0.26, 0.68] }
 ];
-let wpCurrent = /^[1-6]$/.test(v38Get('q_style') || '') ? v38Get('q_style') : '3';   // v3.12: Bronze Silk is the default style
+// v3.13: Summit (4) is the default. A saved choice only counts when the seller picked it themselves (q_style_chosen).
+let wpCurrent = (v38Get('q_style_chosen') === '1' && /^[1-6]$/.test(v38Get('q_style') || '')) ? v38Get('q_style') : '4';
 function applyStyle(id, persist) {
   const s = WP_STYLES.find((x) => x.id === String(id)) || WP_STYLES[0];
   wpCurrent = s.id;
@@ -26,7 +27,7 @@ function applyStyle(id, persist) {
   root.style.setProperty('--wp-accent', s.accent);
   root.style.setProperty('--wp-shade-a', `rgba(5,9,18,${s.shade[0]})`); root.style.setProperty('--wp-shade-b', `rgba(5,9,18,${s.shade[1]})`);
   root.dataset.wp = s.id;
-  if (persist !== false) v38Set('q_style', s.id);
+  if (persist !== false) { v38Set('q_style', s.id); v38Set('q_style_chosen', '1'); }
   document.querySelectorAll('.style-opt').forEach((b) => { b.classList.toggle('sel', b.dataset.style === s.id); b.setAttribute('aria-pressed', String(b.dataset.style === s.id)); });
   const nm = document.getElementById('styleNowName'); if (nm) nm.textContent = `${s.id} · ${s.name}`;
 }
@@ -45,7 +46,7 @@ function openStylePicker() {
       <div class="modal-body"><p style="color:var(--text-muted);font-size:.8rem;margin:0 0 14px">Your style becomes the background of your account home and your conversation. It is saved to your account and follows you on every device. Currently: <b id="styleNowName"></b></p>
       <div class="style-grid" id="styleGrid"></div></div></div></div>`);
     m = document.getElementById('styleModal');
-    document.getElementById('styleGrid').innerHTML = WP_STYLES.map((s) => `<button type="button" class="style-opt" data-style="${s.id}" aria-label="Style ${s.id}: ${s.name}"><img src="/wallpapers/wp${s.id}-thumb.webp" alt="" loading="lazy"><span class="so-no">${s.id}</span><span class="so-ok"><i class="fa-solid fa-check"></i></span><span class="so-name">${s.name}${s.id === '1' ? ' · default' : ''}</span></button>`).join('');
+    document.getElementById('styleGrid').innerHTML = WP_STYLES.map((s) => `<button type="button" class="style-opt" data-style="${s.id}" aria-label="Style ${s.id}: ${s.name}"><img src="/wallpapers/wp${s.id}-thumb.webp" alt="" loading="lazy"><span class="so-no">${s.id}</span><span class="so-ok"><i class="fa-solid fa-check"></i></span><span class="so-name">${s.name}${s.id === '4' ? ' · default' : ''}</span></button>`).join('');
     document.getElementById('styleGrid').addEventListener('click', (e) => {
       const b = e.target.closest('.style-opt'); if (!b) return;
       applyStyle(b.dataset.style);
@@ -56,7 +57,7 @@ function openStylePicker() {
   applyStyle(wpCurrent, false);
   m.classList.remove('hidden');
 }
-socket.on('my-style', (d) => { if (d && /^[1-6]$/.test(String(d.style))) applyStyle(d.style); });
+socket.on('my-style', (d) => { if (d && /^[1-6]$/.test(String(d.style))) applyStyle(d.style, d.chosen === true || d.saved === true); });
 
 // ====================================================================
 // 2. Seller screen: Accounts page, greeting, action buttons, support, bottom bar

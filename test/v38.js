@@ -148,14 +148,14 @@ const mod97 = (iban) => { const r = (iban.replace(/\s/g, '').slice(4) + iban.rep
 
   section('5. Per-seller style (wallpaper)');
   await seller.fire('get-my-style', { groupId: g1 });
-  ok(seller.last('my-style').style === '3', 'default style is number 3 (Bronze Silk)');
+  ok(seller.last('my-style').style === '4', 'default style is number 4 (Summit)');
   await seller.fire('set-my-style', { groupId: g1, style: '4' });
   ok(seller.last('my-style').style === '4' && seller.last('my-style').saved, 'seller picks style 4');
   await seller.fire('set-my-style', { groupId: g1, style: '9' });
   await seller.fire('get-my-style', { groupId: g1 });
   ok(seller.last('my-style').style === '4', 'invalid style numbers are ignored');
   await seller2.fire('get-my-style', { groupId: g2 });
-  ok(seller2.last('my-style').style === '3', 'each seller has their own style');
+  ok(seller2.last('my-style').style === '4', 'each seller has their own style');
   await buyer.fire('set-my-style', { groupId: g1, style: '6' });
   await seller.fire('get-my-style', { groupId: g1 });
   ok(seller.last('my-style').style === '4', 'only the seller can change their style');

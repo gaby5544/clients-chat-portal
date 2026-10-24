@@ -329,7 +329,7 @@ function showRoomClosed(d) {
     const sp = v40El('appSplash'); if (sp) sp.classList.add('hidden');
     document.documentElement.classList.add('gate-signin');
     gateShow('welcome');
-    const w = v40El('gvWelcome'); if (w && !v40El('gateClosedNote')) w.insertAdjacentHTML('afterbegin', `<div class="v40-closednote" id="gateClosedNote"><i class="fa-solid fa-circle-info"></i> <span>${v40Esc(v40ClosedText(d.reason))}</span></div>`);
+    // v3.13: no "this invitation no longer opens a trading room" box on the welcome screen - the person just sees Sign in / Create account.
   });
 }
 socket.on('room-closed', (d) => showRoomClosed(d));

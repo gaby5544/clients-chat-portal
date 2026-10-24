@@ -149,3 +149,6 @@ See **CHANGES-v3.11.md** (Airwallex welcome slide, AIRWX virtual card, incoming 
 
 ## v3.12
 See **CHANGES-v3.12.md** (automatic account name, masked account numbers with an eye, phone numbers matched to the country, visible Chat room, Notifications page, card billing address, roomy chat box, silent admin email change, closed rooms no longer show "link expired").
+
+## v3.13
+See **CHANGES-v3.13.md** (bank-style dashboard, own Cards page, exact ledger, profile picture, Sign out, Summit default, Desk Officer console, Account ID / account number in payment stages).

@@ -415,7 +415,7 @@ renderIncomingSeller = function () {
       <div class="incoming-purpose">${escapeHtml(i.purpose)}</div>
       <div class="incoming-meta">${fmtDateTime(i.receivedAt)} · ${escapeHtml(i.ref)} · <span class="tx-status-badge ${statusPillClass(i.status)}" style="padding:2px 8px; font-size:0.62rem;">${escapeHtml(statusLabel)}</span>${i.statusReason ? ` · ${escapeHtml(i.statusReason)}` : ''}</div>
       ${i.externalRef ? `<div class="incoming-meta">${i.method === 'crypto' ? 'Transaction hash' : 'Bank reference'}: <span translate="no">${escapeHtml(i.externalRef)}</span>${i.bankName ? ' · ' + escapeHtml(i.bankName) : ''}</div>` : ''}
-      ${i.receivedInto ? `<div class="incoming-meta">Received into: <b translate="no">${escapeHtml(i.receivedInto.label)}</b> · Account ID <span translate="no">${escapeHtml(i.receivedInto.accountId)}</span></div>` : ''}
+      ${i.receivedInto ? `<div class="incoming-meta">Received into: <b translate="no">${escapeHtml(i.receivedInto.label)}</b> · <span translate="no">${escapeHtml(i.receivedInto.idLabel || ('Account ID ' + i.receivedInto.accountId))}</span></div>` : ''}
       ${feeBlockHtml(i)}
       ${i.receiptUrl ? `<a class="incoming-receipt" href="${i.receiptUrl}" target="_blank"><i class="fa-solid fa-file-invoice"></i> Download receipt</a>` : ''}
       ${i.track ? `<details class="trk-history" ${i.track.complete ? '' : 'open'}><summary>${i.track.complete ? 'View payment tracking history' : 'Live payment tracking'}</summary>${trackBadge(i)}${trackerHtml(i.track)}</details>` : ''}

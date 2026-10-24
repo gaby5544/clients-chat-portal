@@ -198,7 +198,7 @@ function publicIncoming(i, forAdmin, accountId, phone) {
     fxRate: Number(i.fx_rate || 1), receivedAt: i.received_at,
     status: i.status, statusReason: i.status_reason || null, statusHistory: safeHistory(i.status_history),
     createdAt: i.created_at, updatedAt: i.updated_at,
-    track: publicTrack(i, { accountId, phone, forAdmin: !!forAdmin }),
+    track: publicTrack(i, { accountId: (receivedInto(i, accountId) || {}).accountRef || accountId, phone, forAdmin: !!forAdmin }),
     receiptUrl: ['credited', 'held_in_vault'].includes(i.status) ? receiptUrl('incoming', i.id) : null
   };
   if (forAdmin) {
@@ -216,7 +216,10 @@ function receivedInto(i, accountId) {
   const id = ra.accountId || accountId || null;
   if (!id) return null;
   const ccy = ra.currency || null;
-  return { accountId: id, currency: ccy, ending: ra.ending || null, bankName: ra.bankName || null, label: ccy ? `${ccy} account${ra.ending ? ' \u2022\u2022' + ra.ending : ''}` : 'Your account' };
+  const byNumber = !!(ra.ready && ra.ending);   // v3.13: bank details exist -> identified by the account number; otherwise by the Account ID
+  return { accountId: id, currency: ccy, ending: ra.ending || null, bankName: ra.bankName || null, label: ccy ? `${ccy} account${ra.ending ? ' \u2022\u2022' + ra.ending : ''}` : 'Your account',
+    idKind: byNumber ? 'accountNumber' : 'accountId', idLabel: byNumber ? (ra.idLabel || `${ccy === 'EUR' ? 'IBAN' : 'Account number'} \u2022\u2022${ra.ending}`) : `Account ID ${id}`,
+    accountRef: byNumber ? `${ccy === 'EUR' ? 'IBAN' : 'number'} \u2022\u2022${ra.ending}` : id };
 }
 
 module.exports = {

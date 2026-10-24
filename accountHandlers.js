@@ -147,7 +147,7 @@ function registerAccountHandlers(io, socket, ctx) {
         if (group && group.seller_session_token === m.sessionToken && group.seller_registered) {
           await store.updateGroup(group.id, { seller_language: language });
           const fresh = await store.getGroup(group.id);
-          socket.emit('seller-account-state', F.publicSellerAccount(fresh));
+          await emitSnapshotTo(socket, group.id);   // v3.13: the full state (with the ledger), not a bare account
           io.to('finance-admins').emit('seller-account-updated', adminAccount(fresh));
         }
       }

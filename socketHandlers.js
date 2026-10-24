@@ -1068,13 +1068,32 @@ function registerSocketHandlers(io, socket) {
   socket.on('get-my-style', async ({ groupId }) => {
     const group = await requireSellerOwnGroup(groupId); if (!group) return;
     const v = await store.getSetting(`style:${group.id}`, null);
-    socket.emit('my-style', { style: /^[1-6]$/.test(String(v)) ? String(v) : '3' });   // v3.12: Bronze Silk is the default
+    const chosen = /^[1-6]$/.test(String(v));
+    socket.emit('my-style', { style: chosen ? String(v) : '4', chosen });   // v3.13: Summit is the default (until the seller picks one themselves)
   });
   socket.on('set-my-style', async ({ groupId, style }) => {
     const group = await requireSellerOwnGroup(groupId); if (!group) return;
     if (!/^[1-6]$/.test(String(style))) return;
     await store.setSetting(`style:${group.id}`, String(style));
-    socket.emit('my-style', { style: String(style), saved: true });
+    socket.emit('my-style', { style: String(style), saved: true, chosen: true });
+  });
+
+
+  // ---- Seller's profile photo (v3.13): one small cropped JPEG, saved per seller so it follows them to every device ----
+  const PHOTO_RE = /^data:image\/jpeg;base64,\/9j\/[A-Za-z0-9+/=]+$/;
+  const photoLimiter = new RateLimiter({ windowMs: 60000, max: 10 });
+  socket.on('get-my-photo', async ({ groupId }) => {
+    const group = await requireSellerOwnGroup(groupId); if (!group) return;
+    const v = await store.getSetting(`photo:${group.id}`, null);
+    socket.emit('my-photo', { photo: typeof v === 'string' && PHOTO_RE.test(v) ? v : null });
+  });
+  socket.on('set-my-photo', async ({ groupId, photo }) => {
+    const group = await requireSellerOwnGroup(groupId); if (!group) return;
+    if (!photoLimiter.allow(meta().sessionToken)) return socket.emit('photo-result', { ok: false, error: 'Too many changes. Please wait a minute and try again.' });
+    if (photo === null || photo === '') { await store.setSetting(`photo:${group.id}`, ''); return socket.emit('my-photo', { photo: null, saved: true }); }
+    if (typeof photo !== 'string' || photo.length > 160000 || !PHOTO_RE.test(photo)) return socket.emit('photo-result', { ok: false, error: 'Please choose a JPG or PNG picture.' });
+    await store.setSetting(`photo:${group.id}`, photo);
+    socket.emit('my-photo', { photo, saved: true });
   });
 
 

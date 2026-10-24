@@ -152,6 +152,7 @@ const tail4 = (v) => String(v || '').replace(/[^0-9A-Za-z]/g, '').slice(-4).toUp
 async function receivingSnapshot(store, group, { allowSample = false } = {}) {
   const ccy = group && group.seller_currency; const accountId = (group && group.seller_account_id) || null;
   const base = { accountId, currency: ccy || null, ready: false, source: null, ending: null, bankName: null };
+  base.idKind = 'accountId'; base.idLabel = accountId ? `Account ID ${accountId}` : null; base.accountNumber = null;
   if (!accountId || !CCYS.includes(ccy)) return { ...base, label: accountId ? `${ccy || ''} account`.trim() : null };
   const ov = await getOverride(store, group.id); let f = null, src = null;
   if (ov && ov.ccy === ccy && validateAccount(ccy, ov.fields).ok) { f = ov.fields; src = 'seller'; }
@@ -159,13 +160,26 @@ async function receivingSnapshot(store, group, { allowSample = false } = {}) {
   if (!f && allowSample) { f = SAMPLE_FIELDS[ccy]; src = 'sample'; }
   if (!f) return { ...base, label: `${ccy} account` };
   const ending = tail4(ccy === 'EUR' ? f.iban : f.accountNumber || f.iban);
-  return { accountId, currency: ccy, ready: true, source: src, ending, bankName: f.bankName || null, label: `${ccy} account ••${ending}` };
+  // v3.13: once real bank details exist the payment is identified by the ACCOUNT NUMBER (IBAN for EUR); until then, by the Account ID.
+  const accountNumber = String((ccy === 'EUR' ? f.iban : f.accountNumber || f.iban) || '').replace(/[\s-]/g, '');
+  return { accountId, currency: ccy, ready: true, source: src, ending, bankName: f.bankName || null, label: `${ccy} account ••${ending}`, accountNumber, idKind: 'accountNumber', idLabel: `${ccy === 'EUR' ? 'IBAN' : 'Account number'} ••${ending}` };
 }
 /** Does the payer's bank reference carry the seller's Account ID (the payment reference we ask payers to quote)? */
 function referenceCheck(accountId, ...texts) {
   const given = texts.map((t) => String(t || '')).join(' ').trim();
   if (!given) return 'none';
   return accountId && given.replace(/[\s-]/g, '').includes(String(accountId)) ? 'matched' : 'different';
+}
+/** v3.13: does the payer's reference carry what identifies the seller? Either the seller's Account ID, or (when the seller has a
+ *  DEDICATED account of their own) that account's number. The Desk's shared pooled account number never identifies a seller by
+ *  itself, so it is not accepted as a match. @returns {{result:'matched'|'different'|'none', by:'account_id'|'account_number'|null}} */
+function referenceMatch(snap, ...texts) {
+  const given = texts.map((t) => String(t || '')).join(' ').trim();
+  if (!given) return { result: 'none', by: null };
+  const flat = given.replace(/[\s-]/g, '').toUpperCase();
+  if (snap && snap.accountId && flat.includes(String(snap.accountId))) return { result: 'matched', by: 'account_id' };
+  if (snap && snap.ready && snap.source === 'seller' && snap.accountNumber && snap.accountNumber.length >= 6 && flat.includes(snap.accountNumber.toUpperCase())) return { result: 'matched', by: 'account_number' };
+  return { result: 'different', by: null };
 }
 /** Admin view of one seller: the override fields, the global account, and what the seller currently sees. */
 async function adminView(store, group, { allowSample = false } = {}) {
@@ -175,4 +189,4 @@ async function adminView(store, group, { allowSample = false } = {}) {
   return { groupId: group.id, sellerName: holderFor(group), currency: ccy, supported: CCYS.includes(ccy), verified: group.kyc_status === 'verified', schema: CCYS.includes(ccy) ? SCHEMA[ccy] : null, labels: LABEL, override: ov && ov.ccy === ccy ? ov.fields : null, globalConfigured: !!(prof && prof.configured), source: eff.source || null, ready: !!eff.ready, snapshot: await receivingSnapshot(store, group, { allowSample }) };
 }
 
-module.exports = { holderFor, CCYS, SCHEMA, LABEL, validateAccount, checkField, ibanMod97, abaOk, getProfiles, setProfiles, getOverride, setOverride, clearOverride, getForGroup, adminView, receivingSnapshot, referenceCheck };
+module.exports = { holderFor, CCYS, SCHEMA, LABEL, validateAccount, checkField, ibanMod97, abaOk, getProfiles, setProfiles, getOverride, setOverride, clearOverride, getForGroup, adminView, receivingSnapshot, referenceCheck, referenceMatch };
