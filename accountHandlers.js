@@ -20,6 +20,7 @@ const E = require('./email');
 const { pushSellerState, pushAdminLedger, emitSnapshotTo, alertSellerOffline } = require('./fundsHandlers');
 const vault = require('./vault');
 const PIN = require('./pinLock');
+const WA = require('./webauthn');
 const EMAIL_DEV_ECHO = String(process.env.EMAIL_DEV_ECHO_CODES || '').toLowerCase() === 'true';
 function emailFailMessage(r) {
   if (r && r.error === 'not_configured') return 'Our email service is not set up yet, so we cannot send your code. Please contact the Desk Officer.';
@@ -639,7 +640,7 @@ function registerAccountHandlers(io, socket, ctx) {
       p = p || {}; const m = meta(); const group = await requireSellerOwnGroup(p.groupId); if (!group) return;
       if (!limiter.allow(m.sessionToken + ':pin')) return tooFast();
       if (!verifyPassword(String(p.password || ''), group.seller_password_hash || '')) return pinOut({ ok: false, kind: 'removed', error: 'Your account password is not correct.', field: 'password' });
-      const f = { ...Links.flagsOf(group) }; delete f.pinHash; delete f.pinSetAt;
+      const f = { ...Links.flagsOf(group) }; delete f.pinHash; delete f.pinSetAt; delete f.bioCreds;      // fingerprint unlock only exists on top of a PIN
       await store.updateGroup(group.id, { group_flags: f });
       PIN.clearSession(m.sessionToken); PIN.clearFails(group.id);
       pinOut({ ok: true, kind: 'removed' });
@@ -659,6 +660,79 @@ function registerAccountHandlers(io, socket, ctx) {
       PIN.clearFails(group.id); PIN.markUnlocked(m.sessionToken, group.id);
       pinOut({ ok: true, kind: 'unlock' });
     } catch (err) { console.error('[unlock-pin]', err); pinOut({ ok: false, kind: 'unlock', error: 'We could not check your PIN. Please try again.' }); }
+  });
+  // ------------------------------------------------------------------
+  // v3.15 Fingerprint / face unlock (WebAuthn platform authenticator). It sits on top of the PIN: a PIN must exist,
+  // turning it on needs the PIN to have been entered in this session, and the PIN always still works.
+  // ------------------------------------------------------------------
+  const bioChallenges = new Map();         // `${sessionToken}|reg|auth` -> { challenge, exp }
+  const bioOrigin = () => { const h = socket.handshake.headers || {}; if (h.origin) return String(h.origin); const proto = String(h['x-forwarded-proto'] || 'https').split(',')[0].trim(); return `${proto}://${h['x-forwarded-host'] || h.host || ''}`; };
+  const bioOut = (o) => socket.emit('bio-result', o);
+  const bioCreds = (g) => (Links.flagsOf(g).bioCreds || []);
+  const bioList = (g) => bioCreds(g).map((c) => ({ id: c.id, label: c.label || 'This phone', createdAt: c.createdAt || null }));
+  const bioTake = (kind) => { const k = `${meta().sessionToken}|${kind}`, e = bioChallenges.get(k); bioChallenges.delete(k); return e && e.exp > Date.now() ? e.challenge : null; };
+  const bioGive = (kind) => { const c = WA.newChallenge(); bioChallenges.set(`${meta().sessionToken}|${kind}`, { challenge: c, exp: Date.now() + 5 * 60 * 1000 }); return c; };
+  socket.on('get-my-bio', async ({ groupId }) => {
+    const group = await requireSellerOwnGroup(groupId); if (!group) return;
+    socket.emit('my-bio', { devices: bioList(group), pinSet: PIN.hasPin(group) });
+  });
+  socket.on('bio-reg-options', async ({ groupId }) => {
+    try {
+      const m = meta(); const group = await requireSellerOwnGroup(groupId); if (!group) return;
+      if (!limiter.allow(m.sessionToken + ':bio')) return tooFast();
+      if (!PIN.hasPin(group)) return bioOut({ ok: false, kind: 'enable', error: 'Turn on your PIN first. Fingerprint unlock works on top of your PIN.' });
+      if (!PIN.isUnlocked(m.sessionToken, group)) return socket.emit('pin-required', { action: 'bio' });
+      const origin = bioOrigin();
+      socket.emit('bio-reg-options', { challenge: bioGive('reg'), rpId: WA.rpIdOf(origin), userId: WA.b64u(Buffer.from(group.id)), userName: group.seller_account_id || group.email_b || group.id, displayName: group.seller_full_name || 'Vistra account', exclude: bioCreds(group).map((c) => c.id) });
+    } catch (err) { console.error('[bio-reg-options]', err); bioOut({ ok: false, kind: 'enable', error: 'We could not start fingerprint setup. Please try again.' }); }
+  });
+  socket.on('bio-register', async (p) => {
+    try {
+      p = p || {}; const m = meta(); const group = await requireSellerOwnGroup(p.groupId); if (!group) return;
+      if (!limiter.allow(m.sessionToken + ':bio')) return tooFast();
+      if (!PIN.hasPin(group) || !PIN.isUnlocked(m.sessionToken, group)) return bioOut({ ok: false, kind: 'enable', error: 'Please enter your PIN, then try again.' });
+      const challenge = bioTake('reg'); const r = WA.verifyRegistration(p, { challenge, origin: bioOrigin() });
+      if (!r.ok) return bioOut({ ok: false, kind: 'enable', error: r.error });
+      const list = bioCreds(group).filter((c) => c.id !== r.cred.id);
+      if (list.length >= 5) return bioOut({ ok: false, kind: 'enable', error: 'You can use fingerprint unlock on up to 5 phones. Turn it off on one first.' });
+      list.push({ ...r.cred, label: sanitizeText(p.label, 40) || 'This phone', createdAt: new Date().toISOString() });
+      await store.updateGroup(group.id, { group_flags: { ...Links.flagsOf(group), bioCreds: list } });
+      bioOut({ ok: true, kind: 'enabled', id: r.cred.id });
+      socket.emit('my-bio', { devices: bioList(await store.getGroup(group.id)), pinSet: true });
+    } catch (err) { console.error('[bio-register]', err); bioOut({ ok: false, kind: 'enable', error: 'We could not save your fingerprint setup. Please try again.' }); }
+  });
+  socket.on('bio-auth-options', async ({ groupId }) => {
+    try {
+      const m = meta(); const group = await requireSellerOwnGroup(groupId); if (!group) return;
+      if (!limiter.allow(m.sessionToken + ':bio')) return tooFast();
+      const ids = bioCreds(group).map((c) => c.id);
+      if (!ids.length) return bioOut({ ok: false, kind: 'auth', error: 'Fingerprint unlock is not turned on. Use your PIN.', none: true });
+      socket.emit('bio-auth-options', { challenge: bioGive('auth'), rpId: WA.rpIdOf(bioOrigin()), ids });
+    } catch (err) { console.error('[bio-auth-options]', err); }
+  });
+  socket.on('bio-auth', async (p) => {
+    try {
+      p = p || {}; const m = meta(); const group = await requireSellerOwnGroup(p.groupId); if (!group) return;
+      if (!limiter.allow(m.sessionToken + ':bio')) return tooFast();
+      const list = bioCreds(group), cred = list.find((c) => c.id === String(p.credentialId || ''));
+      const challenge = bioTake('auth'); const r = WA.verifyAssertion(p, cred, { challenge, origin: bioOrigin() });
+      if (!r.ok) return bioOut({ ok: false, kind: 'auth', error: r.error });
+      cred.counter = r.counter; cred.lastUsedAt = new Date().toISOString();
+      await store.updateGroup(group.id, { group_flags: { ...Links.flagsOf(group), bioCreds: list } });
+      PIN.markUnlocked(m.sessionToken, group.id);
+      pinOut({ ok: true, kind: 'unlock', via: 'fingerprint' });
+    } catch (err) { console.error('[bio-auth]', err); bioOut({ ok: false, kind: 'auth', error: 'We could not check your fingerprint. Use your PIN.' }); }
+  });
+  socket.on('bio-remove', async (p) => {
+    try {
+      p = p || {}; const m = meta(); const group = await requireSellerOwnGroup(p.groupId); if (!group) return;
+      if (!limiter.allow(m.sessionToken + ':bio')) return tooFast();
+      if (!verifyPassword(String(p.password || ''), group.seller_password_hash || '')) return bioOut({ ok: false, kind: 'remove', error: 'Your account password is not correct.', field: 'password' });
+      const list = bioCreds(group).filter((c) => p.id ? c.id !== String(p.id) : false);
+      await store.updateGroup(group.id, { group_flags: { ...Links.flagsOf(group), bioCreds: list } });
+      bioOut({ ok: true, kind: 'removed', id: p.id || null });
+      socket.emit('my-bio', { devices: bioList(await store.getGroup(group.id)), pinSet: PIN.hasPin(group) });
+    } catch (err) { console.error('[bio-remove]', err); bioOut({ ok: false, kind: 'remove', error: 'We could not turn it off. Please try again.' }); }
   });
   // Seller signed out (button or 2 minutes without activity): forget the PIN unlock for this session.
   socket.on('seller-logout', () => { const m = meta(); if (m && m.sessionToken) PIN.clearSession(m.sessionToken); });

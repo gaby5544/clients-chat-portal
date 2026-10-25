@@ -57,10 +57,18 @@ public class MainActivity extends Activity {
         s.setLoadWithOverviewMode(true);
         s.setSupportZoom(false);
         s.setBuiltInZoomControls(false);
-        s.setUserAgentString(s.getUserAgentString() + " VistraApp/1.0");
+        s.setUserAgentString(s.getUserAgentString() + " VistraApp/1.1");
         CookieManager cm = CookieManager.getInstance();
         cm.setAcceptCookie(true);
         cm.setAcceptThirdPartyCookies(web, true);
+
+        // Fingerprint unlock: the website cannot reach the sensor inside a WebView, so Android does it and hands the site the answer.
+        // (Android 9+. Older phones simply never get the bridge and keep using the PIN.)
+        if (Build.VERSION.SDK_INT >= 28) {
+            try {
+                web.addJavascriptInterface(new BiometricBridge(this, web, HOST), "VistraBio");
+            } catch (Throwable ignored) { }
+        }
 
         web.setWebViewClient(new WebViewClient() {
             // (API 24+ calls this overload; the API 23 jar used to compile has no such method to override.)

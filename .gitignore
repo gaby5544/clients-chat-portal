@@ -3,3 +3,6 @@ node_modules/
 *.log
 .DS_Store
 Thumbs.db
+android-app/build/
+*.keystore
+*.jks

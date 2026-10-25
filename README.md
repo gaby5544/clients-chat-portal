@@ -155,3 +155,7 @@ See **CHANGES-v3.13.md** (bank-style dashboard, own Cards page, exact ledger, pr
 
 ## v3.14
 See **CHANGES-v3.14.md** (Transfer instead of Send, disbursement gate, billing address registered by the Desk, App PIN, 2-minute auto sign-out, card freeze).
+
+- v3.15 (fingerprint unlock): see CHANGES-v3.15.md
+
+- v3.16 (fingerprint inside the Android app): see CHANGES-v3.16.md and ANDROID-FINGERPRINT.md
