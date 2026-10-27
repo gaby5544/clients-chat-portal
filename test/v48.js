@@ -1,0 +1,42 @@
+// v3.19 server checks: the admin handler + what two sellers see end to end.
+process.env.ACCOUNT_RATE_MAX = '1000';
+const { FakeIO } = require('./harness');
+const origLog = console.log; console.log = (...a) => { const s = a.join(' '); if (!/\[email:mock\]|\[storage\]|\[push\]/.test(s)) origLog(...a); };
+let pass = 0, fail = 0; const ok = (c, m) => { if (c) { pass++; origLog('  ✓', m); } else { fail++; origLog('  ✗ FAIL:', m); } };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+(async () => {
+  const { initStore, store } = require('../db'); await initStore(); const BD = require('../bankDetails');
+  const { registerSocketHandlers } = require('../socketHandlers'); const { hashPassword } = require('../security');
+  const io = new FakeIO(); const admin = io.add('9.9.9.9'); registerSocketHandlers(io, admin);
+  const s1 = io.add('1.1.1.1'); registerSocketHandlers(io, s1); const s2 = io.add('1.1.1.2'); registerSocketHandlers(io, s2);
+  await admin.fire('join-room', { groupId: 'default-group', role: 'PARTY A', adminKey: 'SUPERADMIN123', sessionToken: 'admin-token' });
+  await admin.fire('create-group', { groupName: 'One', emailB: 'one@example.com' }); const g1 = admin.last('group-created-and-switch').newGroupId; await sleep(15);
+  await admin.fire('create-group', { groupName: 'Two', emailB: 'two@example.com' }); const g2 = admin.last('group-created-and-switch').newGroupId;
+  await s1.fire('join-room', { groupId: g1, role: 'SELLER', sessionToken: 's1' }); await s2.fire('join-room', { groupId: g2, role: 'SELLER', sessionToken: 's2' });
+  const base = { seller_registered: true, seller_currency: 'USD', kyc_status: 'verified', seller_phone: '+233244123456', seller_password_hash: hashPassword('Passw0rd!x') };
+  await store.updateGroup(g1, { ...base, seller_account_id: '11100022233', seller_full_name: 'Kwame Mensah', email_b: 'one@example.com', seller_session_token: 's1' });
+  await store.updateGroup(g2, { ...base, seller_account_id: '22200033344', seller_full_name: 'Ama Boateng', email_b: 'two@example.com', seller_session_token: 's2' });
+
+  await s1.fire('admin-add-number-pool', { ccy: 'USD', text: '5550000001' }); ok(!s1.last('number-pool') && (await BD.poolStats(store)).USD.free === 0, 'a seller cannot add numbers');
+  await admin.fire('admin-add-number-pool', { ccy: 'USD', text: '5550000001' });
+  ok(!admin.last('number-pool') && /Save the shared USD account/.test(String(admin.last('error-msg') || '')), 'numbers cannot be added before the shared account (bank name, SWIFT, routing) is saved');
+  await admin.fire('admin-set-bank-profiles', { profiles: { USD: { bankName: 'Chase Bank', swift: 'CHASUS33', accountNumber: '994077359', routing: '021000021' } } });
+  ok(admin.last('bank-profiles').pool.USD.free === 0, 'the Desk screen is told the list counts');
+  await admin.fire('admin-add-number-pool', { ccy: 'USD', text: '5550000001\n5550000002\nnope' });
+  const np = admin.last('number-pool'); ok(np && np.added === 2 && np.invalidCount === 1 && np.pool.USD.free === 2, 'admin adds 2 real numbers; the bad line is refused and reported');
+  const rd = (sock) => sock.last('receiving-details');
+  const rows = (sock) => Object.fromEntries([...rd(sock).details.USD.a, ...rd(sock).details.USD.b]);
+  await s1.fire('get-receiving-details', { groupId: g1 }); ok(rd(s1).ready === false, 'nothing is assigned automatically: the seller sees "being prepared"');
+  await s1.fire('admin-assign-seller-number', { groupId: g1, next: true }); ok(!rd(s1).details && (await BD.poolStats(store)).USD.used === 0, 'a seller cannot assign numbers');
+  await admin.fire('admin-assign-seller-number', { groupId: g1, next: true });
+  ok(rd(s1) && rd(s1).ready === true && rows(s1)['Account number'] === '5550000001', 'the Desk assigns a number: it reaches the seller\'s bank details immediately (pushed live)');
+  ok(rows(s1)['ABA routing number'] === '021000021' && rows(s1)['SWIFT / BIC'] === 'CHASUS33' && rows(s1)['Bank name'] === 'Chase Bank' && rows(s1)['Account name'] === 'Kwame Mensah', 'routing, SWIFT, bank name and the seller\'s own name are there');
+  await s2.fire('get-receiving-details', { groupId: g2 }); ok(rd(s2).ready === false, 'the other seller is unaffected until the Desk assigns theirs');
+  await admin.fire('admin-assign-seller-number', { groupId: g2, number: '5550000001' }); ok(/already assigned/.test(String(admin.last('error-msg'))), 'the same number cannot go to two sellers');
+  await admin.fire('admin-assign-seller-number', { groupId: g2, number: '5550000002' }); ok(rd(s2).ready === true && rows(s2)['Account number'] === '5550000002', 'a typed number reaches the second seller at once');
+  const av = admin.last('admin-seller-receiving'); ok(av.assignedNumber === '5550000002' && av.assigned === true, 'the Desk\'s seller card shows the assigned number');
+  await admin.fire('admin-unassign-seller-number', { groupId: g2 }); ok(rd(s2).ready === false, 'removing it takes the details away from the seller at once');
+  await admin.fire('admin-assign-seller-number', { groupId: g2, number: '5550000002' }); ok(/retired/.test(String(admin.last('error-msg'))), 'a removed number is retired and cannot be reused');
+  await store.updateGroup(g2, { kyc_status: 'pending' }); await admin.fire('admin-assign-seller-number', { groupId: g2, next: true }); ok(/not identity-verified/.test(String(admin.last('error-msg'))), 'only identity-verified sellers can be assigned a number');
+  console.log = origLog; origLog(`RESULT: ${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);
+})();

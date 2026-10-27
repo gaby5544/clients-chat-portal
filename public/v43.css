@@ -1,0 +1,11 @@
+/* v3.15 additive styles: fingerprint unlock */
+.v43-bio { display: inline-flex; align-items: center; justify-content: center; gap: 10px; margin: 18px auto 0; padding: 12px 22px; border-radius: 999px; border: 1px solid rgba(77, 224, 208, .6); background: rgba(77, 224, 208, .12); color: #4de0d0; font: inherit; font-weight: 800; font-size: .92rem; cursor: pointer; }
+.v43-bio i { font-size: 1.25rem; } .v43-bio:active { transform: scale(.97); }
+.v43-offer { position: fixed; inset: 0; z-index: 8500; display: none; align-items: center; justify-content: center; padding: 18px; background: rgba(3, 8, 24, .72); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+.v43-offer.on { display: flex; }
+.v43-card { width: 100%; max-width: 360px; padding: 26px 22px 20px; text-align: center; border-radius: 24px; background: #0b1a4a; color: #f2f5ff; border: 1px solid rgba(110, 140, 255, .55); box-shadow: 0 24px 60px rgba(0, 0, 0, .5); }
+.v43-card h2 { margin: 12px 0 8px; font-size: 1.2rem; } .v43-card p { margin: 0 0 18px; font-size: .86rem; line-height: 1.5; color: #a9b4d9; }
+.v43-card .send-btn { width: 100%; justify-content: center; margin-bottom: 8px; } .v43-card .ghost-btn { width: 100%; justify-content: center; }
+.v43-ic { width: 68px; height: 68px; margin: 0 auto; border-radius: 50%; display: grid; place-items: center; font-size: 1.9rem; color: #04201d; background: #4de0d0; box-shadow: 0 10px 30px rgba(77, 224, 208, .3); }
+.v43-devs { margin: 6px 0 12px; border-radius: 14px; overflow: hidden; border: 1px solid rgba(255, 255, 255, .1); }
+.v43-dev { display: flex; align-items: center; gap: 12px; padding: 11px 14px; font-size: .86rem; } .v43-dev + .v43-dev { border-top: 1px solid rgba(255, 255, 255, .08); } .v43-dev span { flex: 1; min-width: 0; overflow-wrap: anywhere; } .v43-dev em { font-style: normal; color: var(--text-muted, #8b96ad); }

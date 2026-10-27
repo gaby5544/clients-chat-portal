@@ -1,0 +1,47 @@
+// v3.21: the Desk assigns each seller's real account number (from a list it pastes, or typed); nothing is handed out automatically.
+const BD = require('../bankDetails.js');
+const mem = {}; const store = { getSetting: async (k, d) => (k in mem ? mem[k] : d), setSetting: async (k, v) => { mem[k] = v; } };
+const grp = (id, ccy, acct) => ({ id, kyc_status: 'verified', seller_account_id: acct, seller_currency: ccy, seller_full_name: 'Seller ' + id });
+const rowsOf = (g, c) => Object.fromEntries([...g.details[c].a, ...g.details[c].b]);
+(async () => {
+  let pass = 0, fail = 0; const ok = (c, m) => { c ? pass++ : fail++; console.log(c ? '  ok:' : '  FAIL:', m); };
+  await BD.setProfiles(store, { USD: { bankName: 'Chase Bank', swift: 'CHASUS33', accountNumber: '994077359', routing: '021000021' },
+    EUR: { bankName: 'Euro Bank', swift: 'DEUTDEFF', iban: 'DE89 3704 0044 0532 0130 00' }, GBP: { bankName: 'UK Bank', swift: 'BARCGB22', sortCode: '201595', accountNumber: '12345678' } });
+  const A = grp('a', 'USD', '1001'), B = grp('b', 'USD', '1002'), C = grp('c', 'USD', '1003');
+  let g = await BD.getForGroup(store, A);
+  ok(g.ready && rowsOf(g, 'USD')['Account number'] === '994077359', 'before the Desk uses per-seller numbers: sellers see the shared account (as before)');
+  let r = await BD.addToPool(store, 'USD', '5550000001\n5550000002, 5550000003\nabc\n12\n5550000002');
+  ok(r.ok && r.added === 3 && r.duplicates === 1 && r.invalidCount === 2, 'list: 3 added, 1 repeat skipped, 2 bad entries refused');
+  g = await BD.getForGroup(store, A);
+  ok(g.ready === false && g.awaitingNumber === true, 'nothing is handed out automatically: an unassigned seller sees "being prepared"');
+  ok((await BD.receivingSnapshot(store, A)).ready === false, 'and has no receiving account on payment records yet');
+  r = await BD.assignNumber(store, A, { next: true }); ok(r.ok && r.number === '5550000001', 'the Desk assigns the next number from the list');
+  g = await BD.getForGroup(store, A); const ra = rowsOf(g, 'USD');
+  ok(g.ready && g.assigned && ra['Account number'] === '5550000001' && ra['ABA routing number'] === '021000021' && ra['SWIFT / BIC'] === 'CHASUS33' && ra['Bank name'] === 'Chase Bank' && ra['Account name'] === 'Seller a', 'the seller sees their number at once, with the shared bank fields and their own name');
+  r = await BD.assignNumber(store, B, { number: '5550000002' }); ok(r.ok && r.number === '5550000002', 'a number can also be typed (it is taken off the list)');
+  ok((await BD.poolStats(store)).USD.free === 1 && (await BD.poolStats(store)).USD.used === 2, 'counts: 1 free, 2 assigned');
+  r = await BD.assignNumber(store, C, { number: '5550000001' }); ok(!r.ok && /already assigned/.test(r.error), 'a number can never be given to two sellers');
+  r = await BD.assignNumber(store, C, { number: 'nope' }); ok(!r.ok, 'an invalid number is refused');
+  r = await BD.assignNumber(store, C, { number: '8880001234' }); ok(r.ok, 'a typed number that was never on the list is accepted');
+  const snap = await BD.receivingSnapshot(store, A);
+  ok(snap.ready && snap.accountNumber === '5550000001' && snap.ending === '0001' && snap.source === 'seller', 'incoming-payment records use the seller\'s assigned number');
+  ok(BD.referenceMatch(snap, 'wire 5550000001').result === 'matched' && BD.referenceMatch(snap, 'ref 1001').result === 'matched' && BD.referenceMatch(snap, 'ref 5550000002').result === 'different', 'a payment is matched by their number or Account ID, never by someone else\'s');
+  r = await BD.assignNumber(store, A, { number: '5550000009' });
+  ok(r.ok && r.replaced === '5550000001', 'changing a seller\'s number replaces it');
+  r = await BD.assignNumber(store, B, { number: '5550000001' }); ok(!r.ok && /retired/.test(r.error), 'the old number is retired for good: it can never reach another seller');
+  r = await BD.unassignNumber(store, A); g = await BD.getForGroup(store, A);
+  ok(r.ok && r.changed && g.ready === false, 'removing a number puts the seller back to "being prepared"');
+  r = await BD.assignNumber(store, A, { next: true }); ok(r.ok && r.number === '5550000003', 'next-from-list continues in order');
+  r = await BD.assignNumber(store, grp('d', 'USD', '1004'), { next: true }); ok(!r.ok && /no free numbers/.test(r.error), 'when the list is empty, it says so');
+  r = await BD.addToPool(store, 'GBP', '10000001\n1000002\n10000003'); ok(r.added === 2 && r.invalidCount === 1, 'GBP: 8-digit numbers only');
+  const D = grp('e', 'GBP', '3001'); await BD.assignNumber(store, D, { next: true }); const gr = rowsOf(await BD.getForGroup(store, D), 'GBP');
+  ok(gr['Account number'] === '10000001' && gr['Sort code'] === '20-15-95' && gr['Bank name'] === 'UK Bank', 'GBP seller: own account number, shared sort code');
+  r = await BD.addToPool(store, 'EUR', 'DE02 1203 0000 0000 2020 51\nDE02 1203 0000 0000 2020 52\nDE89 3704 0044 0532 0130 00'); ok(r.added === 2 && r.invalidCount === 1, 'EUR: real IBANs only (a wrong check digit is refused)');
+  const E = grp('f', 'EUR', '4001'); await BD.assignNumber(store, E, { next: true }); const er = rowsOf(await BD.getForGroup(store, E), 'EUR');
+  ok(er['IBAN'] === 'DE02 1203 0000 0000 2020 51' && er['SWIFT / BIC'] === 'DEUTDEFF', 'EUR seller: own IBAN, shared SWIFT');
+  r = await BD.assignNumber(store, grp('g', 'EUR', '4002'), { number: '12345678' }); ok(!r.ok, 'a euro seller cannot be given a plain account number (must be an IBAN)');
+  await BD.setOverride(store, grp('h', 'USD', '5001'), { accountNumber: '777000111', routing: '021000021', swift: 'CHASUS33', bankName: 'Chase Bank' });
+  const ov = await BD.getForGroup(store, grp('h', 'USD', '5001')); ok(rowsOf(ov, 'USD')['Account number'] === '777000111', 'full details typed for one seller still win');
+  const av = await BD.adminView(store, A); ok(av.assignedNumber === '5550000003' && av.poolFree === 0 && av.supported, 'the Desk card knows the seller\'s number and the free count');
+  console.log(`RESULT: ${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);
+})();

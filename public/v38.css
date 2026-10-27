@@ -1,0 +1,120 @@
+/* =====================================================================
+   v3.8+ — seller wallpapers (styles), receiving-account card, bottom bar
+   Everything here is additive. Nothing above is removed.
+   ===================================================================== */
+:root { --wp-img: url(/wallpapers/wp1.webp); --wp-accent: #5aa9ff; --wp-shade-a: rgba(5,9,18,.50); --wp-shade-b: rgba(5,9,18,.78); }
+
+/* ---------- Wallpaper = home page + wall (sellers only) ---------- */
+body.wp-seller .tx-view {
+  background: linear-gradient(180deg, var(--wp-shade-a), var(--wp-shade-b)), var(--wp-img) center / cover no-repeat, var(--bg-void);
+}
+body.wp-seller .tx-sidebar { background: rgba(7,11,20,.58); backdrop-filter: blur(18px) saturate(140%); -webkit-backdrop-filter: blur(18px) saturate(140%); }
+body.wp-seller .tx-panel, body.wp-seller .tx-stat-card, body.wp-seller .sec-card, body.wp-seller .tx-group-card {
+  background: rgba(9,14,26,.58); backdrop-filter: blur(14px) saturate(130%); -webkit-backdrop-filter: blur(14px) saturate(130%);
+  border-color: rgba(255,255,255,.12);
+}
+body.wp-seller .tx-topbar { background: rgba(7,11,20,.32); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border-bottom-color: rgba(255,255,255,.10); }
+body.wp-seller .tx-nav-item.active { background: color-mix(in srgb, var(--wp-accent) 22%, transparent); color: #fff; border-color: color-mix(in srgb, var(--wp-accent) 55%, transparent); }
+body.wp-seller .tx-panel-head a, body.wp-seller .tx-stat-card.clickable:hover { color: var(--wp-accent); }
+/* the wall: the chat area shows the same wallpaper behind the conversation */
+body.wp-seller .chat-main { background: linear-gradient(180deg, rgba(5,9,18,.66), rgba(5,9,18,.86)), var(--wp-img) center / cover no-repeat; }
+body.wp-seller .chat-messages { background: transparent; }
+/* landing page + link pages use the chosen (or default) wallpaper too */
+.app-home { background: linear-gradient(180deg, rgba(5,9,18,.45), rgba(5,9,18,.82)), var(--wp-img) center / cover no-repeat, var(--bg-void); }
+
+/* ---------- Style picker ---------- */
+.style-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.style-opt { position: relative; padding: 0; border: 2px solid var(--border-soft); border-radius: 16px; overflow: hidden; background: #000; cursor: pointer; aspect-ratio: 9 / 16; display: block; color: #fff; text-align: left; }
+.style-opt img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.style-opt .so-name { position: absolute; left: 0; right: 0; bottom: 0; padding: 18px 8px 8px; font-size: .72rem; font-weight: 700; background: linear-gradient(transparent, rgba(0,0,0,.85)); }
+.style-opt .so-no { position: absolute; top: 8px; left: 8px; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 11px; background: rgba(0,0,0,.6); font-size: .7rem; font-weight: 800; display: grid; place-items: center; }
+.style-opt .so-ok { position: absolute; top: 8px; right: 8px; width: 24px; height: 24px; border-radius: 50%; background: var(--wp-accent); color: #04101f; display: none; place-items: center; font-size: .72rem; }
+.style-opt.sel { border-color: var(--wp-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--wp-accent) 35%, transparent); }
+.style-opt.sel .so-ok { display: grid; }
+.style-opt:focus-visible { outline: 2px solid var(--wp-accent); outline-offset: 2px; }
+@media (max-width: 420px) { .style-grid { gap: 8px; } .style-opt { border-radius: 12px; } }
+.style-btn-row { display: flex; align-items: center; gap: 10px; }
+.style-btn-row .style-now { width: 34px; height: 46px; border-radius: 8px; background: var(--wp-img) center / cover; border: 1px solid var(--border-glow); }
+
+/* ---------- Bottom bar (Home · Transfer · Accounts · Profile) ---------- */
+.tx-bottomnav {
+  position: absolute; left: 50%; transform: translateX(-50%); z-index: 6;
+  bottom: calc(12px + env(safe-area-inset-bottom, 0px)); width: min(520px, calc(100% - 24px));
+  display: flex; justify-content: space-around; align-items: stretch; padding: 8px 6px;
+  background: rgba(24,24,24,.86); backdrop-filter: blur(18px) saturate(150%); -webkit-backdrop-filter: blur(18px) saturate(150%);
+  border: 1px solid rgba(255,255,255,.10); border-radius: 28px; box-shadow: 0 18px 50px rgba(0,0,0,.55);
+}
+.tx-bottomnav button { flex: 1; background: none; border: 0; color: #d8d3c8; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 6px 4px; font: inherit; font-size: .78rem; cursor: pointer; border-radius: 18px; min-height: 52px; }
+.tx-bottomnav button i { font-size: 1.25rem; }
+.tx-bottomnav button.active { color: #2a9db8; font-weight: 600; }
+.tx-bottomnav button:focus-visible { outline: 2px solid #2a9db8; outline-offset: -2px; }
+.tx-view .tx-scroll { padding-bottom: calc(104px + env(safe-area-inset-bottom, 0px)); }
+
+/* ---------- Receiving account card ---------- */
+.rc-wrap { max-width: 460px; margin: 0 auto; border-radius: 26px; overflow: hidden; background: rgba(12,18,32,.72); border: 1px solid rgba(255,255,255,.12); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); }
+.rc-hd { background: linear-gradient(160deg, #0A1A33, #0d2548 70%, color-mix(in srgb, var(--wp-accent) 28%, #0A1A33)); padding: 16px 18px 20px; color: #fff; }
+.rc-brand { display: flex; align-items: center; justify-content: center; gap: 8px; margin-bottom: 14px; }
+.rc-brand b { width: 24px; height: 24px; border-radius: 7px; background: #C9A24B; color: #0A1A33; display: grid; place-items: center; font-size: .8rem; }
+.rc-brand span { font-size: .9rem; font-weight: 600; letter-spacing: .12em; }
+.rc-balrow { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.rc-balrow small { display: block; font-size: .76rem; color: #9FB2CE; }
+.rc-bal { font-size: 1.8rem; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.rc-eye { width: 42px; height: 42px; flex: none; border-radius: 12px; background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.2); color: #fff; cursor: pointer; font-size: 1rem; }
+.rc-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 12px; font-size: .78rem; }
+.rc-tier { font-size: .7rem; font-weight: 700; color: #0A1A33; background: #C9A24B; border-radius: 6px; padding: 3px 8px; letter-spacing: .05em; text-transform: uppercase; }
+.rc-ok { color: #7FE0C8; } .rc-nm { color: #9FB2CE; }
+.rc-title { padding: 16px 18px 4px; font-weight: 700; font-size: 1rem; }
+.rc-tabs { display: flex; gap: 8px; padding: 8px 18px; flex-wrap: wrap; }
+.rc-tab { height: 40px; padding: 0 16px; border-radius: 20px; border: 1px solid rgba(255,255,255,.22); background: transparent; color: var(--text-main); font: inherit; font-size: .84rem; font-weight: 600; cursor: pointer; }
+.rc-tab.on { background: #0E7C86; border-color: #0E7C86; color: #fff; }
+.rc-intro { padding: 0 18px 10px; font-size: .8rem; color: var(--text-muted); }
+.rc-grp { margin: 0 16px 12px; border: 1px solid rgba(255,255,255,.12); border-radius: 16px; overflow: hidden; }
+.rc-gt { font-size: .68rem; color: var(--text-muted); letter-spacing: .08em; text-transform: uppercase; padding: 10px 14px 6px; background: rgba(255,255,255,.04); }
+.rc-row { padding: 10px 14px; border-top: 1px solid rgba(255,255,255,.08); }
+.rc-row span { display: block; font-size: .76rem; color: var(--text-muted); }
+.rc-row b { display: block; font-size: .95rem; font-weight: 600; overflow-wrap: anywhere; word-break: break-word; letter-spacing: .01em; }
+.rc-note { margin: 0 16px 12px; background: rgba(56,140,200,.16); border-radius: 14px; padding: 11px 13px; display: flex; gap: 9px; font-size: .78rem; line-height: 1.5; color: #bfe0f7; }
+.rc-actions { padding: 0 16px 14px; }
+.rc-actions button { width: 100%; height: 46px; border-radius: 12px; border: 1px solid rgba(255,255,255,.22); background: transparent; color: var(--text-main); font: inherit; font-weight: 600; cursor: pointer; }
+.rc-foot { padding: 0 16px 16px; text-align: center; font-size: .72rem; color: var(--text-muted); }
+.rc-lock { padding: 34px 24px 28px; text-align: center; }
+.rc-lock .ic { width: 64px; height: 64px; margin: 0 auto 14px; border-radius: 50%; display: grid; place-items: center; font-size: 1.5rem; color: #C9A24B; background: rgba(201,162,75,.12); border: 1px solid rgba(201,162,75,.4); }
+.rc-lock h3 { margin: 0 0 8px; font-size: 1.05rem; }
+.rc-lock p { margin: 0 auto 16px; max-width: 34ch; color: var(--text-muted); font-size: .86rem; line-height: 1.6; }
+.rc-skel { padding: 30px; text-align: center; color: var(--text-muted); font-size: .86rem; }
+@media print {
+  body.print-details > *:not(#txAccountView) { display: none !important; }
+  body.print-details #txAccountView { position: static !important; background: #fff !important; display: block !important; }
+  body.print-details #txAccountView .tx-sidebar, body.print-details #txAccountView .tx-topbar, body.print-details .tx-bottomnav, body.print-details .rc-actions, body.print-details .rc-eye, body.print-details .rc-tabs { display: none !important; }
+  body.print-details .tx-page { display: none !important; }
+  body.print-details #txPageAccounts { display: block !important; }
+  body.print-details .rc-wrap { background: #fff !important; color: #000 !important; border: 1px solid #999 !important; backdrop-filter: none; }
+  body.print-details .rc-wrap * { color: #000 !important; }
+}
+
+/* ---------- Admin: receiving bank details ---------- */
+.bk-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-bottom: 12px; }
+.bk-ccy { font-weight: 800; font-size: .8rem; margin: 10px 0 6px; display: flex; align-items: center; gap: 8px; }
+.bk-ccy em { font-style: normal; font-size: .66rem; letter-spacing: .06em; text-transform: uppercase; padding: 2px 8px; border-radius: 99px; background: rgba(240,195,106,.16); color: #f0c36a; }
+.bk-grid label { font-size: .7rem; color: var(--text-muted); display: flex; flex-direction: column; gap: 3px; }
+
+@media (min-width: 861px) { .tx-bottomnav { left: calc(50% + 120px); } }
+
+/* ---------- v3.10: dashboard actions, support, receiving-account polish ---------- */
+.tx-actionrow { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 18px; }
+.tx-actionrow button { background: none; border: 0; color: var(--text-main); font: inherit; font-size: .8rem; font-weight: 600; display: flex; flex-direction: column; align-items: center; gap: 8px; cursor: pointer; padding: 4px 0; }
+.tx-actionrow button span { width: 56px; height: 56px; border-radius: 50%; display: grid; place-items: center; font-size: 1.15rem; color: #fff; background: linear-gradient(145deg, color-mix(in srgb, var(--wp-accent) 70%, #0b1426), color-mix(in srgb, var(--wp-accent) 28%, #0b1426)); border: 1px solid rgba(255,255,255,.18); box-shadow: 0 8px 22px rgba(0,0,0,.35); transition: transform .12s; }
+.tx-actionrow button:active span { transform: scale(.94); }
+.tx-actionrow button:focus-visible span { outline: 2px solid var(--wp-accent); outline-offset: 3px; }
+.rc-row.ref { background: color-mix(in srgb, var(--wp-accent) 12%, transparent); }
+.rc-row.ref b { letter-spacing: .06em; }
+.bk-ccy em.ok { background: rgba(74,222,128,.16); color: #4ade80; }
+.sup-row { border-top: 1px solid var(--border-soft); padding: 10px 0; display: flex; flex-direction: column; gap: 4px; }
+.sup-row.done { opacity: .55; }
+.sup-top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; font-size: .78rem; }
+.sup-top .ls-switch { margin-left: auto; }
+.sup-tag { font-size: .66rem; text-transform: uppercase; letter-spacing: .06em; padding: 2px 8px; border-radius: 99px; background: rgba(56,189,248,.14); color: var(--accent-cyan); }
+.sup-who { font-size: .76rem; color: var(--text-muted); }
+.sup-who a { color: var(--accent-cyan); }
+.sup-msg { font-size: .82rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+.sup-badge { font-size: .66rem; padding: 2px 8px; border-radius: 99px; background: rgba(251,113,133,.18); color: #fb7185; margin-left: 6px; }

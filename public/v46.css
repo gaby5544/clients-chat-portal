@@ -1,0 +1,6 @@
+.v46-pool{margin:10px 0 14px;padding:12px;border:1px solid var(--border-color,rgba(255,255,255,.12));border-radius:14px;background:rgba(255,255,255,.03);display:flex;flex-direction:column;gap:8px}
+.v46-pool b{font-size:13px}.v46-pool small{color:var(--text-muted,#9aa4b2);line-height:1.5;font-size:12px}
+.v46-pool textarea{width:100%;box-sizing:border-box;resize:vertical;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px}
+.v46-stat{display:flex;gap:16px;font-size:12px;color:var(--text-muted,#9aa4b2)}.v46-stat b{color:var(--text-main,#e5e7eb);font-size:14px}
+.v46-msg{font-size:12px;min-height:14px;word-break:break-word}.v46-assigned{margin-top:6px;font-size:12px;color:#34d399}
+.v46-assign{margin:10px 0;padding:12px;border:1px solid var(--border-color,rgba(255,255,255,.12));border-radius:14px;background:rgba(255,255,255,.03);display:flex;flex-direction:column;gap:8px}.v46-assign small{color:var(--text-muted,#9aa4b2);font-size:12px;line-height:1.5}.v46-row{display:flex;gap:8px;flex-wrap:wrap}.v46-row .message-input{flex:1;min-width:160px}

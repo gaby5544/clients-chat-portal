@@ -1,0 +1,34 @@
+// Fixtures for the v3.8 browser test: a verified seller + a not-yet-verified seller, with the exact events the real server sends.
+process.env.ACCOUNT_RATE_MAX = '1000';
+const { FakeIO } = require('./harness'); const fs = require('fs');
+const origLog = console.log; console.log = () => {};
+(async () => {
+  const { initStore, store } = require('../db'); await initStore();
+  const { registerSocketHandlers } = require('../socketHandlers'); const io = new FakeIO();
+  const admin = io.add('9.9.9.9'); registerSocketHandlers(io, admin);
+  const seller = io.add('1.1.1.1'); registerSocketHandlers(io, seller);
+  await admin.fire('join-room', { groupId: 'default-group', role: 'PARTY A', adminKey: 'SUPERADMIN123', sessionToken: 'admin-token' });
+  await admin.fire('create-group', { groupName: 'Deal One', emailB: 's1@example.com', emailA: 'b1@example.com' });
+  const gid = admin.last('group-created-and-switch').newGroupId;
+  await seller.fire('join-room', { groupId: gid, role: 'SELLER', sessionToken: 'seller-token' });
+  const base = { seller_registered: true, seller_account_id: '48213907765', seller_full_name: 'Kwame Mensah', seller_currency: 'USD', seller_email: 's1@example.com', seller_country: 'Ghana', balance_available: 24580 };
+  await store.updateGroup(gid, { ...base, kyc_status: 'not_submitted' });
+  await seller.fire('get-my-seller-account', { groupId: gid }); const unverified = seller.last('seller-account-state');
+  await seller.fire('get-receiving-details', { groupId: gid }); const lockedDetails = seller.last('receiving-details');
+  await store.updateGroup(gid, { kyc_status: 'verified' });
+  await seller.fire('get-my-seller-account', { groupId: gid }); const verified = seller.last('seller-account-state');
+  await seller.fire('get-receiving-details', { groupId: gid }); const notReady = seller.last('receiving-details');
+  const USD = { holder: 'Vistra Client Account', accountNumber: '4821907765', routing: '021000021', swift: 'CHASUS33', bankName: 'Test Bank USA', bankAddress: '1 Main Street, New York, NY 10001' };
+  const EUR = { holder: 'Vistra Client Account', iban: 'DE89 3704 0044 0532 0130 00', swift: 'COBADEFF', bankName: 'Test Bank AG', bankAddress: 'Platz 1, 60311 Frankfurt' };
+  const GBP = { holder: 'Vistra Client Account', sortCode: '401276', accountNumber: '12345678', iban: 'GB82 WEST 1234 5698 7654 32', swift: 'HBUKGB4B', bankName: 'Test Bank UK', bankAddress: '8 Canada Square, London E14 5HQ' };
+  await admin.fire('admin-set-bank-profiles', { profiles: { USD, EUR, GBP } });
+  const getD = async (ccy) => { await store.updateGroup(gid, { seller_currency: ccy }); await seller.fire('get-receiving-details', { groupId: gid }); return seller.last('receiving-details'); };
+  const detailsUSD = await getD('USD'), detailsEUR = await getD('EUR'), detailsGBP = await getD('GBP'); await store.updateGroup(gid, { seller_currency: 'USD' });
+  await admin.fire('get-bank-profiles', {}); const bankProfiles = admin.last('bank-profiles');
+  await admin.fire('admin-get-seller-receiving', { groupId: gid }); const sellerRecv = admin.last('admin-seller-receiving');
+  await admin.fire('admin-get-seller-profile', { groupId: gid }); const adminProfile = admin.last('seller-profile');
+  await admin.fire('get-support-requests', {}); const supportList = admin.last('support-requests') || { list: [] };
+  const sInit = seller.last('init-state');
+  const out = { gid, init: sInit, unverified, verified, lockedDetails, notReady, detailsUSD, detailsEUR, detailsGBP, bankProfiles, sellerRecv, adminProfile, supportList };
+  fs.writeFileSync('/tmp/fixtures_v38.json', JSON.stringify(out)); origLog('fixtures_v38 written', !!unverified, !!verified, detailsUSD.ready); process.exit(0);
+})().catch((e) => { origLog('FATAL', e); process.exit(1); });

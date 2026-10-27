@@ -1,0 +1,6 @@
+/* v3.17 - Receiving accounts: "use my US bank account" switch */
+.v45-usd{display:flex;gap:10px;align-items:flex-start;margin:6px 0 8px;padding:10px 12px;border:1px solid var(--border,rgba(255,255,255,.14));border-radius:12px;background:rgba(56,189,248,.06);cursor:pointer}
+.v45-usd input{margin-top:3px;width:18px;height:18px;flex:none;accent-color:#38bdf8}
+.v45-usd span{display:flex;flex-direction:column;gap:2px;min-width:0;overflow-wrap:anywhere}
+.v45-usd b{font-size:.84rem}
+.v45-usd small{color:var(--text-muted,#9aa4b2);font-size:.72rem;line-height:1.45}
