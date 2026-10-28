@@ -243,7 +243,7 @@ function registerSocketHandlers(io, socket) {
     return msg;
   }
 
-  const handlerCtx = { meta, metaHasMinRole, broadcastGroupsList, postDeskMessage, requireSellerOwnGroup };
+  const handlerCtx = { meta, metaHasMinRole, broadcastGroupsList, postDeskMessage, requireSellerOwnGroup, removeGroupAndEvict };
   // Money movement (incoming funds, withdrawal status control, Funds Desk).
   registerFundsHandlers(io, socket, handlerCtx);
   // Seller account: registration, security, KYC, business upgrade, withdrawals, admin account controls.
@@ -300,9 +300,9 @@ function registerSocketHandlers(io, socket) {
   /** Delete a group and close the room for everybody in it. v3.12: a REGISTERED SELLER'S ACCOUNT SURVIVES - the room is
    *  closed (chat wiped, group hidden from the Desk list) but the seller can still sign in and see their account.
    *  A group with no registered seller is deleted for good, as before. Admins are moved to another group. */
-  async function removeGroupAndEvict(groupId) {
+  async function removeGroupAndEvict(groupId, { purge = false } = {}) {
     const g = await store.getGroup(groupId);
-    const keepAccount = !!(g && g.seller_registered);
+    const keepAccount = !purge && !!(g && g.seller_registered);   // v3.24: purge = the Desk is deleting the seller's ACCOUNT too
     const seatTokens = g ? [g.buyer_session_token, keepAccount ? null : g.seller_session_token].filter(Boolean) : [];
     if (keepAccount) {
       try { const msgs = await store.getMessagesForGroup(groupId, 100000); if (msgs.length) await store.deleteMessages(groupId, msgs.map((m) => m.id)); } catch (e) { /* best effort */ }

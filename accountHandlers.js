@@ -591,6 +591,132 @@ function registerAccountHandlers(io, socket, ctx) {
     } catch (err) { console.error('[ban]', err); socket.emit('error-msg', 'Could not update that account.'); }
   });
 
+  // ------------------------------------------------------------------
+  // v3.24: Admin edits a seller's details, and can delete a seller's account for good.
+  // ------------------------------------------------------------------
+  const adminRoleName = () => meta().adminRole || (metaHasMinRole('SUPER_ADMIN') ? 'SUPER_ADMIN' : 'ADMIN');
+  const pushSellerRow = async (g) => {
+    const fresh = await store.getGroup(g.id);
+    io.to('finance-admins').emit('seller-account-updated', adminAccount(fresh));
+    socket.emit('seller-profile', { groupId: g.id, account: adminAccount(fresh), viewer: viewerPerms(fresh) });
+    try { await pushSellerState(io, g.id); } catch (e) { /* the seller may be offline */ }
+    await broadcastGroupsList();
+  };
+  socket.on('admin-edit-seller', async (p) => {
+    try {
+      if (!metaHasMinRole('ADMIN')) return socket.emit('error-msg', 'Only an Admin can edit a seller’s details.');
+      if (!limiter.allow(meta().sessionToken)) return tooFast();
+      p = p || {};
+      const g = await store.getGroup(String(p.groupId || ''));
+      if (!g || !g.seller_registered) return socket.emit('error-msg', 'That seller account was not found.');
+      const fields = {}, changes = {};
+      const note = (k, from, to) => { changes[k] = [from == null ? null : from, to == null ? null : to]; };
+      const plain = (v) => String(v || '').replace(/&amp;/g, '&');
+
+      // Country first: the phone check depends on it.
+      let country = QC.findCountry(g.seller_country_iso || g.seller_country);
+      if (p.country !== undefined && String(p.country).trim() !== '') {
+        const c = QC.findCountry(p.country); if (!c) return socket.emit('error-msg', 'Choose a valid country.');
+        if (c.iso !== g.seller_country_iso) { fields.seller_country = c.name; fields.seller_country_iso = c.iso; note('country', g.seller_country, c.name); }
+        country = c;
+      }
+      if (p.fullName !== undefined) {
+        const name = sanitizeText(p.fullName, 200);
+        if (name.length < 3 || !/\s/.test(name)) return socket.emit('error-msg', 'Enter the seller’s full name (first and last name).');
+        if (escapeHtml(name) !== g.seller_full_name) {
+          note('fullName', plain(g.seller_full_name), name); fields.seller_full_name = escapeHtml(name); fields.custom_name_b = escapeHtml(name);
+          if (/ — Account$/.test(plain(g.name))) fields.name = escapeHtml(`${name} — Account`);   // a room the Desk named after the seller keeps matching
+        }
+      }
+      if (p.email !== undefined) {
+        if (!isValidEmail(p.email)) return socket.emit('error-msg', 'Please enter a valid email address.');
+        const email = String(p.email).trim().toLowerCase();
+        if (email !== String(g.email_b || '').toLowerCase()) {
+          const clash = (await store.findGroupsBySellerEmail(email)).filter((x) => x.id !== g.id);
+          if (clash.length) return socket.emit('error-msg', 'Another seller account already uses that email address.');
+          note('email', g.email_b, email); fields.email_b = email; fields.reg_email_target = email; fields.reg_email_verified = true;
+        }
+      }
+      if (p.phone !== undefined) {
+        const raw = String(p.phone || '').trim();
+        if (!raw) { if (g.seller_phone) { note('phone', g.seller_phone, null); fields.seller_phone = null; } }
+        else {
+          if (!country) return socket.emit('error-msg', 'Choose the seller’s country before adding a phone number.');
+          let dial = country.dial, local = raw;
+          if (raw[0] === '+') { const d = raw.replace(/\D/g, ''); if (d.startsWith(String(country.dial))) local = d.slice(String(country.dial).length); else return socket.emit('error-msg', `A ${country.name} number starts with +${country.dial}.`); }
+          const pv = QP.validatePhone(country.iso, dial, local); if (!pv.ok) return socket.emit('error-msg', pv.error);
+          if (pv.e164 !== g.seller_phone) { note('phone', g.seller_phone, pv.e164); fields.seller_phone = pv.e164; }
+        }
+      }
+      if (p.dateOfBirth !== undefined) {
+        const v = String(p.dateOfBirth || '').trim();
+        if (!v) { if (g.seller_date_of_birth) { note('dateOfBirth', dateOnlyOf(g.seller_date_of_birth), null); fields.seller_date_of_birth = null; } }
+        else {
+          const d = /^\d{4}-\d{2}-\d{2}$/.test(v) ? new Date(v + 'T00:00:00Z') : null;
+          if (!d || isNaN(d) || d.toISOString().slice(0, 10) !== v) return socket.emit('error-msg', 'Enter the date of birth as a real date.');
+          const age = (Date.now() - d.getTime()) / 31557600000;
+          if (age < 18 || age > 120) return socket.emit('error-msg', 'The date of birth must make the seller between 18 and 120 years old.');
+          if (v !== dateOnlyOf(g.seller_date_of_birth)) { note('dateOfBirth', dateOnlyOf(g.seller_date_of_birth), v); fields.seller_date_of_birth = v; }
+        }
+      }
+      if (p.registeredAt !== undefined && String(p.registeredAt).trim()) {
+        const d = new Date(p.registeredAt);
+        if (isNaN(d)) return socket.emit('error-msg', 'Enter the registration date and time as a real date.');
+        if (d.getTime() > Date.now() + 60000) return socket.emit('error-msg', 'The registration date cannot be in the future.');
+        if (d.getUTCFullYear() < 2000) return socket.emit('error-msg', 'The registration date looks too old. Please check it.');
+        if (d.toISOString() !== new Date(g.seller_registered_at || 0).toISOString()) { note('registeredAt', g.seller_registered_at ? new Date(g.seller_registered_at).toISOString() : null, d.toISOString()); fields.seller_registered_at = d.toISOString(); }
+      }
+      if (p.language !== undefined && p.language !== (g.seller_language || 'en')) {
+        if (!QL.isSupported(p.language)) return socket.emit('error-msg', 'Choose a supported language.');
+        note('language', g.seller_language || 'en', p.language); fields.seller_language = p.language;
+      }
+      if (p.currency !== undefined && p.currency !== g.seller_currency) {
+        if (!F.CURRENCIES.has(p.currency)) return socket.emit('error-msg', 'Choose a valid account currency.');
+        const money = ['balance_available', 'balance_held', 'balance_pending', 'total_deposited'].some((k) => Number(g[k] || 0) !== 0);
+        const hasHistory = (await store.getWithdrawalsForGroup(g.id)).length > 0;
+        if (money || hasHistory) return socket.emit('error-msg', 'The currency cannot be changed once the account has money or payment history. Open a new account in the other currency instead.');
+        note('currency', g.seller_currency, p.currency); fields.seller_currency = p.currency;
+      }
+      if (!Object.keys(fields).length) return socket.emit('error-msg', 'Nothing was changed.');
+      const flags = Object.assign({}, jsonOf(g.group_flags, {}));
+      const log = Array.isArray(flags.profileEdits) ? flags.profileEdits.slice(-29) : [];
+      log.push({ at: new Date().toISOString(), role: adminRoleName(), changes });
+      flags.profileEdits = log; fields.group_flags = flags;
+      if (changes.email) { const el = Array.isArray(flags.emailChanges) ? flags.emailChanges.slice(-19) : []; el.push({ at: new Date().toISOString(), role: adminRoleName(), from: changes.email[0], to: changes.email[1], silent: true }); flags.emailChanges = el; }
+      await store.updateGroup(g.id, fields);
+      if (changes.currency) { try { const BD = require('./bankDetails'); await BD.unassignNumber(store, await store.getGroup(g.id)); } catch (e) { /* no number was assigned */ } }
+      socket.emit('seller-edited', { groupId: g.id, changed: Object.keys(changes) });
+      socket.emit('toast-info', { message: 'Seller details updated (' + Object.keys(changes).join(', ') + '). The seller was not notified.' });
+      await pushSellerRow(g);
+    } catch (err) { console.error('[admin-edit-seller]', err); socket.emit('error-msg', 'We could not save those changes. Please try again.'); }
+  });
+
+  socket.on('admin-delete-seller', async (p) => {
+    try {
+      if (!metaHasMinRole('ADMIN')) return socket.emit('error-msg', 'Only an Admin can delete a seller account.');
+      if (!limiter.allow(meta().sessionToken)) return tooFast();
+      p = p || {};
+      const g = await store.getGroup(String(p.groupId || ''));
+      if (!g || !g.seller_registered) return socket.emit('error-msg', 'That seller account was not found (it may already be deleted).');
+      if (String(p.confirm || '').trim() !== String(g.seller_account_id || '')) return socket.emit('error-msg', 'Type the seller’s Account ID exactly to confirm the deletion.');
+      const funds = ['balance_available', 'balance_held', 'balance_pending'].reduce((n, k) => n + Number(g[k] || 0), 0);
+      if (funds > 0 && !p.acknowledgeFunds) return socket.emit('error-msg', `This account still holds ${g.seller_currency || ''} ${funds.toFixed(2)}. Tick the box to confirm you understand the money record will be deleted too.`);
+      const record = { at: new Date().toISOString(), role: adminRoleName(), accountId: g.seller_account_id, name: plain0(g.seller_full_name), email: g.email_b || null, currency: g.seller_currency || null, kyc: g.kyc_status || null, balances: { available: Number(g.balance_available || 0), held: Number(g.balance_held || 0), pending: Number(g.balance_pending || 0) }, registeredAt: g.seller_registered_at || null };
+      try { const BD = require('./bankDetails'); await BD.unassignNumber(store, g); } catch (e) { /* none assigned */ }
+      const sellerRoom = io.sockets.adapter.rooms.get(`seller:${g.id}`);
+      for (const sid of sellerRoom ? Array.from(sellerRoom) : []) { const s = io.sockets.sockets.get(sid); if (s) { s.emit('room-closed', { reason: 'deleted', hasAccount: false }); s.disconnect(true); } }
+      await ctx.removeGroupAndEvict(g.id, { purge: true });
+      const trail = await store.getSetting('deleted_accounts', '[]'); let list = []; try { list = JSON.parse(typeof trail === 'string' ? trail : JSON.stringify(trail)); } catch (e) { list = []; }
+      list.push(record); await store.setSetting('deleted_accounts', JSON.stringify(list.slice(-200)));
+      io.to('finance-admins').emit('seller-account-deleted', { groupId: g.id });
+      socket.emit('seller-account-deleted', { groupId: g.id, accountId: record.accountId, name: record.name });
+      socket.emit('toast-info', { message: `Account ${record.accountId} (${record.name || 'seller'}) was permanently deleted.` });
+      await broadcastGroupsList();
+    } catch (err) { console.error('[admin-delete-seller]', err); socket.emit('error-msg', 'We could not delete that account. Please try again.'); }
+  });
+  const plain0 = (v) => String(v || '').replace(/&amp;/g, '&');
+  const dateOnlyOf = (v) => (v ? (v instanceof Date ? v.toISOString() : String(v)).slice(0, 10) : null);
+
   socket.on('admin-list-sellers', async () => {
     if (!metaHasMinRole('ADMIN')) return;
     const all = (await store.getAllGroups()).filter((g) => g.seller_registered);

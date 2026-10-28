@@ -1,0 +1,6 @@
+.v51-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:14px;flex-wrap:wrap}
+.v51-head b{color:var(--text-main,inherit)}
+.v51-funds{margin:8px 0;padding:10px 12px;border:1px solid var(--accent-rose,#f43f5e);border-radius:10px;background:rgba(244,63,94,.08)}
+.v51-danger{background:linear-gradient(135deg,#e11d48,#be123c)!important;color:#fff!important}
+.v51-danger:disabled{opacity:.45;cursor:not-allowed}
+#v51EditModal .modal-box,#v51DelModal .modal-box{max-width:520px;width:calc(100% - 24px);max-height:92vh;overflow:auto}
